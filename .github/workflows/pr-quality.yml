@@ -2,6 +2,7 @@ name: Code Quality Checks
 
 on:
   workflow_dispatch:
+  # Manual fallback for fork CI diagnostics.
   pull_request:
     branches: [main]
   push:
