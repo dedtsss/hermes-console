@@ -1,0 +1,67 @@
+name: Diagnose PR2 quality gate
+
+on:
+  push:
+    branches:
+      - manual/issue-1-russian-localization
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: '3.44.1'
+          channel: 'stable'
+
+      - name: Set up Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Capture analyzer and test diagnostics
+        shell: bash
+        run: |
+          set +e
+          flutter analyze --fatal-infos > analyze_output.txt 2>&1
+          analyze_rc=$?
+          flutter test --concurrency=1 --reporter=expanded > test_output.txt 2>&1
+          test_rc=$?
+          set -e
+
+          {
+            echo "PR #2 quality diagnostics"
+            echo "head_before_diagnostic=${{ github.sha }}"
+            echo "flutter_analyze_exit=$analyze_rc"
+            echo "flutter_test_exit=$test_rc"
+            echo
+            echo "===== flutter analyze: complete output ====="
+            cat analyze_output.txt
+            echo
+            echo "===== flutter test: last 600 lines ====="
+            tail -n 600 test_output.txt
+          } > ci-diagnostics.txt
+
+      - name: Commit diagnostics and remove temporary workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/diag-pr2-quality.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ci-diagnostics.txt .github/workflows/diag-pr2-quality.yml
+          git commit -m "ci: capture PR quality diagnostics"
+          git push
