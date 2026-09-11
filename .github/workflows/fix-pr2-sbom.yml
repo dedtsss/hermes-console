@@ -1,0 +1,48 @@
+name: One-off PR #2 SBOM refresh
+
+on:
+  push:
+    branches:
+      - manual/issue-1-russian-localization
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: manual/issue-1-russian-localization
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          channel: stable
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Refresh SBOMs for the final tree
+        shell: bash
+        run: |
+          git rm .github/workflows/fix-pr2-sbom.yml
+          ./tool/sbom/generate.sh
+          git add sbom
+          git diff --cached --check
+
+      - name: Commit refreshed SBOMs
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore: refresh SBOMs after localization changes'
+          git push origin HEAD:manual/issue-1-russian-localization
