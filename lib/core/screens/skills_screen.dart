@@ -941,7 +941,7 @@ class _SkillsScreenState extends State<SkillsScreen>
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh installed',
+            tooltip: str.sklRefreshInstalled,
             onPressed: _loadingInstalled ? null : _loadInstalled,
           ),
         ],
@@ -1041,9 +1041,9 @@ class _InstalledTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = Strings.of(context);
     if (loading) return const Center(child: TuiLoader());
     if (error != null) {
-      final s = Strings.of(context);
       return Padding(
         padding: const EdgeInsets.all(20),
         child: FeatureDependencyNotice(
@@ -1074,8 +1074,8 @@ class _InstalledTab extends StatelessWidget {
     if (allSkills.isEmpty) {
       return _EmptyState(
         icon: Icons.extension_off,
-        title: 'no skills found',
-        subtitle: 'no skills are installed on this gateway',
+        title: s.sklNoInstalledTitle,
+        subtitle: s.sklNoInstalledBody,
         colors: colors,
       );
     }
@@ -1095,7 +1095,7 @@ class _InstalledTab extends StatelessWidget {
             controller: searchController,
             style: TextStyle(fontSize: 13, color: colors.textPrimary),
             decoration: InputDecoration(
-              hintText: 'search installed skills…',
+              hintText: s.sklSearchInstalled,
               prefixIcon: Icon(
                 Icons.search,
                 size: 18,
@@ -1123,8 +1123,8 @@ class _InstalledTab extends StatelessWidget {
           child: skills.isEmpty
               ? _EmptyState(
                   icon: Icons.search_off,
-                  title: 'no match',
-                  subtitle: 'no skills match your search',
+                  title: s.sklNoResultsTitle,
+                  subtitle: s.sklNoResultsFor(searchController.text),
                   colors: colors,
                 )
               : RefreshIndicator(
@@ -1326,7 +1326,7 @@ class _DiscoverTab extends StatelessWidget {
                   controller: controller,
                   style: TextStyle(fontSize: 13, color: colors.textPrimary),
                   decoration: InputDecoration(
-                    hintText: 'search skills.sh…',
+                    hintText: Strings.of(context).sklSearchHintCli,
                     prefixIcon: Icon(
                       Icons.search,
                       size: 18,
@@ -1361,7 +1361,10 @@ class _DiscoverTab extends StatelessWidget {
                           color: colors.onAccent,
                         ),
                       )
-                    : const Text('search', style: TextStyle(fontSize: 12)),
+                    : Text(
+                        Strings.of(context).sklSearchOnline,
+                        style: const TextStyle(fontSize: 12),
+                      ),
               ),
               const SizedBox(width: 4),
               IconButton(
@@ -1458,7 +1461,7 @@ class _DiscoverTab extends StatelessWidget {
       }
       return _EmptyState(
         icon: Icons.error_outline,
-        title: 'error',
+        title: Strings.of(context).sklErrorTitle,
         subtitle: error!,
         colors: colors,
       );
@@ -1525,7 +1528,7 @@ class _StoreSkillCard extends StatelessWidget {
                 ),
                 if (isInstalled)
                   _BadgeChip(
-                    label: 'installed',
+                    label: Strings.of(context).sklTabInstalled,
                     color: colors.success,
                     textColor: colors.background,
                   ),

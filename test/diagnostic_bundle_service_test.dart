@@ -43,7 +43,7 @@ void main() {
       'prompt ultra secreto',
       'respuesta privada del agente',
       'tool output confidencial',
-      '/data/user/0/dev.xpetalab.hermesconsole.qa/cache/private.png',
+      '/data/user/0/io.github.dedtsss.hermesconsole.qa/cache/private.png',
       '/home/demo/.hermes/cache/images/private.png',
       r'C:\Users\Server\private.png',
       'private-attachment.png',
@@ -78,7 +78,7 @@ void main() {
       attachments: const [
         AttachmentDraft(
           localPath:
-              '/data/user/0/dev.xpetalab.hermesconsole.qa/cache/private.png',
+              '/data/user/0/io.github.dedtsss.hermesconsole.qa/cache/private.png',
           name: 'private-attachment.png',
           mimeType: 'image/png',
           sizeBytes: 123,

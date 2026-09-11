@@ -1,7 +1,8 @@
 # Configuración de gen-l10n (flutter gen-l10n / build con `generate: true`).
-# ARB base = español; la clase generada es `Strings` (AppLocalizations).
+# English is the canonical ARB template. Every locale must implement this
+# message contract, preventing fallback to a partial catalog.
 arb-dir: lib/l10n
-template-arb-file: app_es.arb
+template-arb-file: app_en.arb
 output-localization-file: app_localizations.dart
 output-class: Strings
 nullable-getter: false

@@ -279,13 +279,21 @@
   "chaContextUsageSummary": "{used} of {max} tokens",
   "@chaContextUsageSummary": {
     "placeholders": {
-      "used": {"type": "String"},
-      "max": {"type": "String"}
+      "used": {
+        "type": "String"
+      },
+      "max": {
+        "type": "String"
+      }
     }
   },
   "chaContextUsagePercent": "{percent}% used",
   "@chaContextUsagePercent": {
-    "placeholders": {"percent": {"type": "int"}}
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
   },
   "chaContextUsageLoading": "Calculating this session's breakdown…",
   "chaContextUsageUnavailable": "This server does not expose the breakdown yet. The total above is still live.",
@@ -325,15 +333,27 @@
   "chaCompressionConfigEnabledHint": "Hermes starts compression when the configured threshold is reached.",
   "chaCompressionConfigThreshold": "Start at {percent}%",
   "@chaCompressionConfigThreshold": {
-    "placeholders": {"percent": {"type": "int"}}
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
   },
   "chaCompressionConfigTarget": "Reduce to {percent}% of the threshold",
   "@chaCompressionConfigTarget": {
-    "placeholders": {"percent": {"type": "int"}}
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
   },
   "chaCompressionConfigProtect": "Keep the last {count} messages intact",
   "@chaCompressionConfigProtect": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "chaCompressionConfigThresholdTokens": "Absolute token cap",
   "chaCompressionConfigThresholdTokensHint": "Optional. Hermes uses the lower of this cap and the percentage threshold.",
@@ -355,7 +375,11 @@
   "chaCompressionConfigDefaultProfile": "Default profile",
   "chaCompressionConfigProfile": "Profile: {profile}",
   "@chaCompressionConfigProfile": {
-    "placeholders": {"profile": {"type": "String"}}
+    "placeholders": {
+      "profile": {
+        "type": "String"
+      }
+    }
   },
   "chaControlTitle": "Conversation settings",
   "chaControlScope": "Only this conversation",
@@ -705,7 +729,9 @@
   "litertStoreOpenError": "Could not open {url}",
   "@litertStoreOpenError": {
     "placeholders": {
-      "url": {"type": "String"}
+      "url": {
+        "type": "String"
+      }
     }
   },
   "litertNoteRecommended": "Recommended for most phones",
@@ -1629,7 +1655,13 @@
   "notifBgSub": "Receive alerts while the app is closed · uses a persistent notification",
   "notifBgActive": "Active until you turn it off · listening to agent events",
   "notifBgActiveUntil": "Active until you turn it off · listening to agent events",
-  "@notifBgActiveUntil": {"placeholders": {"time": {"type": "String"}}},
+  "@notifBgActiveUntil": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
   "notifBgPaused": "Paused · enable listening to receive background events",
   "notifBgFiniteNotice": "Listening stays active until you turn it off and displays a persistent Android notification.",
   "notifFgsChannelLabel": "Persistent service channel",
@@ -2382,15 +2414,45 @@
   "crnStatusCompleted": "completed",
   "crnOpenFromConversation": "Open linked schedule",
   "crnMetaDelivery": "delivery: {value}",
-  "@crnMetaDelivery": {"placeholders": {"value": {"type": "String"}}},
+  "@crnMetaDelivery": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
   "crnMetaModel": "model: {value}",
-  "@crnMetaModel": {"placeholders": {"value": {"type": "String"}}},
+  "@crnMetaModel": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
   "crnMetaProvider": "provider: {value}",
-  "@crnMetaProvider": {"placeholders": {"value": {"type": "String"}}},
+  "@crnMetaProvider": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
   "crnMetaContext": "context: {value}",
-  "@crnMetaContext": {"placeholders": {"value": {"type": "String"}}},
+  "@crnMetaContext": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
   "crnMetaWorkdir": "folder: {value}",
-  "@crnMetaWorkdir": {"placeholders": {"value": {"type": "String"}}},
+  "@crnMetaWorkdir": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
   "crnScriptBadge": "script",
   "crnRunNow": "Run now",
   "crnCronEdit": "Edit",
@@ -2611,9 +2673,21 @@
   "secConnectionPrivateHttp": "Private network · HTTP",
   "secConnectionPublicHttp": "Public HTTP · insecure",
   "secConnectionFor": "Active instance: {name}",
-  "@secConnectionFor": {"placeholders": {"name": {"type": "String"}}},
+  "@secConnectionFor": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "secConnectionPublicHttpSub": "{name} is reachable over unencrypted public HTTP. Use HTTPS or Tailscale before entering credentials.",
-  "@secConnectionPublicHttpSub": {"placeholders": {"name": {"type": "String"}}},
+  "@secConnectionPublicHttpSub": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "secCredentialStorageTitle": "Credential storage",
   "secCredentialStorageSub": "API keys and passwords are kept in Android Keystore, outside normal preferences.",
   "secStatusProtected": "protected",
@@ -3005,19 +3079,25 @@
   "slRelativeMinutes": "{count}m ago",
   "@slRelativeMinutes": {
     "placeholders": {
-      "count": {"type": "int"}
+      "count": {
+        "type": "int"
+      }
     }
   },
   "slRelativeHours": "{count}h ago",
   "@slRelativeHours": {
     "placeholders": {
-      "count": {"type": "int"}
+      "count": {
+        "type": "int"
+      }
     }
   },
   "slRelativeDays": "{count}d ago",
   "@slRelativeDays": {
     "placeholders": {
-      "count": {"type": "int"}
+      "count": {
+        "type": "int"
+      }
     }
   },
   "slSearchHint": "Search conversations…",
@@ -3847,7 +3927,9 @@
   "ieExternalPairingBody": "The external link wants to check and automatically configure {host}. Make sure you recognize the server; the app will then resolve the gateway, Dashboard, and bridge for you.",
   "@ieExternalPairingBody": {
     "placeholders": {
-      "host": {"type": "String"}
+      "host": {
+        "type": "String"
+      }
     }
   },
   "ieExternalPairingReview": "Review only",
@@ -3856,8 +3938,12 @@
   "ieDuplicateBody": "You already have “{label}” connected to {endpoint}. Another instance won't be created and its credentials won't be changed.",
   "@ieDuplicateBody": {
     "placeholders": {
-      "label": {"type": "String"},
-      "endpoint": {"type": "String"}
+      "label": {
+        "type": "String"
+      },
+      "endpoint": {
+        "type": "String"
+      }
     }
   },
   "ieDuplicateOpen": "Open existing",
@@ -4084,7 +4170,13 @@
   "extApplyRejected": "The server rejected the model change.",
   "extVenvUnavailable": "The local agent environment is unavailable. Use Repair agent from the local control panel.",
   "extApplyError": "Could not apply: {error}",
-  "@extApplyError": {"placeholders": {"error": {"type": "String"}}},
+  "@extApplyError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
   "extEditTitle": "Edit provider",
   "extTitle": "External provider",
   "extReachabilityInfo": "The app tests this URL from your phone. Hermes must also be able to reach the provider from its server through the same LAN, VPN, or Tailscale network.",
@@ -4111,7 +4203,7 @@
   "connectSimpleQuestion": "How do you want to connect?",
   "connectSimpleIntro": "Scan an existing QR, or prepare the server with one command. You won't need to enter ports, instances or models.",
   "connectScanQr": "Scan QR",
-  "connectScanQrBody": "Load the connection and automatically verify Gateway, Dashboard and Mobile Bridge.",
+  "connectScanQrBody": "The fastest way: scan the QR your server prints — no typing IP or token.",
   "connectPrepareServer": "Prepare server",
   "connectPrepareServerBody": "Choose its system, copy one command and finish by scanning the QR.",
   "connectInstallHelp": "Don't have Hermes Agent yet? Open the guide",
@@ -4135,7 +4227,6 @@
   "connectDiagramSemantics": "Your server generates a secure code and this phone scans it.",
   "connectIntro": "Choose how to connect to your Hermes server.",
   "connectScanQrTitle": "Scan QR",
-  "connectScanQrBody": "The fastest way: scan the QR your server prints — no typing IP or token.",
   "connectManualTitle": "Enter manually",
   "connectManualBody": "Type your gateway's address and token.",
   "connectAssistTitle": "Prepare in a terminal",
@@ -4225,7 +4316,13 @@
   "setBridgeChecking": "Checking installed version…",
   "setBridgeStatusUnavailable": "Bridge not detected. It may be offline or not installed yet.",
   "setBridgeStatusCurrent": "Installed v{version} · up to date",
-  "@setBridgeStatusCurrent": {"placeholders": {"version": {"type": "String"}}},
+  "@setBridgeStatusCurrent": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
   "setBridgeUpdateNow": "Update now",
   "setBridgeReadOnly": "This instance is read-only; automatic bridge changes are blocked.",
   "notifListenerStartFailed": "Couldn't start background listening. Try again.",
@@ -4263,9 +4360,21 @@
   "voiceDetectingKokoro": "Checking Kokoro…",
   "voiceDetectedBaseUrl": "Detected URL",
   "voiceKokoroDetected": "Kokoro ready · {count} voices detected",
-  "@voiceKokoroDetected": {"placeholders": {"count": {"type": "int"}}},
+  "@voiceKokoroDetected": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "voiceKokoroDetectionFailed": "Couldn't configure Kokoro: {error}",
-  "@voiceKokoroDetectionFailed": {"placeholders": {"error": {"type": "String"}}},
+  "@voiceKokoroDetectionFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
   "voiceSaveConfiguration": "Save configuration",
   "voiceGuideButton": "Step-by-step guide",
   "voiceConversationSectionTitle": "Conversation with Hermes",
@@ -4281,7 +4390,13 @@
   "voiceServerCardTitle": "Voice from this instance",
   "voiceServerCardSub": "Default Hermes profile",
   "voiceServerCardProfileSub": "Profile {profile}",
-  "@voiceServerCardProfileSub": {"placeholders": {"profile": {"type": "String"}}},
+  "@voiceServerCardProfileSub": {
+    "placeholders": {
+      "profile": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerSttLabel": "Recognition",
   "voiceServerTtsLabel": "Voice",
   "voiceServerDeliveryLabel": "Streaming",
@@ -4315,16 +4430,37 @@
   "voiceCurrentLocalFallback": "Hermes server · unavailable · no local switch",
   "voiceCurrentServerUnknown": "Hermes server · configuration unavailable",
   "voiceCurrentServer": "Hermes server · {provider} · {voice}",
-  "@voiceCurrentServer": {"placeholders": {"provider": {"type": "String"}, "voice": {"type": "String"}}},
+  "@voiceCurrentServer": {
+    "placeholders": {
+      "provider": {
+        "type": "String"
+      },
+      "voice": {
+        "type": "String"
+      }
+    }
+  },
   "voiceStatusLocal": "Ready on this phone",
   "voiceStatusChecking": "Checking availability and configuration…",
   "voiceStatusUsingFallback": "The server is unavailable; Voice will not start until it recovers or you select this phone",
   "voiceStatusServerReadyConfigUnknown": "Server available; its current provider could not be read",
   "voiceStatusServerReady": "Endpoints and configuration detected · validated when speaking",
   "voiceCurrentLiveDictation": "Live dictation · {engine}",
-  "@voiceCurrentLiveDictation": {"placeholders": {"engine": {"type": "String"}}},
+  "@voiceCurrentLiveDictation": {
+    "placeholders": {
+      "engine": {
+        "type": "String"
+      }
+    }
+  },
   "voiceCurrentFinishedDictation": "Transcribe when finished · {model}",
-  "@voiceCurrentFinishedDictation": {"placeholders": {"model": {"type": "String"}}},
+  "@voiceCurrentFinishedDictation": {
+    "placeholders": {
+      "model": {
+        "type": "String"
+      }
+    }
+  },
   "voiceStatusReady": "Ready to use",
   "voiceStatusDownloadNeeded": "The selected model still needs to be downloaded",
   "voiceStatusDependsOnAndroid": "Depends on the speech service installed in Android",
@@ -4347,7 +4483,16 @@
   "voiceServerReadOnly": "This instance is read-only. You can see the voice but cannot change it.",
   "voiceServerEdgeBehavior": "Edge generates speech on the server. It may start phrase by phrase, but does not provide continuous PCM.",
   "voiceServerFallbackNote": "If the server fails, the conversation stays on the Hermes route. It does not automatically enable {stt} or {tts}: retry or select this phone.",
-  "@voiceServerFallbackNote": {"placeholders": {"stt": {"type": "String"}, "tts": {"type": "String"}}},
+  "@voiceServerFallbackNote": {
+    "placeholders": {
+      "stt": {
+        "type": "String"
+      },
+      "tts": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerVoiceSheetTitle": "Server Edge voice",
   "voiceServerVoiceSheetHelp": "Choose a voice from the list. If you already know another Edge ID, add it from the manual option.",
   "voiceServerVoiceManualTitle": "Use another Edge ID (advanced)",
@@ -4355,7 +4500,13 @@
   "voiceServerVoiceSave": "Save to server",
   "voiceServerVoiceSaving": "Saving voice…",
   "voiceServerVoiceSaved": "Server voice changed to {voice}",
-  "@voiceServerVoiceSaved": {"placeholders": {"voice": {"type": "String"}}},
+  "@voiceServerVoiceSaved": {
+    "placeholders": {
+      "voice": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerVoiceSaveFailed": "The voice could not be saved to the server. The previous configuration remains active.",
   "voiceServerManageAction": "Configure",
   "voiceServerManageTitle": "Configure server voice",
@@ -4377,14 +4528,26 @@
   "voiceServerProviderUse": "Use this provider",
   "voiceServerProviderSwitching": "Changing provider…",
   "voiceServerProviderChanged": "Server provider changed to {provider}",
-  "@voiceServerProviderChanged": {"placeholders": {"provider": {"type": "String"}}},
+  "@voiceServerProviderChanged": {
+    "placeholders": {
+      "provider": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerProviderChangeFailed": "The provider could not be changed. The previous selection remains active.",
   "voiceServerProviderPcmCapable": "Supports continuous PCM",
   "voiceServerProviderPhraseOnly": "Sentence delivery",
   "voiceServerCredentialConfigured": "Configured on the server",
   "voiceServerCredentialMissing": "Not configured",
   "voiceServerCredentialHint": "New {label}",
-  "@voiceServerCredentialHint": {"placeholders": {"label": {"type": "String"}}},
+  "@voiceServerCredentialHint": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerCredentialSave": "Save key on server",
   "voiceServerCredentialSaved": "Key saved. Its value is not retained or shown again on the phone.",
   "voiceServerCredentialFailed": "The key could not be saved on the server.",
@@ -4396,7 +4559,13 @@
   "voiceServerSetupFailed": "Provider setup did not complete successfully.",
   "voiceServerParametersAction": "Customize",
   "voiceServerParametersTitle": "Customize {provider}",
-  "@voiceServerParametersTitle": {"placeholders": {"provider": {"type": "String"}}},
+  "@voiceServerParametersTitle": {
+    "placeholders": {
+      "provider": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerParametersSub": "Choose valid Hermes options; you will not need to type server paths or technical names here.",
   "voiceServerParametersCurrentTitle": "Active configuration",
   "voiceServerParametersAdvancedTitle": "Advanced",
@@ -4423,8 +4592,12 @@
   "voiceServerLanguageMismatch": "The server listens in {serverLanguage}; the app is in {appLanguage}.",
   "@voiceServerLanguageMismatch": {
     "placeholders": {
-      "serverLanguage": {"type": "String"},
-      "appLanguage": {"type": "String"}
+      "serverLanguage": {
+        "type": "String"
+      },
+      "appLanguage": {
+        "type": "String"
+      }
     }
   },
   "voiceServerFieldSpeed": "Speaking speed",
@@ -4452,14 +4625,32 @@
   "voiceTextToSpeechTab": "Text to speech",
   "voiceTextToSpeechHelp": "Choose the voice that reads responses and test it here.",
   "voiceAdvancedActive": "Active: {name} · tap to configure",
-  "@voiceAdvancedActive": {"placeholders": {"name": {"type": "String"}}},
+  "@voiceAdvancedActive": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "voiceManageLiveDictationModel": "Live dictation model",
   "voiceManageFinishedDictationModel": "Transcribe-when-finished model",
   "voiceManageOfflineVoices": "Change or download voice",
   "voiceSelectedAssetReady": "{name} · ready to use",
-  "@voiceSelectedAssetReady": {"placeholders": {"name": {"type": "String"}}},
+  "@voiceSelectedAssetReady": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "voiceSelectedAssetDownloadNeeded": "{name} · download required",
-  "@voiceSelectedAssetDownloadNeeded": {"placeholders": {"name": {"type": "String"}}},
+  "@voiceSelectedAssetDownloadNeeded": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "voiceElevenVoiceIdLabel": "ElevenLabs voice identifier",
   "voiceSetupSpeakStep": "1. Speak",
   "voiceSetupSpeakHelp": "Choose how the app turns your voice into text.",
@@ -4506,7 +4697,13 @@
   "voiceErrorInvalidAudio": "The voice service returned an invalid or empty audio file.",
   "voiceErrorCustomResponseMissingAudio": "The custom API response did not contain usable audio.",
   "voiceErrorCustomHttpFailure": "The custom TTS API returned HTTP {status}.",
-  "@voiceErrorCustomHttpFailure": {"placeholders": {"status": {"type": "String"}}},
+  "@voiceErrorCustomHttpFailure": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
   "voiceErrorDashboardLogin": "The Hermes Dashboard needs sign-in. Configure its credentials for this instance.",
   "voiceErrorUnavailable": "The selected voice service is not available for the active instance.",
   "voiceErrorPreviewTimeout": "The voice did not produce audio in time. Check that its model is downloaded and try again.",
@@ -4817,8 +5014,12 @@
   "interactiveBatchProgress": "Question {answered} of {total}",
   "@interactiveBatchProgress": {
     "placeholders": {
-      "answered": {"type": "int"},
-      "total": {"type": "int"}
+      "answered": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "interactiveBatchOtherHint": "Other",
@@ -4827,8 +5028,12 @@
   "subagentActivitySummary": "{active} active · {completed} finished",
   "@subagentActivitySummary": {
     "placeholders": {
-      "active": {"type": "int"},
-      "completed": {"type": "int"}
+      "active": {
+        "type": "int"
+      },
+      "completed": {
+        "type": "int"
+      }
     }
   },
   "subagentActivityRequested": "pending",
@@ -4841,13 +5046,21 @@
   "subagentActivityUnknown": "unknown state",
   "subagentActivityItem": "Subagent {index}",
   "@subagentActivityItem": {
-    "placeholders": {"index": {"type": "int"}}
+    "placeholders": {
+      "index": {
+        "type": "int"
+      }
+    }
   },
   "subagentActivityProgress": "Task {current} of {total}",
   "@subagentActivityProgress": {
     "placeholders": {
-      "current": {"type": "int"},
-      "total": {"type": "int"}
+      "current": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "subagentActivityOpenConversation": "Open conversation",
@@ -4865,7 +5078,11 @@
   "artifactTitle": "Session artifacts",
   "artifactCount": "{count, plural, =1{1 item} other{{count} items}}",
   "@artifactCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "artifactEmptyTitle": "No artifacts yet",
   "artifactEmptyBody": "Images, documents and generated results from this session will appear here.",
@@ -4883,17 +5100,29 @@
   "artifactSourceUnavailable": "The source message could not be found in the loaded history.",
   "artifactJumpSemantics": "{name}. Go to source message",
   "@artifactJumpSemantics": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "artifactSourceOne": "Source: message {number}",
   "@artifactSourceOne": {
-    "placeholders": {"number": {"type": "int"}}
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
   },
   "artifactSourceMany": "Source: message {number} · {count} references",
   "@artifactSourceMany": {
     "placeholders": {
-      "number": {"type": "int"},
-      "count": {"type": "int"}
+      "number": {
+        "type": "int"
+      },
+      "count": {
+        "type": "int"
+      }
     }
   },
   "generatedArtifactSection": "Generated artifacts",
@@ -4902,40 +5131,72 @@
   "generatedArtifactKindSvg": "SVG source",
   "generatedArtifactVersionCount": "{count, plural, =1{1 version} other{{count} versions}}",
   "@generatedArtifactVersionCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "generatedArtifactOpenSemantics": "{name}. Open generated artifact",
   "@generatedArtifactOpenSemantics": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "generatedArtifactSourceOnly": "For your safety, Hermes Console shows HTML and SVG as source code only. It never executes or opens them in a WebView.",
   "generatedArtifactSourceSemantics": "Source code for {title}",
   "@generatedArtifactSourceSemantics": {
-    "placeholders": {"title": {"type": "String"}}
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
   },
   "generatedArtifactCharacterCount": "{count} characters",
   "@generatedArtifactCharacterCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "generatedArtifactPreviewTruncated": "Preview limited to {limit} characters. Copy, share and save still use the complete version.",
   "@generatedArtifactPreviewTruncated": {
-    "placeholders": {"limit": {"type": "int"}}
+    "placeholders": {
+      "limit": {
+        "type": "int"
+      }
+    }
   },
   "generatedArtifactCopied": "Artifact content copied.",
   "generatedArtifactSaved": "Saved as {name}.",
   "@generatedArtifactSaved": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "generatedArtifactExportTooLarge": "This artifact is larger than the {mb} MB export limit.",
   "@generatedArtifactExportTooLarge": {
-    "placeholders": {"mb": {"type": "int"}}
+    "placeholders": {
+      "mb": {
+        "type": "int"
+      }
+    }
   },
   "generatedArtifactExportFailed": "The artifact could not be exported.",
   "generatedArtifactVersionOf": "Version {current} of {total}",
   "@generatedArtifactVersionOf": {
     "placeholders": {
-      "current": {"type": "int"},
-      "total": {"type": "int"}
+      "current": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "generatedArtifactPreviousVersion": "Previous version",
@@ -4966,7 +5227,11 @@
   "recoveryCenterSavedFallback": "Saved checkpoint",
   "recoveryCenterStaleView": "{error} The last view is still shown.",
   "@recoveryCenterStaleView": {
-    "placeholders": {"error": {"type": "String"}}
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "recoveryCenterDetailFallback": "Checkpoint details",
   "recoveryCenterReadOnlyRestore": "Read-only mode: restoring is disabled.",
@@ -5004,9 +5269,15 @@
   "extensionsCenterChangeBody": "{action} “{name}” {scope}.",
   "@extensionsCenterChangeBody": {
     "placeholders": {
-      "action": {"type": "String"},
-      "name": {"type": "String"},
-      "scope": {"type": "String"}
+      "action": {
+        "type": "String"
+      },
+      "name": {
+        "type": "String"
+      },
+      "scope": {
+        "type": "String"
+      }
     }
   },
   "extensionsCenterConfirmChange": "Confirm change",
@@ -5030,8 +5301,12 @@
   "extensionsCenterResultCount": "{visible} of {total}",
   "@extensionsCenterResultCount": {
     "placeholders": {
-      "visible": {"type": "int"},
-      "total": {"type": "int"}
+      "visible": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "extensionsCenterReloadControlled": "Controlled reload",
@@ -5039,23 +5314,39 @@
   "extensionsCenterReloading": "Reloading…",
   "extensionsCenterStaleInventory": "{error} The last inventory is still shown.",
   "@extensionsCenterStaleInventory": {
-    "placeholders": {"error": {"type": "String"}}
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterPluginVersion": "v{version}",
   "@extensionsCenterPluginVersion": {
-    "placeholders": {"version": {"type": "String"}}
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterActive": "active",
   "extensionsCenterInactive": "inactive",
   "extensionsCenterToolCount": "{count, plural, one{1 tool} other{{count} tools}}",
   "@extensionsCenterToolCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "extensionsCenterToolCountWithDescription": "{count, plural, one{1 tool · {description}} other{{count} tools · {description}}}",
   "@extensionsCenterToolCountWithDescription": {
     "placeholders": {
-      "count": {"type": "int"},
-      "description": {"type": "String"}
+      "count": {
+        "type": "int"
+      },
+      "description": {
+        "type": "String"
+      }
     }
   },
   "extensionsCenterFailureUnsupported": "This Hermes version does not publish plugins or tools.",
@@ -5084,14 +5375,24 @@
   "agentCenterStopProcessTitle": "Stop process",
   "agentCenterStopProcessBody": "Only “{process}” will be stopped.",
   "@agentCenterStopProcessBody": {
-    "placeholders": {"process": {"type": "String"}}
+    "placeholders": {
+      "process": {
+        "type": "String"
+      }
+    }
   },
   "agentCenterStop": "Stop",
   "agentCenterStopFailed": "Hermes could not stop that process.",
   "agentCenterStopAll": "Stop all",
   "agentCenterStopAllTitle": "Stop all active processes?",
   "agentCenterStopAllBody": "This stops {count} background processes for this conversation. Saved delegation history remains available.",
-  "@agentCenterStopAllBody": {"placeholders": {"count": {"type": "int"}}},
+  "@agentCenterStopAllBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "agentCenterStopAllFailed": "Some processes could not be stopped.",
   "agentCenterNewTaskTitle": "New background task",
   "agentCenterNewTaskHint": "Describe a specific task for this conversation",
@@ -5105,14 +5406,22 @@
   "agentCenterNoProcesses": "No active processes for this conversation.",
   "agentCenterProcessFallback": "Process {id}",
   "@agentCenterProcessFallback": {
-    "placeholders": {"id": {"type": "String"}}
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
   },
   "agentCenterActive": "active",
   "agentCenterProcessStatus": "{status} · {seconds} s",
   "@agentCenterProcessStatus": {
     "placeholders": {
-      "status": {"type": "String"},
-      "seconds": {"type": "int"}
+      "status": {
+        "type": "String"
+      },
+      "seconds": {
+        "type": "int"
+      }
     }
   },
   "agentCenterStopTooltip": "Stop this process",
@@ -5120,18 +5429,30 @@
   "agentCenterNoHistory": "Hermes has not saved any subagent delegations yet.",
   "agentCenterSubagentCount": "{count, plural, one{1 subagent} other{{count} subagents}}",
   "@agentCenterSubagentCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "agentCenterSubagentCountWithDate": "{count, plural, one{1 subagent · {date}} other{{count} subagents · {date}}}",
   "@agentCenterSubagentCountWithDate": {
     "placeholders": {
-      "count": {"type": "int"},
-      "date": {"type": "String"}
+      "count": {
+        "type": "int"
+      },
+      "date": {
+        "type": "String"
+      }
     }
   },
   "agentCenterStaleView": "{error} The last view is still shown.",
   "@agentCenterStaleView": {
-    "placeholders": {"error": {"type": "String"}}
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "projectsCenterTitle": "Projects",
   "projectsCenterRefreshTooltip": "Refresh projects",
@@ -5149,23 +5470,39 @@
   "projectsCenterEmptyBody": "Open a conversation with a working directory (cwd) on the server. It will appear here once Hermes can group it by folder or Git repository.",
   "projectsCenterStaleView": "{error} The last view is still shown.",
   "@projectsCenterStaleView": {
-    "placeholders": {"error": {"type": "String"}}
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "projectsCenterUnnamedProject": "Unnamed project",
   "projectsCenterProjectSemantics": "{label}, {count, plural, one{1 conversation} other{{count} conversations}}",
   "@projectsCenterProjectSemantics": {
     "placeholders": {
-      "label": {"type": "String"},
-      "count": {"type": "int"}
+      "label": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
     }
   },
   "projectsCenterConversationCount": "{count, plural, one{1 conversation} other{{count} conversations}}",
   "@projectsCenterConversationCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "projectsCenterRepositoryCount": "{count, plural, one{1 repository} other{{count} repositories}}",
   "@projectsCenterRepositoryCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "projectsCenterServerPathReadOnly": "Server path, read-only",
   "projectsCenterDetailStale": "Could not refresh the details; the available summary is shown.",
@@ -5195,7 +5532,11 @@
   "extensionsCenterMcpCatalogSearchHint": "Search the catalog…",
   "extensionsCenterMcpCatalogSubtitle": "{count, plural, =0{No entries available} one{1 server available} other{{count} servers available}}",
   "@extensionsCenterMcpCatalogSubtitle": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "extensionsCenterMcpCatalogTitle": "MCP catalog",
   "extensionsCenterMcpConfiguredSection": "Configured",
@@ -5215,7 +5556,11 @@
   "extensionsCenterMcpRemoveAction": "Remove server",
   "extensionsCenterMcpRemoveBody": "“{name}” will be removed from this instance configuration.",
   "@extensionsCenterMcpRemoveBody": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterMcpRemoveTitle": "Remove MCP server",
   "extensionsCenterMcpRemoved": "MCP server removed.",
@@ -5227,15 +5572,27 @@
   "extensionsCenterMcpTestNeedsAuth": "The MCP server needs authorization.",
   "extensionsCenterMcpTestSuccess": "{count, plural, =0{Connection successful} one{Connection successful · 1 tool} other{Connection successful · {count} tools}}",
   "@extensionsCenterMcpTestSuccess": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "extensionsCenterMcpToggleBody": "The state of “{name}” will change and MCP will reload.",
   "@extensionsCenterMcpToggleBody": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterMcpToolCount": "{count, plural, one{1 tool} other{{count} tools}}",
   "@extensionsCenterMcpToolCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "extensionsCenterMcpTransportLabel": "Transport",
   "extensionsCenterNoMatchesBody": "Try another term or turn off the active-only filter.",
@@ -5247,7 +5604,11 @@
   "extensionsCenterPluginInstallAction": "Install",
   "extensionsCenterPluginInstallConfirmBody": "Hermes will download and run third-party code from “{source}”. Review the source before continuing.",
   "@extensionsCenterPluginInstallConfirmBody": {
-    "placeholders": {"source": {"type": "String"}}
+    "placeholders": {
+      "source": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterPluginInstallConfirmTitle": "Confirm installation",
   "extensionsCenterPluginInstallRisk": "Plugins run code on your server. Only install repositories you trust.",
@@ -5257,7 +5618,11 @@
   "extensionsCenterPluginRemoveAction": "Remove plugin",
   "extensionsCenterPluginRemoveBody": "“{name}” will be removed from this instance. External data may remain on the server.",
   "@extensionsCenterPluginRemoveBody": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterPluginRemoveTitle": "Remove plugin",
   "extensionsCenterPluginRemoved": "Plugin removed.",
@@ -5265,7 +5630,11 @@
   "extensionsCenterPluginUpdateAction": "Update plugin",
   "extensionsCenterPluginUpdateBody": "Hermes will update “{name}” from its Git source.",
   "@extensionsCenterPluginUpdateBody": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterPluginUpdateTitle": "Update plugin",
   "extensionsCenterPluginUpdated": "Plugin updated.",
@@ -5276,5 +5645,13 @@
   "drawerSwitchInstance": "Switch instance",
   "drawerActiveInstance": "Active instance",
   "sesMetricCachedTokens": "cached tokens",
-  "sesMetricCachePercent": "cache %"
+  "sesMetricCachePercent": "cache %",
+  "sftpTitle": "Files · SFTP",
+  "sftpDiscard": "Discard",
+  "sftpTransferFailed": "Failed",
+  "sklRefreshInstalled": "Refresh installed",
+  "sklNoInstalledTitle": "No skills found",
+  "sklNoInstalledBody": "No skills are installed on this gateway",
+  "sklSearchInstalled": "Search installed skills…",
+  "sklErrorTitle": "Error"
 }

@@ -560,13 +560,21 @@
   "chaContextUsageSummary": "{used} de {max} tokens",
   "@chaContextUsageSummary": {
     "placeholders": {
-      "used": {"type": "String"},
-      "max": {"type": "String"}
+      "used": {
+        "type": "String"
+      },
+      "max": {
+        "type": "String"
+      }
     }
   },
   "chaContextUsagePercent": "{percent}% ocupado",
   "@chaContextUsagePercent": {
-    "placeholders": {"percent": {"type": "int"}}
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
   },
   "chaContextUsageLoading": "Calculando el desglose de esta sesión…",
   "chaContextUsageUnavailable": "Este servidor no expone todavía el desglose. El total superior sigue siendo real.",
@@ -606,15 +614,27 @@
   "chaCompressionConfigEnabledHint": "Hermes inicia la compresión al alcanzar el umbral configurado.",
   "chaCompressionConfigThreshold": "Empezar al {percent}%",
   "@chaCompressionConfigThreshold": {
-    "placeholders": {"percent": {"type": "int"}}
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
   },
   "chaCompressionConfigTarget": "Reducir hasta el {percent}% del umbral",
   "@chaCompressionConfigTarget": {
-    "placeholders": {"percent": {"type": "int"}}
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
   },
   "chaCompressionConfigProtect": "Conservar intactos los últimos {count} mensajes",
   "@chaCompressionConfigProtect": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "chaCompressionConfigThresholdTokens": "Límite absoluto de tokens",
   "chaCompressionConfigThresholdTokensHint": "Opcional. Hermes usa el menor valor entre este límite y el umbral porcentual.",
@@ -636,7 +656,11 @@
   "chaCompressionConfigDefaultProfile": "Perfil predeterminado",
   "chaCompressionConfigProfile": "Perfil: {profile}",
   "@chaCompressionConfigProfile": {
-    "placeholders": {"profile": {"type": "String"}}
+    "placeholders": {
+      "profile": {
+        "type": "String"
+      }
+    }
   },
   "chaControlTitle": "Ajustes de esta conversación",
   "chaControlScope": "Solo esta conversación",
@@ -1133,7 +1157,9 @@
   "litertStoreOpenError": "No se pudo abrir {url}",
   "@litertStoreOpenError": {
     "placeholders": {
-      "url": {"type": "String"}
+      "url": {
+        "type": "String"
+      }
     }
   },
   "litertNoteRecommended": "Recomendado para la mayoría de móviles",
@@ -2406,7 +2432,13 @@
   "notifBgSub": "Recibe avisos con la app cerrada · usa una notificación persistente",
   "notifBgActive": "Activo hasta que la desactives · escuchando eventos del agente",
   "notifBgActiveUntil": "Activo hasta que la desactives · escuchando eventos del agente",
-  "@notifBgActiveUntil": {"placeholders": {"time": {"type": "String"}}},
+  "@notifBgActiveUntil": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
   "notifBgPaused": "En pausa · activa la escucha para recibir eventos en segundo plano",
   "notifBgFiniteNotice": "La escucha permanece activa hasta que la desactives y muestra una notificación persistente de Android.",
   "notifFgsChannelLabel": "Canal del servicio persistente",
@@ -3188,15 +3220,45 @@
   "crnStatusCompleted": "completada",
   "crnOpenFromConversation": "Abrir programación asociada",
   "crnMetaDelivery": "entrega: {value}",
-  "@crnMetaDelivery": {"placeholders": {"value": {"type": "String"}}},
+  "@crnMetaDelivery": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
   "crnMetaModel": "modelo: {value}",
-  "@crnMetaModel": {"placeholders": {"value": {"type": "String"}}},
+  "@crnMetaModel": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
   "crnMetaProvider": "proveedor: {value}",
-  "@crnMetaProvider": {"placeholders": {"value": {"type": "String"}}},
+  "@crnMetaProvider": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
   "crnMetaContext": "contexto: {value}",
-  "@crnMetaContext": {"placeholders": {"value": {"type": "String"}}},
+  "@crnMetaContext": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
   "crnMetaWorkdir": "carpeta: {value}",
-  "@crnMetaWorkdir": {"placeholders": {"value": {"type": "String"}}},
+  "@crnMetaWorkdir": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
   "crnScriptBadge": "script",
   "crnRunNow": "Ejecutar ahora",
   "crnCronEdit": "Editar",
@@ -3417,9 +3479,21 @@
   "secConnectionPrivateHttp": "Red privada · HTTP",
   "secConnectionPublicHttp": "HTTP público · inseguro",
   "secConnectionFor": "Instancia activa: {name}",
-  "@secConnectionFor": {"placeholders": {"name": {"type": "String"}}},
+  "@secConnectionFor": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "secConnectionPublicHttpSub": "{name} es accesible mediante HTTP público sin cifrar. Usa HTTPS o Tailscale antes de introducir credenciales.",
-  "@secConnectionPublicHttpSub": {"placeholders": {"name": {"type": "String"}}},
+  "@secConnectionPublicHttpSub": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "secCredentialStorageTitle": "Almacenamiento de credenciales",
   "secCredentialStorageSub": "Las API keys y contraseñas se guardan en Android Keystore, fuera de las preferencias normales.",
   "secStatusProtected": "protegido",
@@ -3816,19 +3890,25 @@
   "slRelativeMinutes": "hace {count}m",
   "@slRelativeMinutes": {
     "placeholders": {
-      "count": {"type": "int"}
+      "count": {
+        "type": "int"
+      }
     }
   },
   "slRelativeHours": "hace {count}h",
   "@slRelativeHours": {
     "placeholders": {
-      "count": {"type": "int"}
+      "count": {
+        "type": "int"
+      }
     }
   },
   "slRelativeDays": "hace {count}d",
   "@slRelativeDays": {
     "placeholders": {
-      "count": {"type": "int"}
+      "count": {
+        "type": "int"
+      }
     }
   },
   "slSearchHint": "Buscar conversaciones…",
@@ -4710,7 +4790,9 @@
   "ieExternalPairingBody": "El enlace externo quiere comprobar y configurar automáticamente {host}. Revisa que reconoces el servidor; después la app resolverá gateway, Dashboard y bridge por ti.",
   "@ieExternalPairingBody": {
     "placeholders": {
-      "host": {"type": "String"}
+      "host": {
+        "type": "String"
+      }
     }
   },
   "ieExternalPairingReview": "Solo revisar",
@@ -4719,8 +4801,12 @@
   "ieDuplicateBody": "Ya tienes «{label}» conectada a {endpoint}. No se creará otra instancia ni se modificarán sus credenciales.",
   "@ieDuplicateBody": {
     "placeholders": {
-      "label": {"type": "String"},
-      "endpoint": {"type": "String"}
+      "label": {
+        "type": "String"
+      },
+      "endpoint": {
+        "type": "String"
+      }
     }
   },
   "ieDuplicateOpen": "Abrir existente",
@@ -5041,7 +5127,13 @@
   "extApplyRejected": "El servidor rechazó el cambio de modelo.",
   "extVenvUnavailable": "El entorno del agente local no está disponible. Usa Reparar agente desde el panel de control local.",
   "extApplyError": "No se pudo aplicar: {error}",
-  "@extApplyError": {"placeholders": {"error": {"type": "String"}}},
+  "@extApplyError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
   "extEditTitle": "Editar proveedor",
   "extTitle": "Proveedor externo",
   "extReachabilityInfo": "La app prueba esta URL desde el móvil. Hermes también debe poder llegar al proveedor desde su servidor mediante la misma LAN, VPN o red Tailscale.",
@@ -5075,7 +5167,7 @@
   "connectSimpleQuestion": "¿Cómo quieres conectar?",
   "connectSimpleIntro": "Escanea un QR existente o prepara el servidor con un solo comando. No tendrás que introducir puertos, instancias ni modelos.",
   "connectScanQr": "Escanear QR",
-  "connectScanQrBody": "Carga la conexión y comprueba automáticamente Gateway, Dashboard y Mobile Bridge.",
+  "connectScanQrBody": "La forma más rápida: escanea el QR que imprime tu servidor, sin teclear IP ni token.",
   "connectPrepareServer": "Preparar servidor",
   "connectPrepareServerBody": "Elige su sistema, copia un comando y termina escaneando el QR.",
   "connectInstallHelp": "¿Aún no tienes Hermes Agent? Abrir la guía",
@@ -5099,7 +5191,6 @@
   "connectDiagramSemantics": "Tu servidor genera un código seguro y este móvil lo escanea.",
   "connectIntro": "Elige cómo conectar con tu servidor Hermes.",
   "connectScanQrTitle": "Escanear QR",
-  "connectScanQrBody": "La forma más rápida: escanea el QR que imprime tu servidor, sin teclear IP ni token.",
   "connectManualTitle": "Introducir manualmente",
   "connectManualBody": "Escribe la dirección y el token de tu gateway.",
   "connectAssistTitle": "Preparar en una terminal",
@@ -5250,7 +5341,13 @@
   "setBridgeChecking": "Comprobando la versión instalada…",
   "setBridgeStatusUnavailable": "No se detecta el bridge. Puede estar apagado o aún no instalado.",
   "setBridgeStatusCurrent": "Instalado v{version} · actualizado",
-  "@setBridgeStatusCurrent": {"placeholders": {"version": {"type": "String"}}},
+  "@setBridgeStatusCurrent": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
   "setBridgeUpdateNow": "Actualizar ahora",
   "setBridgeReadOnly": "Esta instancia es de solo lectura; se bloquean los cambios automáticos del bridge.",
   "notifListenerStartFailed": "No se pudo iniciar la escucha en segundo plano. Reinténtalo.",
@@ -5288,9 +5385,21 @@
   "voiceDetectingKokoro": "Comprobando Kokoro…",
   "voiceDetectedBaseUrl": "URL detectada",
   "voiceKokoroDetected": "Kokoro listo · {count} voces detectadas",
-  "@voiceKokoroDetected": {"placeholders": {"count": {"type": "int"}}},
+  "@voiceKokoroDetected": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "voiceKokoroDetectionFailed": "No se pudo configurar Kokoro: {error}",
-  "@voiceKokoroDetectionFailed": {"placeholders": {"error": {"type": "String"}}},
+  "@voiceKokoroDetectionFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
   "voiceSaveConfiguration": "Guardar configuración",
   "voiceGuideButton": "Guía paso a paso",
   "voiceConversationSectionTitle": "Conversación con Hermes",
@@ -5306,7 +5415,13 @@
   "voiceServerCardTitle": "Voz de esta instancia",
   "voiceServerCardSub": "Perfil predeterminado de Hermes",
   "voiceServerCardProfileSub": "Perfil {profile}",
-  "@voiceServerCardProfileSub": {"placeholders": {"profile": {"type": "String"}}},
+  "@voiceServerCardProfileSub": {
+    "placeholders": {
+      "profile": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerSttLabel": "Reconocimiento",
   "voiceServerTtsLabel": "Voz",
   "voiceServerDeliveryLabel": "Streaming",
@@ -5340,16 +5455,37 @@
   "voiceCurrentLocalFallback": "Servidor Hermes · no disponible · sin cambio local",
   "voiceCurrentServerUnknown": "Servidor Hermes · configuración no disponible",
   "voiceCurrentServer": "Servidor Hermes · {provider} · {voice}",
-  "@voiceCurrentServer": {"placeholders": {"provider": {"type": "String"}, "voice": {"type": "String"}}},
+  "@voiceCurrentServer": {
+    "placeholders": {
+      "provider": {
+        "type": "String"
+      },
+      "voice": {
+        "type": "String"
+      }
+    }
+  },
   "voiceStatusLocal": "Listo en este móvil",
   "voiceStatusChecking": "Comprobando disponibilidad y configuración…",
   "voiceStatusUsingFallback": "El servidor no está disponible; Voz no se iniciará hasta recuperarlo o elegir este móvil",
   "voiceStatusServerReadyConfigUnknown": "Servidor disponible; no se pudo leer el proveedor actual",
   "voiceStatusServerReady": "Endpoints y configuración detectados · se valida al hablar",
   "voiceCurrentLiveDictation": "Dictado en directo · {engine}",
-  "@voiceCurrentLiveDictation": {"placeholders": {"engine": {"type": "String"}}},
+  "@voiceCurrentLiveDictation": {
+    "placeholders": {
+      "engine": {
+        "type": "String"
+      }
+    }
+  },
   "voiceCurrentFinishedDictation": "Transcribir al terminar · {model}",
-  "@voiceCurrentFinishedDictation": {"placeholders": {"model": {"type": "String"}}},
+  "@voiceCurrentFinishedDictation": {
+    "placeholders": {
+      "model": {
+        "type": "String"
+      }
+    }
+  },
   "voiceStatusReady": "Listo para usar",
   "voiceStatusDownloadNeeded": "Falta descargar el modelo seleccionado",
   "voiceStatusDependsOnAndroid": "Depende del servicio de voz instalado en Android",
@@ -5372,7 +5508,16 @@
   "voiceServerReadOnly": "Esta instancia es de solo lectura. Puedes ver la voz, pero no cambiarla.",
   "voiceServerEdgeBehavior": "Edge genera la voz en el servidor. Puede empezar por frases, pero no ofrece PCM continuo.",
   "voiceServerFallbackNote": "Si el servidor falla, la conversación conserva la ruta Hermes. No activa automáticamente {stt} ni {tts}: reintenta o elige este móvil.",
-  "@voiceServerFallbackNote": {"placeholders": {"stt": {"type": "String"}, "tts": {"type": "String"}}},
+  "@voiceServerFallbackNote": {
+    "placeholders": {
+      "stt": {
+        "type": "String"
+      },
+      "tts": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerVoiceSheetTitle": "Voz Edge del servidor",
   "voiceServerVoiceSheetHelp": "Elige una voz de la lista. Si ya conoces otro ID de Edge, puedes añadirlo desde la opción manual.",
   "voiceServerVoiceManualTitle": "Usar otro ID de Edge (avanzado)",
@@ -5380,7 +5525,13 @@
   "voiceServerVoiceSave": "Guardar en el servidor",
   "voiceServerVoiceSaving": "Guardando voz…",
   "voiceServerVoiceSaved": "Voz del servidor cambiada a {voice}",
-  "@voiceServerVoiceSaved": {"placeholders": {"voice": {"type": "String"}}},
+  "@voiceServerVoiceSaved": {
+    "placeholders": {
+      "voice": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerVoiceSaveFailed": "No se pudo guardar la voz en el servidor. La configuración anterior sigue activa.",
   "voiceServerManageAction": "Configurar",
   "voiceServerManageTitle": "Configura la voz del servidor",
@@ -5402,14 +5553,26 @@
   "voiceServerProviderUse": "Usar este proveedor",
   "voiceServerProviderSwitching": "Cambiando proveedor…",
   "voiceServerProviderChanged": "Proveedor del servidor cambiado a {provider}",
-  "@voiceServerProviderChanged": {"placeholders": {"provider": {"type": "String"}}},
+  "@voiceServerProviderChanged": {
+    "placeholders": {
+      "provider": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerProviderChangeFailed": "No se pudo cambiar el proveedor. La selección anterior sigue activa.",
   "voiceServerProviderPcmCapable": "Compatible con PCM continuo",
   "voiceServerProviderPhraseOnly": "Entrega por frases",
   "voiceServerCredentialConfigured": "Configurada en el servidor",
   "voiceServerCredentialMissing": "Sin configurar",
   "voiceServerCredentialHint": "Nueva {label}",
-  "@voiceServerCredentialHint": {"placeholders": {"label": {"type": "String"}}},
+  "@voiceServerCredentialHint": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerCredentialSave": "Guardar clave en el servidor",
   "voiceServerCredentialSaved": "Clave guardada. El valor no se conserva ni se vuelve a mostrar en el móvil.",
   "voiceServerCredentialFailed": "No se pudo guardar la clave en el servidor.",
@@ -5421,7 +5584,13 @@
   "voiceServerSetupFailed": "La preparación del proveedor no terminó correctamente.",
   "voiceServerParametersAction": "Personalizar",
   "voiceServerParametersTitle": "Personalizar {provider}",
-  "@voiceServerParametersTitle": {"placeholders": {"provider": {"type": "String"}}},
+  "@voiceServerParametersTitle": {
+    "placeholders": {
+      "provider": {
+        "type": "String"
+      }
+    }
+  },
   "voiceServerParametersSub": "Elige opciones válidas de Hermes; aquí no tendrás que escribir rutas ni nombres técnicos.",
   "voiceServerParametersCurrentTitle": "Configuración activa",
   "voiceServerParametersAdvancedTitle": "Avanzado",
@@ -5448,8 +5617,12 @@
   "voiceServerLanguageMismatch": "El servidor escucha en {serverLanguage}; la app está en {appLanguage}.",
   "@voiceServerLanguageMismatch": {
     "placeholders": {
-      "serverLanguage": {"type": "String"},
-      "appLanguage": {"type": "String"}
+      "serverLanguage": {
+        "type": "String"
+      },
+      "appLanguage": {
+        "type": "String"
+      }
     }
   },
   "voiceServerFieldSpeed": "Velocidad de habla",
@@ -5477,14 +5650,32 @@
   "voiceTextToSpeechTab": "Texto a voz",
   "voiceTextToSpeechHelp": "Elige qué voz leerá las respuestas y pruébala aquí mismo.",
   "voiceAdvancedActive": "Activo: {name} · toca para configurar",
-  "@voiceAdvancedActive": {"placeholders": {"name": {"type": "String"}}},
+  "@voiceAdvancedActive": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "voiceManageLiveDictationModel": "Modelo del dictado en directo",
   "voiceManageFinishedDictationModel": "Modelo para transcribir al terminar",
   "voiceManageOfflineVoices": "Cambiar o descargar voz",
   "voiceSelectedAssetReady": "{name} · listo para usar",
-  "@voiceSelectedAssetReady": {"placeholders": {"name": {"type": "String"}}},
+  "@voiceSelectedAssetReady": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "voiceSelectedAssetDownloadNeeded": "{name} · falta descargarlo",
-  "@voiceSelectedAssetDownloadNeeded": {"placeholders": {"name": {"type": "String"}}},
+  "@voiceSelectedAssetDownloadNeeded": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "voiceElevenVoiceIdLabel": "Identificador de voz de ElevenLabs",
   "voiceSetupSpeakStep": "1. Hablar",
   "voiceSetupSpeakHelp": "Elige cómo convierte la app tu voz en texto.",
@@ -5531,7 +5722,13 @@
   "voiceErrorInvalidAudio": "El servicio de voz devolvió un archivo de audio vacío o no válido.",
   "voiceErrorCustomResponseMissingAudio": "La respuesta de la API personalizada no contenía audio utilizable.",
   "voiceErrorCustomHttpFailure": "La API TTS personalizada respondió con HTTP {status}.",
-  "@voiceErrorCustomHttpFailure": {"placeholders": {"status": {"type": "String"}}},
+  "@voiceErrorCustomHttpFailure": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
   "voiceErrorDashboardLogin": "El Dashboard de Hermes necesita iniciar sesión. Configura sus credenciales para esta instancia.",
   "voiceErrorUnavailable": "El servicio de voz elegido no está disponible para la instancia activa.",
   "voiceErrorPreviewTimeout": "La voz no produjo audio a tiempo. Comprueba que el modelo esté descargado y vuelve a probar.",
@@ -5975,8 +6172,12 @@
   "interactiveBatchProgress": "Pregunta {answered} de {total}",
   "@interactiveBatchProgress": {
     "placeholders": {
-      "answered": {"type": "int"},
-      "total": {"type": "int"}
+      "answered": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "interactiveBatchOtherHint": "Otro",
@@ -5985,8 +6186,12 @@
   "subagentActivitySummary": "{active} en curso · {completed} finalizados",
   "@subagentActivitySummary": {
     "placeholders": {
-      "active": {"type": "int"},
-      "completed": {"type": "int"}
+      "active": {
+        "type": "int"
+      },
+      "completed": {
+        "type": "int"
+      }
     }
   },
   "subagentActivityRequested": "pendiente",
@@ -5999,13 +6204,21 @@
   "subagentActivityUnknown": "estado desconocido",
   "subagentActivityItem": "Subagente {index}",
   "@subagentActivityItem": {
-    "placeholders": {"index": {"type": "int"}}
+    "placeholders": {
+      "index": {
+        "type": "int"
+      }
+    }
   },
   "subagentActivityProgress": "Tarea {current} de {total}",
   "@subagentActivityProgress": {
     "placeholders": {
-      "current": {"type": "int"},
-      "total": {"type": "int"}
+      "current": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "subagentActivityOpenConversation": "Abrir conversación",
@@ -6023,7 +6236,11 @@
   "artifactTitle": "Artefactos de la sesión",
   "artifactCount": "{count, plural, =1{1 elemento} other{{count} elementos}}",
   "@artifactCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "artifactEmptyTitle": "Todavía no hay artefactos",
   "artifactEmptyBody": "Las imágenes, documentos y resultados generados en esta sesión aparecerán aquí.",
@@ -6041,17 +6258,29 @@
   "artifactSourceUnavailable": "No se pudo localizar el mensaje de origen en el historial cargado.",
   "artifactJumpSemantics": "{name}. Ir al mensaje de origen",
   "@artifactJumpSemantics": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "artifactSourceOne": "Origen: mensaje {number}",
   "@artifactSourceOne": {
-    "placeholders": {"number": {"type": "int"}}
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
   },
   "artifactSourceMany": "Origen: mensaje {number} · {count} referencias",
   "@artifactSourceMany": {
     "placeholders": {
-      "number": {"type": "int"},
-      "count": {"type": "int"}
+      "number": {
+        "type": "int"
+      },
+      "count": {
+        "type": "int"
+      }
     }
   },
   "generatedArtifactSection": "Artefactos generados",
@@ -6060,40 +6289,72 @@
   "generatedArtifactKindSvg": "Fuente SVG",
   "generatedArtifactVersionCount": "{count, plural, =1{1 versión} other{{count} versiones}}",
   "@generatedArtifactVersionCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "generatedArtifactOpenSemantics": "{name}. Abrir artefacto generado",
   "@generatedArtifactOpenSemantics": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "generatedArtifactSourceOnly": "Por seguridad, Hermes Console muestra HTML y SVG solo como código fuente. Nunca los ejecuta ni los abre en un WebView.",
   "generatedArtifactSourceSemantics": "Código fuente de {title}",
   "@generatedArtifactSourceSemantics": {
-    "placeholders": {"title": {"type": "String"}}
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
   },
   "generatedArtifactCharacterCount": "{count} caracteres",
   "@generatedArtifactCharacterCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "generatedArtifactPreviewTruncated": "La vista previa se limita a {limit} caracteres. Copiar, compartir y guardar siguen usando la versión completa.",
   "@generatedArtifactPreviewTruncated": {
-    "placeholders": {"limit": {"type": "int"}}
+    "placeholders": {
+      "limit": {
+        "type": "int"
+      }
+    }
   },
   "generatedArtifactCopied": "Contenido del artefacto copiado.",
   "generatedArtifactSaved": "Guardado como {name}.",
   "@generatedArtifactSaved": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "generatedArtifactExportTooLarge": "Este artefacto supera el límite de exportación de {mb} MB.",
   "@generatedArtifactExportTooLarge": {
-    "placeholders": {"mb": {"type": "int"}}
+    "placeholders": {
+      "mb": {
+        "type": "int"
+      }
+    }
   },
   "generatedArtifactExportFailed": "No se pudo exportar el artefacto.",
   "generatedArtifactVersionOf": "Versión {current} de {total}",
   "@generatedArtifactVersionOf": {
     "placeholders": {
-      "current": {"type": "int"},
-      "total": {"type": "int"}
+      "current": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "generatedArtifactPreviousVersion": "Versión anterior",
@@ -6124,7 +6385,11 @@
   "recoveryCenterSavedFallback": "Checkpoint guardado",
   "recoveryCenterStaleView": "{error} Se conserva la última vista.",
   "@recoveryCenterStaleView": {
-    "placeholders": {"error": {"type": "String"}}
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "recoveryCenterDetailFallback": "Detalle del checkpoint",
   "recoveryCenterReadOnlyRestore": "Modo solo lectura: la restauración está deshabilitada.",
@@ -6162,9 +6427,15 @@
   "extensionsCenterChangeBody": "{action} “{name}” {scope}.",
   "@extensionsCenterChangeBody": {
     "placeholders": {
-      "action": {"type": "String"},
-      "name": {"type": "String"},
-      "scope": {"type": "String"}
+      "action": {
+        "type": "String"
+      },
+      "name": {
+        "type": "String"
+      },
+      "scope": {
+        "type": "String"
+      }
     }
   },
   "extensionsCenterConfirmChange": "Confirmar cambio",
@@ -6188,8 +6459,12 @@
   "extensionsCenterResultCount": "{visible} de {total}",
   "@extensionsCenterResultCount": {
     "placeholders": {
-      "visible": {"type": "int"},
-      "total": {"type": "int"}
+      "visible": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "extensionsCenterReloadControlled": "Recarga controlada",
@@ -6197,23 +6472,39 @@
   "extensionsCenterReloading": "Recargando…",
   "extensionsCenterStaleInventory": "{error} Se conserva el último inventario.",
   "@extensionsCenterStaleInventory": {
-    "placeholders": {"error": {"type": "String"}}
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterPluginVersion": "v{version}",
   "@extensionsCenterPluginVersion": {
-    "placeholders": {"version": {"type": "String"}}
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterActive": "activo",
   "extensionsCenterInactive": "inactivo",
   "extensionsCenterToolCount": "{count, plural, one{1 herramienta} other{{count} herramientas}}",
   "@extensionsCenterToolCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "extensionsCenterToolCountWithDescription": "{count, plural, one{1 herramienta · {description}} other{{count} herramientas · {description}}}",
   "@extensionsCenterToolCountWithDescription": {
     "placeholders": {
-      "count": {"type": "int"},
-      "description": {"type": "String"}
+      "count": {
+        "type": "int"
+      },
+      "description": {
+        "type": "String"
+      }
     }
   },
   "extensionsCenterFailureUnsupported": "Esta versión de Hermes no publica plugins ni herramientas.",
@@ -6242,14 +6533,24 @@
   "agentCenterStopProcessTitle": "Detener proceso",
   "agentCenterStopProcessBody": "Se detendrá únicamente “{process}”.",
   "@agentCenterStopProcessBody": {
-    "placeholders": {"process": {"type": "String"}}
+    "placeholders": {
+      "process": {
+        "type": "String"
+      }
+    }
   },
   "agentCenterStop": "Detener",
   "agentCenterStopFailed": "Hermes no pudo detener ese proceso.",
   "agentCenterStopAll": "Detener todos",
   "agentCenterStopAllTitle": "¿Detener todos los procesos activos?",
   "agentCenterStopAllBody": "Se detendrán {count} procesos en segundo plano de esta conversación. El historial de delegaciones seguirá disponible.",
-  "@agentCenterStopAllBody": {"placeholders": {"count": {"type": "int"}}},
+  "@agentCenterStopAllBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "agentCenterStopAllFailed": "No se pudieron detener algunos procesos.",
   "agentCenterNewTaskTitle": "Nueva tarea en segundo plano",
   "agentCenterNewTaskHint": "Describe una tarea concreta para esta conversación",
@@ -6263,14 +6564,22 @@
   "agentCenterNoProcesses": "No hay procesos activos para esta conversación.",
   "agentCenterProcessFallback": "Proceso {id}",
   "@agentCenterProcessFallback": {
-    "placeholders": {"id": {"type": "String"}}
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
   },
   "agentCenterActive": "activo",
   "agentCenterProcessStatus": "{status} · {seconds} s",
   "@agentCenterProcessStatus": {
     "placeholders": {
-      "status": {"type": "String"},
-      "seconds": {"type": "int"}
+      "status": {
+        "type": "String"
+      },
+      "seconds": {
+        "type": "int"
+      }
     }
   },
   "agentCenterStopTooltip": "Detener este proceso",
@@ -6278,18 +6587,30 @@
   "agentCenterNoHistory": "Hermes todavía no ha guardado ninguna delegación de subagentes.",
   "agentCenterSubagentCount": "{count, plural, one{1 subagente} other{{count} subagentes}}",
   "@agentCenterSubagentCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "agentCenterSubagentCountWithDate": "{count, plural, one{1 subagente · {date}} other{{count} subagentes · {date}}}",
   "@agentCenterSubagentCountWithDate": {
     "placeholders": {
-      "count": {"type": "int"},
-      "date": {"type": "String"}
+      "count": {
+        "type": "int"
+      },
+      "date": {
+        "type": "String"
+      }
     }
   },
   "agentCenterStaleView": "{error} Se conserva la última vista.",
   "@agentCenterStaleView": {
-    "placeholders": {"error": {"type": "String"}}
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "projectsCenterTitle": "Proyectos",
   "projectsCenterRefreshTooltip": "Actualizar proyectos",
@@ -6307,23 +6628,39 @@
   "projectsCenterEmptyBody": "Abre una conversación con una carpeta de trabajo (cwd) en el servidor. Aparecerá aquí cuando Hermes pueda agruparla por carpeta o repositorio Git.",
   "projectsCenterStaleView": "{error} Se conserva la última vista.",
   "@projectsCenterStaleView": {
-    "placeholders": {"error": {"type": "String"}}
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "projectsCenterUnnamedProject": "Proyecto sin nombre",
   "projectsCenterProjectSemantics": "{label}, {count, plural, one{1 conversación} other{{count} conversaciones}}",
   "@projectsCenterProjectSemantics": {
     "placeholders": {
-      "label": {"type": "String"},
-      "count": {"type": "int"}
+      "label": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
     }
   },
   "projectsCenterConversationCount": "{count, plural, one{1 conversación} other{{count} conversaciones}}",
   "@projectsCenterConversationCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "projectsCenterRepositoryCount": "{count, plural, one{1 repositorio} other{{count} repositorios}}",
   "@projectsCenterRepositoryCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "projectsCenterServerPathReadOnly": "Ruta del servidor, solo lectura",
   "projectsCenterDetailStale": "No se pudo actualizar el detalle; se muestra el resumen disponible.",
@@ -6353,7 +6690,11 @@
   "extensionsCenterMcpCatalogSearchHint": "Buscar en el catálogo…",
   "extensionsCenterMcpCatalogSubtitle": "{count, plural, =0{No hay entradas disponibles} one{1 servidor disponible} other{{count} servidores disponibles}}",
   "@extensionsCenterMcpCatalogSubtitle": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "extensionsCenterMcpCatalogTitle": "Catálogo MCP",
   "extensionsCenterMcpConfiguredSection": "Configurados",
@@ -6373,7 +6714,11 @@
   "extensionsCenterMcpRemoveAction": "Eliminar servidor",
   "extensionsCenterMcpRemoveBody": "Se eliminará «{name}» de la configuración de esta instancia.",
   "@extensionsCenterMcpRemoveBody": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterMcpRemoveTitle": "Eliminar servidor MCP",
   "extensionsCenterMcpRemoved": "Servidor MCP eliminado.",
@@ -6385,15 +6730,27 @@
   "extensionsCenterMcpTestNeedsAuth": "El servidor MCP necesita autorización.",
   "extensionsCenterMcpTestSuccess": "{count, plural, =0{Conexión correcta} one{Conexión correcta · 1 herramienta} other{Conexión correcta · {count} herramientas}}",
   "@extensionsCenterMcpTestSuccess": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "extensionsCenterMcpToggleBody": "Se cambiará el estado de «{name}» y se recargará MCP.",
   "@extensionsCenterMcpToggleBody": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterMcpToolCount": "{count, plural, one{1 herramienta} other{{count} herramientas}}",
   "@extensionsCenterMcpToolCount": {
-    "placeholders": {"count": {"type": "int"}}
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "extensionsCenterMcpTransportLabel": "Transporte",
   "extensionsCenterNoMatchesBody": "Prueba con otro término o desactiva el filtro de activos.",
@@ -6405,7 +6762,11 @@
   "extensionsCenterPluginInstallAction": "Instalar",
   "extensionsCenterPluginInstallConfirmBody": "Hermes descargará y ejecutará código de terceros desde «{source}». Revisa el origen antes de continuar.",
   "@extensionsCenterPluginInstallConfirmBody": {
-    "placeholders": {"source": {"type": "String"}}
+    "placeholders": {
+      "source": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterPluginInstallConfirmTitle": "Confirmar instalación",
   "extensionsCenterPluginInstallRisk": "Los plugins ejecutan código en tu servidor. Instala únicamente repositorios en los que confíes.",
@@ -6415,7 +6776,11 @@
   "extensionsCenterPluginRemoveAction": "Eliminar plugin",
   "extensionsCenterPluginRemoveBody": "Se eliminará «{name}» de esta instancia. Sus datos externos pueden permanecer en el servidor.",
   "@extensionsCenterPluginRemoveBody": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterPluginRemoveTitle": "Eliminar plugin",
   "extensionsCenterPluginRemoved": "Plugin eliminado.",
@@ -6423,7 +6788,11 @@
   "extensionsCenterPluginUpdateAction": "Actualizar plugin",
   "extensionsCenterPluginUpdateBody": "Hermes actualizará «{name}» desde su origen Git.",
   "@extensionsCenterPluginUpdateBody": {
-    "placeholders": {"name": {"type": "String"}}
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   },
   "extensionsCenterPluginUpdateTitle": "Actualizar plugin",
   "extensionsCenterPluginUpdated": "Plugin actualizado.",
@@ -6434,5 +6803,13 @@
   "drawerSwitchInstance": "Cambiar de instancia",
   "drawerActiveInstance": "Instancia activa",
   "sesMetricCachedTokens": "tokens en caché",
-  "sesMetricCachePercent": "caché %"
+  "sesMetricCachePercent": "caché %",
+  "sftpTitle": "Archivos · SFTP",
+  "sftpDiscard": "Descartar",
+  "sftpTransferFailed": "Error",
+  "sklRefreshInstalled": "Actualizar instaladas",
+  "sklNoInstalledTitle": "No se encontraron skills",
+  "sklNoInstalledBody": "No hay skills instaladas en este gateway",
+  "sklSearchInstalled": "Buscar skills instaladas…",
+  "sklErrorTitle": "Error"
 }

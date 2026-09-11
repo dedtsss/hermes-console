@@ -13,22 +13,85 @@ Set<String> _placeholders(Object? message) => RegExp(
   r'\{([A-Za-z][A-Za-z0-9_]*)\s*(?:\}|,)',
 ).allMatches(message as String).map((match) => match.group(1)!).toSet();
 
+/// Returns the names, formats, and plural/select arms of every ICU argument.
+/// This deliberately ignores translated prose while making an incompatible ICU
+/// message (including a missing plural arm) fail deterministically.
+List<String> _icuShape(String message) {
+  final result = <String>[];
+  for (var index = 0; index < message.length; index++) {
+    if (message[index] != '{') continue;
+    var depth = 1;
+    var end = index + 1;
+    while (end < message.length && depth > 0) {
+      if (message[end] == '{') depth++;
+      if (message[end] == '}') depth--;
+      end++;
+    }
+    if (depth != 0) {
+      result.add('unclosed@$index');
+      break;
+    }
+    final argument = message.substring(index + 1, end - 1);
+    final head = RegExp(r'^\s*([A-Za-z][A-Za-z0-9_]*)(?:\s*,\s*([A-Za-z]+))?')
+        .firstMatch(argument);
+    if (head != null) {
+      final name = head.group(1)!;
+      final kind = head.group(2) ?? 'argument';
+      final arms = RegExp(r'([=A-Za-z]+)\s*\{').allMatches(argument)
+          .map((match) => match.group(1)!)
+          .toList()
+        ..sort();
+      result.add('$name:$kind:${arms.join(',')}');
+    }
+    index = end - 1;
+  }
+  return result;
+}
+
 void main() {
+  test('Spanish retains the English canonical message contract', () {
+    final en = _readCatalog('lib/l10n/app_en.arb');
+    final es = _readCatalog('lib/l10n/app_es.arb');
+
+    expect(_messageKeys(es), _messageKeys(en));
+    for (final key in _messageKeys(en)) {
+      expect(
+        _placeholders(es[key]),
+        _placeholders(en[key]),
+        reason: 'Placeholders of $key must match EN/ES',
+      );
+      expect(
+        _icuShape(es[key] as String),
+        _icuShape(en[key] as String),
+        reason: 'ICU structure of $key must match EN/ES',
+      );
+    }
+  });
+
   test(
-    'los catálogos español e inglés tienen las mismas claves y variables',
+    'Russian fully implements the English canonical message contract',
     () {
-      final es = _readCatalog('lib/l10n/app_es.arb');
       final en = _readCatalog('lib/l10n/app_en.arb');
+      final ru = _readCatalog('lib/l10n/app_ru.arb');
 
-      // app_es.arb es la plantilla de gen-l10n y por eso conserva más entradas
-      // @metadata. El contrato traducible son las claves de mensaje sin @.
-      expect(_messageKeys(en), _messageKeys(es));
+      expect(_messageKeys(ru), _messageKeys(en));
+      expect(ru['@@locale'], 'ru');
 
-      for (final key in _messageKeys(es)) {
+      for (final key in _messageKeys(en)) {
         expect(
+          (ru[key] as String).trim(),
+          isNotEmpty,
+          reason: 'Russian translation for $key must not be blank',
+        );
+        expect(
+          _placeholders(ru[key]),
           _placeholders(en[key]),
-          _placeholders(es[key]),
-          reason: 'Los placeholders de $key deben coincidir en ES/EN',
+          reason: 'Placeholders of $key must match EN/RU',
+        );
+        expect(
+          _icuShape(ru[key] as String),
+          _icuShape(en[key] as String),
+          reason: 'ICU structure of $key must match EN/RU',
         );
       }
     },

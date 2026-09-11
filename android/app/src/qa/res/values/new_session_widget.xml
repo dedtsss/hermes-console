@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="new_session_target_package" translatable="false">dev.xpetalab.hermesconsole.qa</string>
+    <string name="app_name_qa">Hermes Console RU QA</string>
+    <string name="new_session_target_package" translatable="false">io.github.dedtsss.hermesconsole.qa</string>
 </resources>
