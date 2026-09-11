@@ -2003,7 +2003,7 @@
   "@setConvosCleared": {
     "placeholders": {
       "count": {
-        "type": "Object"
+        "type": "num"
       }
     }
   },
@@ -2026,7 +2026,7 @@
   "@setLocalConvosCleared": {
     "placeholders": {
       "count": {
-        "type": "Object"
+        "type": "num"
       }
     }
   },
@@ -2034,7 +2034,7 @@
   "@setDraftsCleared": {
     "placeholders": {
       "count": {
-        "type": "Object"
+        "type": "num"
       }
     }
   },
@@ -2042,7 +2042,7 @@
   "@setPendingTurnsCleared": {
     "placeholders": {
       "count": {
-        "type": "Object"
+        "type": "num"
       }
     }
   },
@@ -2050,7 +2050,7 @@
   "@setLocalClearFailures": {
     "placeholders": {
       "count": {
-        "type": "Object"
+        "type": "num"
       }
     }
   },
@@ -5280,7 +5280,7 @@
     "description": "Cabecera del panel de mensajes en cola mientras el agente responde.",
     "placeholders": {
       "count": {
-        "type": "Object"
+        "type": "num"
       }
     }
   },
@@ -5327,7 +5327,7 @@
     "description": "Contador de avisos del panel de diagnóstico de Ajustes.",
     "placeholders": {
       "count": {
-        "type": "Object"
+        "type": "num"
       }
     }
   },
@@ -5939,7 +5939,7 @@
     "description": "Contador de resultados de la galería Petdex.",
     "placeholders": {
       "count": {
-        "type": "Object"
+        "type": "num"
       }
     }
   },
@@ -5958,7 +5958,7 @@
   "@mdlHiddenCount": {
     "placeholders": {
       "count": {
-        "type": "Object"
+        "type": "num"
       }
     }
   },

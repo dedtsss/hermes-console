@@ -5653,5 +5653,68 @@
   "sklNoInstalledTitle": "Навыки не найдены",
   "sklNoInstalledBody": "На этом шлюзе нет установленных навыков",
   "sklSearchInstalled": "Поиск установленных навыков…",
-  "sklErrorTitle": "Ошибка"
+  "sklErrorTitle": "Ошибка",
+  "@setConvosCleared": {
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  },
+  "@setLocalConvosCleared": {
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  },
+  "@setDraftsCleared": {
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  },
+  "@setPendingTurnsCleared": {
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  },
+  "@setLocalClearFailures": {
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  },
+  "@chaQueuedCount": {
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  },
+  "@setWarningsCount": {
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  },
+  "@petdexResultCount": {
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  },
+  "@mdlHiddenCount": {
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  }
 }
