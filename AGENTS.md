@@ -3,6 +3,8 @@
 Read `docs/PROJECT_BRIEF.md`, `docs/SECURITY_POLICY.md` and
 `docs/RELEASE_DISTRIBUTION.md` before changing release or distribution files.
 
+For this user-owned localization fork, also read `docs/FORK_POLICY.md` before changing package identity, localization, pairing/deep links, distribution, or upstream-sync behavior.
+
 ## Non-negotiable channel separation
 
 - Google Play accepts only the signed `play` AAB. Never commit it, attach it to
