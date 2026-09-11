@@ -79,7 +79,7 @@ class SshTransferBar extends StatelessWidget {
                       err
                           ? s.sftpTransferFailed
                           : ok
-                              ? s.commonDone
+                              ? s.kanbanColDone
                               : (pct == null ? '…' : '$pct%'),
                       style: TextStyle(fontSize: 11, color: tone),
                     ),
