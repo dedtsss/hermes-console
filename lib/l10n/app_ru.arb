@@ -485,7 +485,7 @@
   "chaSelectText": "Select text",
   "chaBackgroundWorkTitle": "Background work",
   "chaBackgroundWorkFinished": "Finished",
-  "chaBackgroundAgentsFinished": "{count, plural, =1@@@0@@@ other@@@2@@@}",
+  "chaBackgroundAgentsFinished": "{count, plural, =1{Завершён 1 агент} other{Завершено агентов: {count}}}",
   "@chaBackgroundAgentsFinished": {
     "placeholders": {
       "count": {
@@ -493,7 +493,7 @@
       }
     }
   },
-  "chaBackgroundAgentsFailed": "{count, plural, =1@@@0@@@ other@@@2@@@}",
+  "chaBackgroundAgentsFailed": "{count, plural, =1{Ошибка у 1 агента} other{Ошибки у агентов: {count}}}",
   "@chaBackgroundAgentsFailed": {
     "placeholders": {
       "count": {
@@ -971,7 +971,7 @@
   "cevHide": "hide",
   "cevShowFull": "show full command",
   "cevActivity": "активность",
-  "cevStepCount": "{count, plural, =1@@@0@@@ other@@@2@@@}",
+  "cevStepCount": "{count, plural, =1{1 шаг} other{Шагов: {count}}}",
   "@cevStepCount": {
     "placeholders": {
       "count": {
@@ -1007,7 +1007,7 @@
   "cevOpenInRuns": "Open in Запуски",
   "cevResolveInRuns": "Approvals are resolved from Активность → Запуски.",
   "cevResolvedRecord": "Record of an approval that was already resolved.",
-  "cevTraceRunning": "Выполняется инструменты · {count, plural, =1@@@0@@@ other@@@2@@@}",
+  "cevTraceRunning": "Выполняются инструменты · {count, plural, =1{завершено: 1} other{завершено: {count}}}",
   "@cevTraceRunning": {
     "placeholders": {
       "count": {
@@ -1018,7 +1018,7 @@
   "cevTraceFailed": "Error · view сведения",
   "cevTraceRecovered": "Completed · retried (view сведения)",
   "cevTraceCompleted": "Completed",
-  "cevTraceCompletedActions": "Completed · {count, plural, =1@@@0@@@ other@@@2@@@}",
+  "cevTraceCompletedActions": "Завершено · {count, plural, =1{1 действие} other{действий: {count}}}",
   "@cevTraceCompletedActions": {
     "placeholders": {
       "count": {
@@ -1319,16 +1319,16 @@
   "setConfigureDashboardAccess": "Configure Панель управления access",
   "setReconnectsPlatforms": "Reconnects platforms and applies changes without updating.",
   "setThemesAvailable": "  ·  {total} доступно",
-  "setConvosCleared": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "setConvosCleared": "{count, plural, one{Удалён 1 диалог} other{Удалено диалогов: {count}}}",
   "setConvosClearedPartial": "{deleted} deleted · {rejected} not deleted by the сервер · {failed} failed",
   "setRemoteClearUnavailable": "Сервер conversations couldn't be listed",
-  "setLocalConvosCleared": "{count, plural, one@@@0@@@ other@@@2@@@}",
-  "setDraftsCleared": "{count, plural, one@@@0@@@ other@@@2@@@}",
-  "setPendingTurnsCleared": "{count, plural, one@@@0@@@ other@@@2@@@}",
-  "setLocalClearFailures": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "setLocalConvosCleared": "{count, plural, one{Удалён 1 локальный диалог} other{Удалено локальных диалогов: {count}}}",
+  "setDraftsCleared": "{count, plural, one{Удалён 1 локальный черновик} other{Удалено локальных черновиков: {count}}}",
+  "setPendingTurnsCleared": "{count, plural, one{Удалено 1 ожидающее сообщение} other{Удалено ожидающих сообщений: {count}}}",
+  "setLocalClearFailures": "{count, plural, one{Не удалось очистить 1 локальное хранилище} other{Не удалось очистить локальных хранилищ: {count}}}",
   "setActiveSessions": "Hermes now",
   "setActiveSessionsIdle": "idle",
-  "setActiveSessionsRunning": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "setActiveSessionsRunning": "{count, plural, one{1 недавний сеанс} other{Недавних сеансов: {count}}}",
   "@setActiveSessionsRunning": {
     "placeholders": {
       "count": {
@@ -4281,7 +4281,7 @@
   "chaVoiceNeedsServerTitle": "Настроить the голос сервер",
   "chaVoiceNeedsServerBody": "Сервер-side speech recognition needs your Hermes-STT сервер URL (and token), or the сервер isn't responding. Check it in Настройки › Голос.",
   "chaVoiceAllowMic": "Разрешить микрофон",
-  "chaQueuedCount": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "chaQueuedCount": "{count, plural, one{В ОЧЕРЕДИ · 1 СООБЩЕНИЕ} other{В ОЧЕРЕДИ · СООБЩЕНИЙ: {count}}}",
   "chaQueuedNote": "they'll be sent when the turn ends",
   "chaHintResponding": "hermes is responding…",
   "chaEmptyPrompt": "Type me something to get started",
@@ -4305,7 +4305,7 @@
   "setHermesUpdated": "Hermes updated.",
   "setHermesUpdatedTo": "Hermes updated to v{version}.",
   "setGatewayRestarted": "Шлюз restarted.",
-  "setWarningsCount": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "setWarningsCount": "{count, plural, one{1 предупреждение} other{Предупреждений: {count}}}",
   "setVersionRow": "версия",
   "setRestartingBanner": "Restarting the шлюз after the обновить… The app reconnects on its own once it's back.",
   "setHermesAutoUpdateTitle": "Обновить components automatically",
@@ -4846,12 +4846,12 @@
   "petImportTitle": "Импортировать pet",
   "petImportSubtitle": "From a локальный .zip (Phase A format or a Petdex скачать)",
   "petdexClearFilters": "Очистить filters",
-  "petdexResultCount": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "petdexResultCount": "{count, plural, one{1 питомец} other{Питомцев: {count}}}",
   "mdlModelHiddenSnack": "{model} hidden from the list",
   "mdlUndo": "Undo",
   "mdlShowHiddenTip": "Show hidden",
   "mdlHideHiddenTip": "Hide hidden",
-  "mdlHiddenCount": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "mdlHiddenCount": "{count, plural, one{Скрыт 1} other{Скрыто: {count}}}",
   "mdlCatalogLoadFailed": "Couldn't load the поставщик catalog",
   "mdlCatalogFromCache": "Showing the last saved catalog — нет подключение to the Панель управления",
   "mdlCatalogNoDashboard": "The Панель управления didn't respond; поставщики pending setup aren't shown",
@@ -5076,7 +5076,7 @@
   "subagentOpenFailed": "The subagent разговор could not be opened.",
   "chaArtifactsAction": "Artifacts",
   "artifactTitle": "Сеанс artifacts",
-  "artifactCount": "{count, plural, =1@@@0@@@ other@@@2@@@}",
+  "artifactCount": "{count, plural, =1{1 элемент} other{Элементов: {count}}}",
   "@artifactCount": {
     "placeholders": {
       "count": {
@@ -5129,7 +5129,7 @@
   "generatedArtifactKindCode": "Code",
   "generatedArtifactKindHtml": "HTML source",
   "generatedArtifactKindSvg": "SVG source",
-  "generatedArtifactVersionCount": "{count, plural, =1@@@0@@@ other@@@2@@@}",
+  "generatedArtifactVersionCount": "{count, plural, =1{1 версия} other{Версий: {count}}}",
   "@generatedArtifactVersionCount": {
     "placeholders": {
       "count": {
@@ -5330,7 +5330,7 @@
   },
   "extensionsCenterActive": "активно",
   "extensionsCenterInactive": "неактивно",
-  "extensionsCenterToolCount": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "extensionsCenterToolCount": "{count, plural, one{1 инструмент} other{Инструментов: {count}}}",
   "@extensionsCenterToolCount": {
     "placeholders": {
       "count": {
@@ -5427,7 +5427,7 @@
   "agentCenterStopTooltip": "Остановить this process",
   "agentCenterHistorySection": "Saved delegations",
   "agentCenterNoHistory": "Hermes has not saved any subagent delegations yet.",
-  "agentCenterSubagentCount": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "agentCenterSubagentCount": "{count, plural, one{1 субагент} other{Субагентов: {count}}}",
   "@agentCenterSubagentCount": {
     "placeholders": {
       "count": {
@@ -5477,7 +5477,7 @@
     }
   },
   "projectsCenterUnnamedProject": "Unnamed проект",
-  "projectsCenterProjectSemantics": "{label}, {count, plural, one@@@1@@@ other@@@3@@@}",
+  "projectsCenterProjectSemantics": "{label}, {count, plural, one{1 диалог} other{диалогов: {count}}}",
   "@projectsCenterProjectSemantics": {
     "placeholders": {
       "label": {
@@ -5488,7 +5488,7 @@
       }
     }
   },
-  "projectsCenterConversationCount": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "projectsCenterConversationCount": "{count, plural, one{1 диалог} other{Диалогов: {count}}}",
   "@projectsCenterConversationCount": {
     "placeholders": {
       "count": {
@@ -5496,7 +5496,7 @@
       }
     }
   },
-  "projectsCenterRepositoryCount": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "projectsCenterRepositoryCount": "{count, plural, one{1 репозиторий} other{Репозиториев: {count}}}",
   "@projectsCenterRepositoryCount": {
     "placeholders": {
       "count": {
@@ -5530,7 +5530,7 @@
   "extensionsCenterMcpBootstrapLabel": "Setup",
   "extensionsCenterMcpCatalogAction": "Browse MCP catalog",
   "extensionsCenterMcpCatalogSearchHint": "Search the catalog…",
-  "extensionsCenterMcpCatalogSubtitle": "{count, plural, =0@@@0@@@ one@@@1@@@ other@@@3@@@}",
+  "extensionsCenterMcpCatalogSubtitle": "{count, plural, =0{Нет доступных записей} one{Доступен 1 сервер} other{Доступно серверов: {count}}}",
   "@extensionsCenterMcpCatalogSubtitle": {
     "placeholders": {
       "count": {
@@ -5570,7 +5570,7 @@
   "extensionsCenterMcpTestAction": "Проверить подключение",
   "extensionsCenterMcpTestFailed": "The MCP сервер did not respond correctly.",
   "extensionsCenterMcpTestNeedsAuth": "The MCP сервер needs authorization.",
-  "extensionsCenterMcpTestSuccess": "{count, plural, =0@@@0@@@ one@@@1@@@ other@@@3@@@}",
+  "extensionsCenterMcpTestSuccess": "{count, plural, =0{Подключение успешно} one{Подключение успешно · 1 инструмент} other{Подключение успешно · инструментов: {count}}}",
   "@extensionsCenterMcpTestSuccess": {
     "placeholders": {
       "count": {
@@ -5586,7 +5586,7 @@
       }
     }
   },
-  "extensionsCenterMcpToolCount": "{count, plural, one@@@0@@@ other@@@2@@@}",
+  "extensionsCenterMcpToolCount": "{count, plural, one{1 инструмент} other{Инструментов: {count}}}",
   "@extensionsCenterMcpToolCount": {
     "placeholders": {
       "count": {

@@ -34,7 +34,7 @@
     "description": "Línea de estado del header mientras se comprueba la salud de la instancia. {label} = nombre de la instancia activa.",
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -43,7 +43,7 @@
     "description": "Línea de estado cuando la instancia responde. {label} = nombre de la instancia.",
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -52,7 +52,7 @@
     "description": "Línea de estado cuando la instancia no responde. {label} = nombre de la instancia.",
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -240,7 +240,7 @@
   "@lockTooManyAttempts": {
     "placeholders": {
       "sec": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -261,7 +261,7 @@
   "@themesDarkSection": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -269,7 +269,7 @@
   "@themesLightSection": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -278,7 +278,7 @@
   "@themesHint": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -296,7 +296,7 @@
   "@themesDeleteBody": {
     "placeholders": {
       "name": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -308,7 +308,7 @@
   "@themesImportFallbacks": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -342,7 +342,7 @@
   "@themesContrastPending": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -374,7 +374,7 @@
     "description": "Cuerpo del diálogo de borrado de chat. {title} = título del chat.",
     "placeholders": {
       "title": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -383,7 +383,7 @@
     "description": "Aviso al borrar una conversación generada por cron.",
     "placeholders": {
       "title": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -392,7 +392,7 @@
   "@cronDeleteChoiceBody": {
     "placeholders": {
       "title": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -430,7 +430,7 @@
   "@chaCantSendApproval": {
     "placeholders": {
       "err": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -443,7 +443,7 @@
   "@chaUploadError": {
     "placeholders": {
       "err": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -451,7 +451,7 @@
   "@chaNoMatch": {
     "placeholders": {
       "arg": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -460,10 +460,10 @@
   "@chaModelChangeBody": {
     "placeholders": {
       "model": {
-        "type": "String"
+        "type": "Object"
       },
       "provider": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -473,7 +473,7 @@
   "@chaModelActive": {
     "placeholders": {
       "model": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -481,7 +481,7 @@
   "@chaModelActiveViaDashboard": {
     "placeholders": {
       "model": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -489,7 +489,7 @@
   "@chaModelChangeFailed": {
     "placeholders": {
       "err": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -525,10 +525,10 @@
   "@chaModelSheetSubtitleActive": {
     "placeholders": {
       "model": {
-        "type": "String"
+        "type": "Object"
       },
       "provider": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -536,7 +536,7 @@
   "@chaModelSheetSubtitleActiveOnly": {
     "placeholders": {
       "model": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -687,7 +687,7 @@
   "@chaModeApplied": {
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -695,7 +695,7 @@
   "@chaDictationError": {
     "placeholders": {
       "err": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -713,7 +713,7 @@
   "@chaVoiceError": {
     "placeholders": {
       "err": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -722,7 +722,7 @@
   "@chaVoiceActiveElsewhere": {
     "placeholders": {
       "title": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -756,7 +756,7 @@
   "@chaVoiceToolCallLabel": {
     "placeholders": {
       "tool": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -776,7 +776,7 @@
   "@chaVoiceWaitingHintTool": {
     "placeholders": {
       "tool": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -789,7 +789,7 @@
   "@chaVoiceFooter": {
     "placeholders": {
       "model": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -845,7 +845,7 @@
   "@chaModeSheetEffective": {
     "placeholders": {
       "mode": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -985,7 +985,7 @@
   "@kanbanDeleteTaskConfirm": {
     "placeholders": {
       "title": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -993,7 +993,7 @@
   "@kanbanMoveTo": {
     "placeholders": {
       "col": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1007,7 +1007,7 @@
   "@gwActiveInstance": {
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1015,7 +1015,7 @@
   "@gwDefaultInstance": {
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1026,7 +1026,7 @@
   "@gwDeleteInstanceBody": {
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1046,7 +1046,7 @@
   "@sshOpenTerminalOf": {
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1083,7 +1083,7 @@
   "@ollDownloadFailed": {
     "placeholders": {
       "name": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1091,7 +1091,7 @@
   "@ollDownloadCancelled": {
     "placeholders": {
       "tag": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1100,7 +1100,7 @@
   "@ollDeleteModelBody": {
     "placeholders": {
       "tag": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1109,7 +1109,7 @@
   "@ollModelDeleted": {
     "placeholders": {
       "tag": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1117,7 +1117,7 @@
   "@ollDeleteFailed": {
     "placeholders": {
       "tag": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1125,7 +1125,7 @@
   "@ollModelPinned": {
     "placeholders": {
       "tag": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1134,7 +1134,7 @@
   "@ollPinFailedErr": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1177,7 +1177,7 @@
   "@ollRam": {
     "placeholders": {
       "gb": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1201,7 +1201,7 @@
   "@soulProfileLoaded": {
     "placeholders": {
       "profile": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1209,7 +1209,7 @@
   "@soulLoadFailed": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1217,7 +1217,7 @@
   "@soulApplyProfileTitle": {
     "placeholders": {
       "profile": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1225,7 +1225,7 @@
   "@soulApplyProfileBody": {
     "placeholders": {
       "profile": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1234,7 +1234,7 @@
   "@soulApplyGateTitle": {
     "placeholders": {
       "profile": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1242,7 +1242,7 @@
   "@soulProfileApplied": {
     "placeholders": {
       "profile": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1250,7 +1250,7 @@
   "@soulApplyFailed": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1260,7 +1260,7 @@
   "@soulApplyTemplateTitle": {
     "placeholders": {
       "template": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1275,7 +1275,7 @@
   "@soulProfileLabelFmt": {
     "placeholders": {
       "profile": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1296,7 +1296,7 @@
   "@actLogEmpty": {
     "placeholders": {
       "file": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1305,7 +1305,7 @@
   "@actNoMatchesFor": {
     "placeholders": {
       "filter": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1313,7 +1313,7 @@
   "@actForLevel": {
     "placeholders": {
       "level": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1323,7 +1323,7 @@
   "@bridgeAutoUrl": {
     "placeholders": {
       "url": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1338,7 +1338,7 @@
   "@provModelActive": {
     "placeholders": {
       "modelId": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1346,7 +1346,7 @@
   "@provChangeError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1361,7 +1361,7 @@
   "@memBackupSaveError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1402,7 +1402,7 @@
   "@lmExpRam": {
     "placeholders": {
       "gb": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1419,7 +1419,7 @@
   "@bfeConfigureBody": {
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1603,7 +1603,7 @@
   "@ssh2AccessBody": {
     "placeholders": {
       "host": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1620,10 +1620,10 @@
   "@sftpListError": {
     "placeholders": {
       "path": {
-        "type": "String"
+        "type": "Object"
       },
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1631,7 +1631,7 @@
   "@sftpDownloading": {
     "placeholders": {
       "file": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1641,7 +1641,7 @@
   "@sftpDeleteBody": {
     "placeholders": {
       "file": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1649,7 +1649,7 @@
   "@sftpDeleted": {
     "placeholders": {
       "file": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1657,7 +1657,7 @@
   "@sftpDeleteError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1665,7 +1665,7 @@
   "@sftpOpenOf": {
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1693,7 +1693,7 @@
   "@sshcConnOk": {
     "placeholders": {
       "text": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1888,7 +1888,7 @@
   "@setClearError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1907,7 +1907,7 @@
   "@setUpdateError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1919,7 +1919,7 @@
   "@setRestartError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1932,7 +1932,7 @@
   "@setMigrateError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1956,10 +1956,10 @@
   "@setUpdateBody": {
     "placeholders": {
       "behind": {
-        "type": "String"
+        "type": "Object"
       },
       "method": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1968,10 +1968,10 @@
   "@setMigrateBody": {
     "placeholders": {
       "cur": {
-        "type": "String"
+        "type": "Object"
       },
       "latest": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -1979,10 +1979,10 @@
   "@setUpdateSchemaShort": {
     "placeholders": {
       "from": {
-        "type": "String"
+        "type": "Object"
       },
       "to": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -2003,7 +2003,7 @@
   "@setConvosCleared": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -2026,7 +2026,7 @@
   "@setLocalConvosCleared": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -2034,7 +2034,7 @@
   "@setDraftsCleared": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -2042,7 +2042,7 @@
   "@setPendingTurnsCleared": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -2050,7 +2050,7 @@
   "@setLocalClearFailures": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -2081,7 +2081,7 @@
   "@setClientVersion": {
     "placeholders": {
       "version": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -2136,7 +2136,7 @@
   "@runsLaunchError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -2161,7 +2161,7 @@
   "@runsAutoApproved": {
     "placeholders": {
       "reason": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -2169,7 +2169,7 @@
   "@runsAutoApproveError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -2181,7 +2181,7 @@
   "@runsResolveError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -2193,7 +2193,7 @@
   "@runsStopError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -2205,7 +2205,7 @@
   "@runsError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -3165,7 +3165,7 @@
   "@crnCleanupBody": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -3174,7 +3174,7 @@
   "@crnCleanupDone": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -3182,10 +3182,10 @@
   "@crnCleanupPartial": {
     "placeholders": {
       "deleted": {
-        "type": "int"
+        "type": "Object"
       },
       "preserved": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -4478,7 +4478,7 @@
   "@lisIncompatCpu": {
     "placeholders": {
       "abis": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -4486,7 +4486,7 @@
   "@lisBlockDisk": {
     "placeholders": {
       "freeGb": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -4495,7 +4495,7 @@
   "@lisWarningRam": {
     "placeholders": {
       "ramGb": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -4510,7 +4510,7 @@
   "@lisErrFailed": {
     "placeholders": {
       "code": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -4520,7 +4520,7 @@
   "@lisStallWaiting": {
     "placeholders": {
       "secs": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -4562,7 +4562,7 @@
   "@lisStatusFailedCode": {
     "placeholders": {
       "code": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -4571,10 +4571,10 @@
   "@lisStatusStage": {
     "placeholders": {
       "current": {
-        "type": "int"
+        "type": "Object"
       },
       "total": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -4962,10 +4962,10 @@
   "@bridgeOutdated": {
     "placeholders": {
       "running": {
-        "type": "String"
+        "type": "Object"
       },
       "expected": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -4980,10 +4980,10 @@
   "@bridgeUpdateAvailable": {
     "placeholders": {
       "from": {
-        "type": "String"
+        "type": "Object"
       },
       "to": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5037,7 +5037,7 @@
   "@petDeleteConfirm": {
     "placeholders": {
       "name": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5045,7 +5045,7 @@
   "@petSizeSemantics": {
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5054,7 +5054,7 @@
   "@petAnimationSemantics": {
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5077,7 +5077,7 @@
   "@petdexByAuthor": {
     "placeholders": {
       "author": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5086,7 +5086,7 @@
   "@petdexInstalled": {
     "placeholders": {
       "name": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5094,7 +5094,7 @@
   "@petdexInstallFailed": {
     "placeholders": {
       "msg": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5102,7 +5102,7 @@
   "@petdexDownloadFailed": {
     "placeholders": {
       "msg": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5113,7 +5113,7 @@
   "@petdexDetailNote": {
     "placeholders": {
       "author": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5156,7 +5156,7 @@
   "@extActiveModel": {
     "placeholders": {
       "model": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5239,7 +5239,7 @@
   "@chaRestartGatewayFail": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5248,7 +5248,7 @@
     "description": "Snackbar al adjuntar un archivo de texto demasiado grande. {kb} = límite en KB.",
     "placeholders": {
       "kb": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -5256,7 +5256,7 @@
   "@chaImageTooBig": {
     "placeholders": {
       "mb": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -5265,7 +5265,7 @@
     "description": "Snackbar al adjuntar un documento demasiado grande. {limit} = límite ya formateado (p.ej. \"8 MB\" o \"256 KB\").",
     "placeholders": {
       "limit": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5280,7 +5280,7 @@
     "description": "Cabecera del panel de mensajes en cola mientras el agente responde.",
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -5302,7 +5302,7 @@
     "description": "Label de accesibilidad de la tarjeta \"tocar para cargar\" de imágenes remotas.",
     "placeholders": {
       "domain": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5317,7 +5317,7 @@
   "@setHermesUpdatedTo": {
     "placeholders": {
       "version": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5327,7 +5327,7 @@
     "description": "Contador de avisos del panel de diagnóstico de Ajustes.",
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -5789,13 +5789,13 @@
     "description": "Label de accesibilidad del encabezado de paso del setup asistido.",
     "placeholders": {
       "step": {
-        "type": "int"
+        "type": "Object"
       },
       "total": {
-        "type": "int"
+        "type": "Object"
       },
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5816,7 +5816,7 @@
   "@setupBulletPort": {
     "placeholders": {
       "port": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -5836,7 +5836,7 @@
   "@ieDashConfigured": {
     "placeholders": {
       "user": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5844,7 +5844,7 @@
   "@ieDashConfigError": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5892,7 +5892,7 @@
   "@petImportedSnack": {
     "placeholders": {
       "name": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5900,7 +5900,7 @@
   "@petImportFailed": {
     "placeholders": {
       "error": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5909,7 +5909,7 @@
   "@petPresenceSemantics": {
     "placeholders": {
       "level": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5917,7 +5917,7 @@
   "@petExtraAnim": {
     "placeholders": {
       "n": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -5939,7 +5939,7 @@
     "description": "Contador de resultados de la galería Petdex.",
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -5947,7 +5947,7 @@
   "@mdlModelHiddenSnack": {
     "placeholders": {
       "model": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5958,7 +5958,7 @@
   "@mdlHiddenCount": {
     "placeholders": {
       "count": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -5974,7 +5974,7 @@
   "@mdlProviderVisibleAgain": {
     "placeholders": {
       "name": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5982,7 +5982,7 @@
   "@mdlProviderHidden": {
     "placeholders": {
       "name": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -5994,10 +5994,10 @@
   "@lisOllamaPullingModel": {
     "placeholders": {
       "name": {
-        "type": "String"
+        "type": "Object"
       },
       "gb": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -6011,10 +6011,10 @@
   "@lisOllamaStepOf": {
     "placeholders": {
       "n": {
-        "type": "int"
+        "type": "Object"
       },
       "total": {
-        "type": "int"
+        "type": "Object"
       }
     }
   },
@@ -6022,7 +6022,7 @@
   "@lisOllamaDownloadingName": {
     "placeholders": {
       "name": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
@@ -6040,7 +6040,7 @@
   "@homeInstanceDownBody": {
     "placeholders": {
       "label": {
-        "type": "String"
+        "type": "Object"
       }
     }
   },
