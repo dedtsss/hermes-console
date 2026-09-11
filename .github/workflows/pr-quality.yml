@@ -17,8 +17,7 @@ concurrency:
 jobs:
   quality:
     name: Analyze & Test
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
