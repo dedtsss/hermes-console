@@ -1,0 +1,75 @@
+name: One-off PR #2 plural type repair
+
+on:
+  push:
+    branches:
+      - manual/issue-1-russian-localization
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: manual/issue-1-russian-localization
+          fetch-depth: 0
+
+      - name: Normalize plural placeholder types
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          en_path = Path('lib/l10n/app_en.arb')
+          locale_paths = [Path('lib/l10n/app_ru.arb'), Path('lib/l10n/app_es.arb')]
+          en = json.loads(en_path.read_text(encoding='utf-8'))
+          plural_re = re.compile(r'\{([A-Za-z][A-Za-z0-9_]*)\s*,\s*plural\s*,')
+
+          for path in locale_paths:
+              data = json.loads(path.read_text(encoding='utf-8'))
+              for key, message in en.items():
+                  if key.startswith('@') or not isinstance(message, str):
+                      continue
+                  plural_names = set(plural_re.findall(message))
+                  if not plural_names:
+                      continue
+                  en_meta = en.get('@' + key, {})
+                  en_ph = en_meta.get('placeholders', {}) if isinstance(en_meta, dict) else {}
+                  loc_meta = data.setdefault('@' + key, {})
+                  loc_ph = loc_meta.setdefault('placeholders', {})
+                  for name in plural_names:
+                      en_spec = en_ph.get(name, {}) if isinstance(en_ph, dict) else {}
+                      expected = en_spec.get('type') if isinstance(en_spec, dict) else None
+                      if expected not in ('int', 'num'):
+                          expected = 'num'
+                      loc_spec = loc_ph.setdefault(name, {})
+                      loc_spec['type'] = expected
+              path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+          for path in locale_paths:
+              data = json.loads(path.read_text(encoding='utf-8'))
+              for key, message in data.items():
+                  if key.startswith('@') or not isinstance(message, str):
+                      continue
+                  for name in plural_re.findall(message):
+                      spec = data.get('@' + key, {}).get('placeholders', {}).get(name, {})
+                      if spec.get('type') not in ('int', 'num'):
+                          raise SystemExit(f'{path}: {key}.{name} is not numeric: {spec}')
+          PY
+
+      - name: Commit repair and remove one-off workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/fix-pr2-plural-types.yml
+          git add lib/l10n/app_ru.arb lib/l10n/app_es.arb
+          git diff --cached --check
+          git commit -m 'fix: restore numeric plural placeholder types'
+          git push origin HEAD:manual/issue-1-russian-localization
