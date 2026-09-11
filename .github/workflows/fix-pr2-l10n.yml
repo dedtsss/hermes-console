@@ -1,0 +1,112 @@
+name: One-off PR #2 localization repair
+
+on:
+  push:
+    branches:
+      - manual/issue-1-russian-localization
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: manual/issue-1-russian-localization
+          fetch-depth: 0
+
+      - name: Repair ARB catalogs
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          EN = Path('lib/l10n/app_en.arb')
+          RU = Path('lib/l10n/app_ru.arb')
+          ES = Path('lib/l10n/app_es.arb')
+
+          en = json.loads(EN.read_text(encoding='utf-8'))
+          ru = json.loads(RU.read_text(encoding='utf-8'))
+          es = json.loads(ES.read_text(encoding='utf-8'))
+
+          fixes = {
+              'chaBackgroundAgentsFinished': '{count, plural, =1{Завершён 1 агент} other{Завершено агентов: {count}}}',
+              'chaBackgroundAgentsFailed': '{count, plural, =1{Ошибка у 1 агента} other{Ошибки у агентов: {count}}}',
+              'cevStepCount': '{count, plural, =1{1 шаг} other{Шагов: {count}}}',
+              'cevTraceRunning': 'Выполняются инструменты · {count, plural, =1{завершено: 1} other{завершено: {count}}}',
+              'cevTraceCompletedActions': 'Завершено · {count, plural, =1{1 действие} other{действий: {count}}}',
+              'setConvosCleared': '{count, plural, one{Удалён 1 диалог} other{Удалено диалогов: {count}}}',
+              'setLocalConvosCleared': '{count, plural, one{Удалён 1 локальный диалог} other{Удалено локальных диалогов: {count}}}',
+              'setDraftsCleared': '{count, plural, one{Удалён 1 локальный черновик} other{Удалено локальных черновиков: {count}}}',
+              'setPendingTurnsCleared': '{count, plural, one{Удалено 1 ожидающее сообщение} other{Удалено ожидающих сообщений: {count}}}',
+              'setLocalClearFailures': '{count, plural, one{Не удалось очистить 1 локальное хранилище} other{Не удалось очистить локальных хранилищ: {count}}}',
+              'setActiveSessionsRunning': '{count, plural, one{1 недавний сеанс} other{Недавних сеансов: {count}}}',
+              'chaQueuedCount': '{count, plural, one{В ОЧЕРЕДИ · 1 СООБЩЕНИЕ} other{В ОЧЕРЕДИ · СООБЩЕНИЙ: {count}}}',
+              'setWarningsCount': '{count, plural, one{1 предупреждение} other{Предупреждений: {count}}}',
+              'petdexResultCount': '{count, plural, one{1 питомец} other{Питомцев: {count}}}',
+              'mdlHiddenCount': '{count, plural, one{Скрыт 1} other{Скрыто: {count}}}',
+              'artifactCount': '{count, plural, =1{1 элемент} other{Элементов: {count}}}',
+              'generatedArtifactVersionCount': '{count, plural, =1{1 версия} other{Версий: {count}}}',
+              'extensionsCenterToolCount': '{count, plural, one{1 инструмент} other{Инструментов: {count}}}',
+              'agentCenterSubagentCount': '{count, plural, one{1 субагент} other{Субагентов: {count}}}',
+              'projectsCenterProjectSemantics': '{label}, {count, plural, one{1 диалог} other{диалогов: {count}}}',
+              'projectsCenterConversationCount': '{count, plural, one{1 диалог} other{Диалогов: {count}}}',
+              'projectsCenterRepositoryCount': '{count, plural, one{1 репозиторий} other{Репозиториев: {count}}}',
+              'extensionsCenterMcpCatalogSubtitle': '{count, plural, =0{Нет доступных записей} one{Доступен 1 сервер} other{Доступно серверов: {count}}}',
+              'extensionsCenterMcpTestSuccess': '{count, plural, =0{Подключение успешно} one{Подключение успешно · 1 инструмент} other{Подключение успешно · инструментов: {count}}}',
+              'extensionsCenterMcpToolCount': '{count, plural, one{1 инструмент} other{Инструментов: {count}}}',
+          }
+
+          missing = [key for key in fixes if key not in ru]
+          if missing:
+              raise SystemExit(f'Missing RU keys: {missing}')
+          ru.update(fixes)
+
+          placeholder_re = re.compile(r'\{([A-Za-z][A-Za-z0-9_]*)\s*(?:\}|,)')
+          for locale in (ru, es):
+              for key, message in en.items():
+                  if key.startswith('@') or not isinstance(message, str):
+                      continue
+                  names = set(placeholder_re.findall(message))
+                  if not names:
+                      continue
+                  template_meta = en.get('@' + key, {})
+                  template_placeholders = template_meta.get('placeholders', {}) if isinstance(template_meta, dict) else {}
+                  locale_meta = locale.get('@' + key)
+                  if not isinstance(locale_meta, dict):
+                      continue
+                  locale_placeholders = locale_meta.get('placeholders')
+                  if not isinstance(locale_placeholders, dict):
+                      continue
+                  for name in names:
+                      spec = locale_placeholders.get(name)
+                      if not isinstance(spec, dict) or 'type' not in spec:
+                          continue
+                      template_spec = template_placeholders.get(name, {})
+                      expected_type = template_spec.get('type', 'Object') if isinstance(template_spec, dict) else 'Object'
+                      spec['type'] = expected_type
+
+          for path, data in ((RU, ru), (ES, es)):
+              path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+          if '@@@' in RU.read_text(encoding='utf-8'):
+              raise SystemExit('Malformed ICU marker remains in app_ru.arb')
+          if es['@homeStatusChecking']['placeholders']['label']['type'] != 'Object':
+              raise SystemExit('homeStatusChecking.label type was not normalized to Object')
+          PY
+
+      - name: Commit repair and remove one-off workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/fix-pr2-l10n.yml
+          git add lib/l10n/app_ru.arb lib/l10n/app_es.arb
+          git diff --cached --check
+          git commit -m 'fix: repair malformed Russian ICU messages'
+          git push origin HEAD:manual/issue-1-russian-localization
