@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../services/sftp_transfer_service.dart';
 import '../theme/app_theme.dart';
 
@@ -32,6 +33,7 @@ class SshTransferBar extends StatelessWidget {
   }
 
   Widget _row(BuildContext context, HermesThemeColors colors, SftpTransfer t) {
+    final s = Strings.of(context);
     final ok = t.status == TransferStatus.done;
     final err = t.status == TransferStatus.error;
     final icon = t.direction == TransferDirection.download
@@ -75,9 +77,9 @@ class SshTransferBar extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text(
                       err
-                          ? 'error'
+                          ? s.sftpTransferFailed
                           : ok
-                              ? 'listo'
+                              ? s.kanbanColDone
                               : (pct == null ? '…' : '$pct%'),
                       style: TextStyle(fontSize: 11, color: tone),
                     ),
@@ -104,7 +106,7 @@ class SshTransferBar extends StatelessWidget {
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              tooltip: 'Descartar',
+              tooltip: s.sftpDiscard,
               onPressed: service.clearFinished,
             ),
         ],

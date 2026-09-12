@@ -25,10 +25,9 @@ android {
    }
 
    defaultConfig {
-       // Identidad pública en Play (inmutable tras la primera publicación).
-       // Propia de XPeta Lab para no colisionar con el package de Nous/Hermes.
-       // El namespace interno no cambia: las clases Kotlin siguen donde están.
-       applicationId = "dev.xpetalab.hermesconsole"
+       // Fork identity: it coexists with the official Hermes Console. The
+       // Kotlin namespace remains an implementation detail.
+       applicationId = "io.github.dedtsss.hermesconsole"
        minSdk = 24
        targetSdk = 36
        versionCode = flutter.versionCode
@@ -53,7 +52,8 @@ android {
    // Ambas comparten applicationId de producción a propósito: así el build `full`
    // (el de uso diario) actualiza la app instalada sin perder datos. No conviven
    // a la vez en un mismo dispositivo, lo cual es aceptable (full = directo,
-   // play = tienda). El gating de UI/permisos se hace por manifest (src/play) y
+   // play = tienda). Both remain separate from the official XPeta package. El
+   // gating de UI/permisos se hace por manifest (src/play) y
    // por la bandera Dart kLocalAgentEnabled (--dart-define=HERMES_FLAVOR).
    flavorDimensions += "distribution"
    productFlavors {

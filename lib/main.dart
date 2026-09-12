@@ -263,9 +263,10 @@ class AppLocales {
   static const String defaultId = 'system';
 
   static const List<AppLocaleOption> all = [
-    AppLocaleOption('system', 'Sistema', null),
+    AppLocaleOption('system', 'System language', null),
     AppLocaleOption('es', 'Español', Locale('es')),
     AppLocaleOption('en', 'English', Locale('en')),
+    AppLocaleOption('ru', 'Русский', Locale('ru')),
   ];
 
   static AppLocaleOption byId(String? id) =>
@@ -2014,7 +2015,7 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
           builder: (context, font, _) => ValueListenableBuilder<String>(
             valueListenable: localeId,
             builder: (context, locId, _) => MaterialApp(
-              title: 'Hermes Console',
+              title: 'Hermes Console RU',
               debugShowCheckedModeBanner: false,
               // Scroll con inercia (coasting) en toda la app: un flick sigue
               // rodando y frena solo, en vez del frenazo seco de Material.
@@ -2022,13 +2023,12 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
               locale: AppLocales.byId(locId).locale,
               localizationsDelegates: Strings.localizationsDelegates,
               supportedLocales: Strings.supportedLocales,
-              // El único idioma completo además del inglés es el español: si el
-              // sistema (o la elección manual) es español lo usamos; en cualquier
-              // otro caso caemos a inglés, nunca a un español a medias. Cubre los
-              // tres casos: elección manual 'es'/'en' y modo "Sistema" (locale
-              // nulo → llega el idioma del dispositivo).
+              // A system Russian locale must resolve to the complete Russian
+              // catalog. Unsupported locales deliberately use English rather
+              // than inheriting a partial translation.
               localeResolutionCallback: (locale, supported) {
                 if (locale?.languageCode == 'es') return const Locale('es');
+                if (locale?.languageCode == 'ru') return const Locale('ru');
                 return const Locale('en');
               },
               theme: AppFonts.applyToTheme(activeTheme, AppFonts.byId(font)),

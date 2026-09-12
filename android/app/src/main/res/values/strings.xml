@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="app_name">Hermes Console RU</string>
     <string name="voice_notification_title">Hermes Voice</string>
     <string name="voice_notification_active">Listening</string>
     <string name="voice_notification_paused">Paused</string>

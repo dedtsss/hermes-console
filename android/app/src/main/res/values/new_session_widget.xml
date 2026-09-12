@@ -46,7 +46,7 @@
     <string name="hermes_widget_now">now</string>
     <string name="hermes_widget_minutes">%1$d min</string>
     <string name="hermes_widget_hours">%1$d h</string>
-    <string name="new_session_target_package" translatable="false">dev.xpetalab.hermesconsole</string>
+    <string name="new_session_target_package" translatable="false">io.github.dedtsss.hermesconsole</string>
 
     <color name="new_session_widget_background">#F8F6F1</color>
     <color name="new_session_widget_on_background">#211F1A</color>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Hermes Console RU</string>
+    <string name="voice_notification_title">Голос Hermes</string>
+    <string name="voice_notification_active">Прослушивание</string>
+    <string name="voice_notification_paused">Приостановлено</string>
+    <string name="voice_notification_mic_active">Микрофон включён</string>
+    <string name="voice_notification_mic_paused">Микрофон приостановлен</string>
+    <string name="voice_notification_orb">Состояние голоса Hermes</string>
+    <string name="voice_notification_duration">Длительность разговора</string>
+    <string name="voice_notification_open_hint">Нажмите, чтобы открыть Hermes</string>
+    <string name="voice_notification_primary_action">Приостановить</string>
+    <string name="voice_notification_end_action">Завершить разговор</string>
+    <string name="external_data_sync_channel">Безопасные передачи</string>
+    <string name="external_data_sync_active">Активна безопасная передача или терминал</string>
+    <string name="external_data_sync_stop">Остановить</string>
+</resources>
