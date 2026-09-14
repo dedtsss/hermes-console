@@ -4846,12 +4846,12 @@
   "petImportTitle": "Импортировать питомца",
   "petImportSubtitle": "Из локального .zip (формат Phase A или загрузка из Petdex)",
   "petdexClearFilters": "Очистить фильтры",
-  "petdexResultCount": "{count, plural, =1{1 питомец} other{{count} питомцев}}",
+  "petdexResultCount": "{count, plural, one{1 питомец} other{{count} питомцев}}",
   "mdlModelHiddenSnack": "Модель {model} скрыта из списка",
   "mdlUndo": "Отменить",
   "mdlShowHiddenTip": "Показать скрытые",
   "mdlHideHiddenTip": "Скрыть скрытые",
-  "mdlHiddenCount": "{count, plural, =1{1 скрытая} other{{count} скрытых}}",
+  "mdlHiddenCount": "{count, plural, one{1 скрытая} other{{count} скрытых}}",
   "mdlCatalogLoadFailed": "Не удалось загрузить каталог провайдеров",
   "mdlCatalogFromCache": "Показан последний сохранённый каталог — нет подключения к Dashboard",
   "mdlCatalogNoDashboard": "Dashboard не ответил; провайдеры, ожидающие настройки, не показаны",
@@ -5330,7 +5330,7 @@
   },
   "extensionsCenterActive": "активен",
   "extensionsCenterInactive": "неактивен",
-  "extensionsCenterToolCount": "{count, plural, =1{1 инструмент} other{{count} инструментов}}",
+  "extensionsCenterToolCount": "{count, plural, one{1 инструмент} other{{count} инструментов}}",
   "@extensionsCenterToolCount": {
     "placeholders": {
       "count": {
@@ -5427,7 +5427,7 @@
   "agentCenterStopTooltip": "Остановить этот процесс",
   "agentCenterHistorySection": "Сохранённые делегирования",
   "agentCenterNoHistory": "Hermes ещё не сохранил делегирований подагентам.",
-  "agentCenterSubagentCount": "{count, plural, =1{1 подагент} other{{count} подагентов}}",
+  "agentCenterSubagentCount": "{count, plural, one{1 подагент} other{{count} подагентов}}",
   "@agentCenterSubagentCount": {
     "placeholders": {
       "count": {
@@ -5477,7 +5477,7 @@
     }
   },
   "projectsCenterUnnamedProject": "Проект без названия",
-  "projectsCenterProjectSemantics": "{label}, {count, plural, =1{1 разговор} other{{count} разговоров}}",
+  "projectsCenterProjectSemantics": "{label}, {count, plural, one{1 разговор} other{{count} разговоров}}",
   "@projectsCenterProjectSemantics": {
     "placeholders": {
       "label": {
@@ -5488,7 +5488,7 @@
       }
     }
   },
-  "projectsCenterConversationCount": "{count, plural, =1{1 разговор} other{{count} разговоров}}",
+  "projectsCenterConversationCount": "{count, plural, one{1 разговор} other{{count} разговоров}}",
   "@projectsCenterConversationCount": {
     "placeholders": {
       "count": {
@@ -5496,7 +5496,7 @@
       }
     }
   },
-  "projectsCenterRepositoryCount": "{count, plural, =1{1 репозиторий} other{{count} репозиториев}}",
+  "projectsCenterRepositoryCount": "{count, plural, one{1 репозиторий} other{{count} репозиториев}}",
   "@projectsCenterRepositoryCount": {
     "placeholders": {
       "count": {
@@ -5586,7 +5586,7 @@
       }
     }
   },
-  "extensionsCenterMcpToolCount": "{count, plural, =1{1 инструмент} other{{count} инструментов}}",
+  "extensionsCenterMcpToolCount": "{count, plural, one{1 инструмент} other{{count} инструментов}}",
   "@extensionsCenterMcpToolCount": {
     "placeholders": {
       "count": {
