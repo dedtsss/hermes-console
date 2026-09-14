@@ -485,7 +485,7 @@
   "chaSelectText": "Выбрать текст",
   "chaBackgroundWorkTitle": "Работа в фоне",
   "chaBackgroundWorkFinished": "Завершено",
-  "chaBackgroundAgentsFinished": "{count, plural, =1{Завершил работу 1 агент} one{Завершил работу 1 агент} few{Завершили работу {count} агента} many{Завершили работу {count} агентов} other{Завершили работу {count} агентов}}",
+  "chaBackgroundAgentsFinished": "{count, plural, =1{Завершил работу 1 агент} other{Завершили работу {count} агентов}}",
   "@chaBackgroundAgentsFinished": {
     "placeholders": {
       "count": {
@@ -493,7 +493,7 @@
       }
     }
   },
-  "chaBackgroundAgentsFailed": "{count, plural, =1{Не удалось выполнить 1 задачу} one{Не удалось выполнить {count} задачу} few{Не удалось выполнить {count} задачи} many{Не удалось выполнить {count} задач} other{Не удалось выполнить {count} задач}}",
+  "chaBackgroundAgentsFailed": "{count, plural, =1{Не удалось выполнить 1 задачу} other{Не удалось выполнить {count} задач}}",
   "@chaBackgroundAgentsFailed": {
     "placeholders": {
       "count": {
@@ -971,7 +971,7 @@
   "cevHide": "скрыть",
   "cevShowFull": "показать команду полностью",
   "cevActivity": "активность",
-  "cevStepCount": "{count, plural, =1{1 шаг} one{{count} шаг} few{{count} шага} many{{count} шагов} other{{count} шагов}}",
+  "cevStepCount": "{count, plural, =1{1 шаг} other{{count} шагов}}",
   "@cevStepCount": {
     "placeholders": {
       "count": {
@@ -1007,7 +1007,7 @@
   "cevOpenInRuns": "Открыть в разделе «Запуски»",
   "cevResolveInRuns": "Подтверждения обрабатываются в разделе «Активность → Запуски».",
   "cevResolvedRecord": "Запись о подтверждении, которое уже обработано.",
-  "cevTraceRunning": "Выполняются инструменты · {count, plural, =1{завершено 1 действие} one{завершено {count} действие} few{завершено {count} действия} many{завершено {count} действий} other{завершено {count} действий}}",
+  "cevTraceRunning": "Выполняются инструменты · {count, plural, =1{завершено 1 действие} other{завершено {count} действий}}",
   "@cevTraceRunning": {
     "placeholders": {
       "count": {
@@ -1018,7 +1018,7 @@
   "cevTraceFailed": "Ошибка · открыть подробности",
   "cevTraceRecovered": "Завершено · повторено (открыть подробности)",
   "cevTraceCompleted": "Завершено",
-  "cevTraceCompletedActions": "Завершено · {count, plural, =1{1 действие} one{{count} действие} few{{count} действия} many{{count} действий} other{{count} действий}}",
+  "cevTraceCompletedActions": "Завершено · {count, plural, =1{1 действие} other{{count} действий}}",
   "@cevTraceCompletedActions": {
     "placeholders": {
       "count": {
@@ -1319,16 +1319,16 @@
   "setConfigureDashboardAccess": "Настроить доступ к Dashboard",
   "setReconnectsPlatforms": "Переподключает платформы и применяет изменения без обновления.",
   "setThemesAvailable": " · доступно: {total}",
-  "setConvosCleared": "{count, plural, =1{Удалён 1 разговор} one{Удалён {count} разговор} few{Удалено {count} разговора} many{Удалено {count} разговоров} other{Удалено {count} разговоров}}",
+  "setConvosCleared": "{count, plural, one{Удалён 1 разговор} other{Удалено {count} разговоров}}",
   "setConvosClearedPartial": "Удалено: {deleted} · сервер не удалил: {rejected} · ошибки: {failed}",
   "setRemoteClearUnavailable": "Не удалось получить список разговоров на сервере",
-  "setLocalConvosCleared": "{count, plural, =1{Удалён 1 локальный разговор} one{Удалён {count} локальный разговор} few{Удалено {count} локальных разговора} many{Удалено {count} локальных разговоров} other{Удалено {count} локальных разговоров}}",
-  "setDraftsCleared": "{count, plural, =1{Удалён 1 локальный черновик} one{Удалён {count} локальный черновик} few{Удалено {count} локальных черновика} many{Удалено {count} локальных черновиков} other{Удалено {count} локальных черновиков}}",
-  "setPendingTurnsCleared": "{count, plural, =1{Удалён 1 ожидающий запрос} one{Удалён {count} ожидающий запрос} few{Удалено {count} ожидающих запроса} many{Удалено {count} ожидающих запросов} other{Удалено {count} ожидающих запросов}}",
-  "setLocalClearFailures": "{count, plural, =1{Не удалось очистить 1 локальное хранилище} one{Не удалось очистить {count} локальное хранилище} few{Не удалось очистить {count} локальных хранилища} many{Не удалось очистить {count} локальных хранилищ} other{Не удалось очистить {count} локальных хранилищ}}",
+  "setLocalConvosCleared": "{count, plural, one{Удалён 1 локальный разговор} other{Удалено {count} локальных разговоров}}",
+  "setDraftsCleared": "{count, plural, one{Удалён 1 локальный черновик} other{Удалено {count} локальных черновиков}}",
+  "setPendingTurnsCleared": "{count, plural, one{Удалён 1 ожидающий запрос} other{Удалено {count} ожидающих запросов}}",
+  "setLocalClearFailures": "{count, plural, one{Не удалось очистить 1 локальное хранилище} other{Не удалось очистить {count} локальных хранилищ}}",
   "setActiveSessions": "Hermes сейчас",
   "setActiveSessionsIdle": "неактивно",
-  "setActiveSessionsRunning": "{count, plural, =1{1 недавний сеанс} one{{count} недавний сеанс} few{{count} недавних сеанса} many{{count} недавних сеансов} other{{count} недавних сеансов}}",
+  "setActiveSessionsRunning": "{count, plural, one{{count} недавний сеанс} other{{count} недавних сеансов}}",
   "@setActiveSessionsRunning": {
     "placeholders": {
       "count": {
@@ -4846,12 +4846,12 @@
   "petImportTitle": "Импортировать питомца",
   "petImportSubtitle": "Из локального .zip (формат Phase A или загрузка из Petdex)",
   "petdexClearFilters": "Очистить фильтры",
-  "petdexResultCount": "{count, plural, =1{1 питомец} one{{count} питомец} few{{count} питомца} many{{count} питомцев} other{{count} питомцев}}",
+  "petdexResultCount": "{count, plural, =1{1 питомец} other{{count} питомцев}}",
   "mdlModelHiddenSnack": "Модель {model} скрыта из списка",
   "mdlUndo": "Отменить",
   "mdlShowHiddenTip": "Показать скрытые",
   "mdlHideHiddenTip": "Скрыть скрытые",
-  "mdlHiddenCount": "{count, plural, =1{1 скрытая} one{{count} скрытая} few{{count} скрытые} many{{count} скрытых} other{{count} скрытых}}",
+  "mdlHiddenCount": "{count, plural, =1{1 скрытая} other{{count} скрытых}}",
   "mdlCatalogLoadFailed": "Не удалось загрузить каталог провайдеров",
   "mdlCatalogFromCache": "Показан последний сохранённый каталог — нет подключения к Dashboard",
   "mdlCatalogNoDashboard": "Dashboard не ответил; провайдеры, ожидающие настройки, не показаны",
@@ -5076,7 +5076,7 @@
   "subagentOpenFailed": "Не удалось открыть разговор подагента.",
   "chaArtifactsAction": "Артефакты",
   "artifactTitle": "Артефакты сеанса",
-  "artifactCount": "{count, plural, =1{1 элемент} one{{count} элемент} few{{count} элемента} many{{count} элементов} other{{count} элементов}}",
+  "artifactCount": "{count, plural, =1{1 элемент} other{{count} элементов}}",
   "@artifactCount": {
     "placeholders": {
       "count": {
@@ -5129,7 +5129,7 @@
   "generatedArtifactKindCode": "Код",
   "generatedArtifactKindHtml": "Исходный код HTML",
   "generatedArtifactKindSvg": "Исходный код SVG",
-  "generatedArtifactVersionCount": "{count, plural, =1{1 версия} one{{count} версия} few{{count} версии} many{{count} версий} other{{count} версий}}",
+  "generatedArtifactVersionCount": "{count, plural, =1{1 версия} other{{count} версий}}",
   "@generatedArtifactVersionCount": {
     "placeholders": {
       "count": {
@@ -5330,7 +5330,7 @@
   },
   "extensionsCenterActive": "активен",
   "extensionsCenterInactive": "неактивен",
-  "extensionsCenterToolCount": "{count, plural, =1{1 инструмент} one{{count} инструмент} few{{count} инструмента} many{{count} инструментов} other{{count} инструментов}}",
+  "extensionsCenterToolCount": "{count, plural, =1{1 инструмент} other{{count} инструментов}}",
   "@extensionsCenterToolCount": {
     "placeholders": {
       "count": {
@@ -5338,7 +5338,7 @@
       }
     }
   },
-  "extensionsCenterToolCountWithDescription": "{count, plural, =1{1 инструмент · {description}} one{{count} инструмент · {description}} few{{count} инструмента · {description}} many{{count} инструментов · {description}} other{{count} инструментов · {description}}}",
+  "extensionsCenterToolCountWithDescription": "{count, plural, one{1 инструмент · {description}} other{{count} инструментов · {description}}}",
   "@extensionsCenterToolCountWithDescription": {
     "placeholders": {
       "count": {
@@ -5427,7 +5427,7 @@
   "agentCenterStopTooltip": "Остановить этот процесс",
   "agentCenterHistorySection": "Сохранённые делегирования",
   "agentCenterNoHistory": "Hermes ещё не сохранил делегирований подагентам.",
-  "agentCenterSubagentCount": "{count, plural, =1{1 подагент} one{{count} подагент} few{{count} подагента} many{{count} подагентов} other{{count} подагентов}}",
+  "agentCenterSubagentCount": "{count, plural, =1{1 подагент} other{{count} подагентов}}",
   "@agentCenterSubagentCount": {
     "placeholders": {
       "count": {
@@ -5435,7 +5435,7 @@
       }
     }
   },
-  "agentCenterSubagentCountWithDate": "{count, plural, =1{1 подагент · {date}} one{{count} подагент · {date}} few{{count} подагента · {date}} many{{count} подагентов · {date}} other{{count} подагентов · {date}}}",
+  "agentCenterSubagentCountWithDate": "{count, plural, one{1 подагент · {date}} other{{count} подагентов · {date}}}",
   "@agentCenterSubagentCountWithDate": {
     "placeholders": {
       "count": {
@@ -5477,7 +5477,7 @@
     }
   },
   "projectsCenterUnnamedProject": "Проект без названия",
-  "projectsCenterProjectSemantics": "{label}, {count, plural, =1{1 разговор} one{1 разговор} few{{count} разговора} many{{count} разговоров} other{{count} разговоров}}",
+  "projectsCenterProjectSemantics": "{label}, {count, plural, =1{1 разговор} other{{count} разговоров}}",
   "@projectsCenterProjectSemantics": {
     "placeholders": {
       "label": {
@@ -5488,7 +5488,7 @@
       }
     }
   },
-  "projectsCenterConversationCount": "{count, plural, =1{1 разговор} one{1 разговор} few{{count} разговора} many{{count} разговоров} other{{count} разговоров}}",
+  "projectsCenterConversationCount": "{count, plural, =1{1 разговор} other{{count} разговоров}}",
   "@projectsCenterConversationCount": {
     "placeholders": {
       "count": {
@@ -5496,7 +5496,7 @@
       }
     }
   },
-  "projectsCenterRepositoryCount": "{count, plural, =1{1 репозиторий} one{1 репозиторий} few{{count} репозитория} many{{count} репозиториев} other{{count} репозиториев}}",
+  "projectsCenterRepositoryCount": "{count, plural, =1{1 репозиторий} other{{count} репозиториев}}",
   "@projectsCenterRepositoryCount": {
     "placeholders": {
       "count": {
@@ -5530,7 +5530,7 @@
   "extensionsCenterMcpBootstrapLabel": "Настройка",
   "extensionsCenterMcpCatalogAction": "Открыть каталог MCP",
   "extensionsCenterMcpCatalogSearchHint": "Поиск в каталоге…",
-  "extensionsCenterMcpCatalogSubtitle": "{count, plural, =0{Доступных записей нет} one{Доступен 1 сервер} few{Доступны {count} сервера} many{Доступны {count} серверов} other{Доступны {count} серверов}}",
+  "extensionsCenterMcpCatalogSubtitle": "{count, plural, =0{Доступных записей нет} one{Доступен 1 сервер} other{Доступно {count} серверов}}",
   "@extensionsCenterMcpCatalogSubtitle": {
     "placeholders": {
       "count": {
@@ -5570,7 +5570,7 @@
   "extensionsCenterMcpTestAction": "Проверить подключение",
   "extensionsCenterMcpTestFailed": "MCP-сервер не ответил корректно.",
   "extensionsCenterMcpTestNeedsAuth": "MCP-сервер требует авторизации.",
-  "extensionsCenterMcpTestSuccess": "{count, plural, =0{Подключение успешно} one{Подключение успешно · 1 инструмент} few{Подключение успешно · {count} инструмента} many{Подключение успешно · {count} инструментов} other{Подключение успешно · {count} инструментов}}",
+  "extensionsCenterMcpTestSuccess": "{count, plural, =0{Подключение успешно} one{Подключение успешно · 1 инструмент} other{Подключение успешно · {count} инструментов}}",
   "@extensionsCenterMcpTestSuccess": {
     "placeholders": {
       "count": {
@@ -5586,7 +5586,7 @@
       }
     }
   },
-  "extensionsCenterMcpToolCount": "{count, plural, =1{1 инструмент} one{{count} инструмент} few{{count} инструмента} many{{count} инструментов} other{{count} инструментов}}",
+  "extensionsCenterMcpToolCount": "{count, plural, =1{1 инструмент} other{{count} инструментов}}",
   "@extensionsCenterMcpToolCount": {
     "placeholders": {
       "count": {
