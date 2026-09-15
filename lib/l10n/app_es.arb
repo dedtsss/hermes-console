@@ -1862,7 +1862,7 @@
   "kanban020Runs": "Ejecuciones",
   "kanban020Inspect": "Inspeccionar",
   "kanban020Terminate": "Terminar ejecución",
-  "kanban020WorkerLog": "Log del worker",
+  "kanban020WorkerLog": "Log",
   "kanban020Activity": "Actividad",
   "kanban020Operations": "Operaciones",
   "kanban020TaskModel": "Modelo de esta tarea",
