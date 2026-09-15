@@ -100,6 +100,18 @@ jobs:
           ANALYZE_OUTCOME: ${{ steps.analyze.outcome }}
           TEST_OUTCOME: ${{ steps.test.outcome }}
         run: |
+          # Keep the actionable tail in the UI summary while the complete
+          # output remains in the step log. GitHub rejects summaries over 1 MiB.
+          append_tail() {
+            local file="$1"
+            local limit=400000
+            if [ "$(wc -c < "$file")" -gt "$limit" ]; then
+              echo "[summary truncated; see the complete step log]"
+              tail -c "$limit" "$file"
+            else
+              cat "$file"
+            fi
+          }
           {
             echo "## Quality checks failed"
             echo ""
@@ -107,7 +119,7 @@ jobs:
             if [ "$ANALYZE_OUTCOME" != "success" ]; then
               echo "### Static analysis failed"
               echo '```'
-              cat analyze_output.txt
+              append_tail analyze_output.txt
               echo '```'
               echo ""
             else
@@ -118,7 +130,7 @@ jobs:
             if [ "$TEST_OUTCOME" != "success" ]; then
               echo "### Tests failed"
               echo '```'
-              cat test_output.txt
+              append_tail test_output.txt
               echo '```'
             else
               echo "### All tests passed"

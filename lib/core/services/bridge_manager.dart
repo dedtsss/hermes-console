@@ -63,7 +63,6 @@ class BridgeState {
 
 /// True only when the authenticated Bridge explicitly advertises memory write.
 /// Dashboard reachability alone must never enable this path.
-@visibleForTesting
 bool bridgeMemoryWritable(BridgeState state) =>
     state.connected && !state.caps.readOnly && state.caps.memoryWrite;
 
