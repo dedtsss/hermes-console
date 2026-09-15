@@ -1,4 +1,5 @@
 import '../models/connection.dart';
+
 import 'package:flutter/foundation.dart';
 
 /// Enlace de emparejado de una instancia remota: codifica host + puerto + token
@@ -47,11 +48,7 @@ class PairingLink {
       if (bridgeToken != null && bridgeToken!.trim().isNotEmpty)
         'bridge_token': bridgeToken!.trim(),
     };
-    return Uri(
-      scheme: scheme,
-      host: authority,
-      queryParameters: q,
-    ).toString();
+    return Uri(scheme: scheme, host: authority, queryParameters: q).toString();
   }
 
   /// Intenta parsear una URI de emparejado. Devuelve null si no es válida
@@ -76,8 +73,10 @@ class PairingLink {
     if (port == null || port <= 0 || port > 65535) return null;
     final https = (q['https'] ?? '').trim();
     final dash = (q['dashboard'] ?? '').trim();
-    final bridge = (q['bridge'] ?? '').trim();
-    final bridgeToken = (q['bridge_token'] ?? '').trim();
+    // `bridge` is the current helper field. Accept `bridge_url` as an
+    // additive compatibility alias used by older/mobile-pair helpers.
+    final bridge = (q['bridge'] ?? q['bridge_url'] ?? '').trim();
+    final bridgeToken = (q['bridge_token'] ?? q['bridgeToken'] ?? '').trim();
     final label = (q['label'] ?? '').trim();
     return PairingLink(
       host: host,

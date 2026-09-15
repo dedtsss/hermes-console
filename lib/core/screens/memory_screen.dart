@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../l10n/app_localizations.dart';
 import '../../main.dart';
 import '../services/connection_manager.dart';
+import '../services/bridge_manager.dart';
 import '../services/memory_draft_store.dart';
 import '../theme/app_theme.dart';
 import '../utils/api_error.dart';
@@ -49,6 +50,8 @@ class _MemoryScreenState extends State<MemoryScreen> {
       DashboardDependencyFailure.other;
   bool _backingUp = false;
   MemoryDraftStore? _drafts;
+  BridgeState _bridge = BridgeState.unknown;
+  bool _bridgeProbed = false;
 
   // Local filter applied over providers + builtin files
   final TextEditingController _filterController = TextEditingController();
@@ -67,10 +70,43 @@ class _MemoryScreenState extends State<MemoryScreen> {
     });
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_bridgeProbed) return;
+    _bridgeProbed = true;
+    _probeBridge();
+  }
+
+  Future<void> _probeBridge() async {
+    final app = context.findAncestorStateOfType<HermesAppState>();
+    if (app == null) return;
+    var state = await app.bridgeManager.probe(widget.connection.id);
+    if (state.status == BridgeStatus.needsToken &&
+        await app.bridgeManager.tryProvision(widget.connection.id)) {
+      state = await app.bridgeManager.probe(widget.connection.id);
+    }
+    if (mounted) setState(() => _bridge = state);
+  }
+
   String get _profile => widget.profileOverride?.trim() ?? '';
 
   bool _hasDraft(String name) =>
       _drafts?.exists(widget.connection.id, name, profile: _profile) ?? false;
+
+  String _providerDescription(MemoryProvider provider) {
+    final locale = Strings.of(context).localeName.toLowerCase();
+    if (!locale.startsWith('ru')) return provider.description;
+    return switch (provider.name.toLowerCase()) {
+      'byterover' => 'Облачное хранилище памяти ByteRover.',
+      'hindsight' => 'Внешнее хранилище долговременной памяти Hindsight.',
+      'builtin' ||
+      'default' ||
+      'local' => 'Встроенная память Hermes на сервере.',
+      _ when provider.description.trim().isEmpty => 'Провайдер памяти Hermes.',
+      _ => 'Провайдер памяти Hermes: ${provider.name}.',
+    };
+  }
 
   Future<void> _openDraft(String name) async {
     await Navigator.push(
@@ -195,7 +231,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
     final q = _filter.toLowerCase();
     return info.providers.where((p) {
       return p.name.toLowerCase().contains(q) ||
-          p.description.toLowerCase().contains(q);
+          _providerDescription(p).toLowerCase().contains(q);
     }).toList();
   }
 
@@ -225,7 +261,10 @@ class _MemoryScreenState extends State<MemoryScreen> {
               )
             else if (_info != null)
               Text(
-                '${_info!.configuredCount} / ${_info!.providers.length} configuradas',
+                Strings.of(context).missionConfiguredCount(
+                  _info!.configuredCount,
+                  _info!.providers.length,
+                ),
                 style: TextStyle(fontSize: 11, color: colors.textSecondary),
               ),
           ],
@@ -321,7 +360,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
               controller: _filterController,
               style: TextStyle(fontSize: 13, color: colors.textPrimary),
               decoration: InputDecoration(
-                hintText: 'filtrar providers y archivos…',
+                hintText: Strings.of(context).missionFilterHint,
                 prefixIcon: Icon(
                   Icons.search,
                   size: 18,
@@ -433,7 +472,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
             if (active != null && active.description.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(
-                active.description,
+                _providerDescription(active),
                 style: TextStyle(fontSize: 13, color: colors.textSecondary),
               ),
             ],
@@ -458,7 +497,11 @@ class _MemoryScreenState extends State<MemoryScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      Strings.of(context).memReadOnlyNote,
+                      bridgeMemoryWritable(_bridge)
+                          ? Strings.of(context).memBridgeOverviewRW
+                          : _bridge.connected
+                          ? Strings.of(context).memBridgeOverviewRO
+                          : Strings.of(context).memReadOnlyNote,
                       style: TextStyle(
                         fontSize: 11,
                         color: colors.textDisabled,
@@ -617,7 +660,9 @@ class _MemoryScreenState extends State<MemoryScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      Strings.of(context).memNoFileEndpoint,
+                      _bridge.connected && _bridge.caps.fileRead
+                          ? Strings.of(context).memBridgeFileAccess
+                          : Strings.of(context).memNoFileEndpoint,
                       style: TextStyle(
                         fontSize: 11,
                         color: colors.textDisabled,
@@ -748,7 +793,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
-                            'active',
+                            Strings.of(context).missionActive,
                             style: TextStyle(
                               fontSize: 10,
                               color: colors.success,
@@ -758,7 +803,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
                         )
                       else if (!provider.configured)
                         Text(
-                          'not configured',
+                          Strings.of(context).missionNotConfigured,
                           style: TextStyle(
                             fontSize: 10,
                             color: colors.textDisabled,
@@ -766,10 +811,10 @@ class _MemoryScreenState extends State<MemoryScreen> {
                         ),
                     ],
                   ),
-                  if (provider.description.isNotEmpty) ...[
+                  if (_providerDescription(provider).isNotEmpty) ...[
                     const SizedBox(height: 4),
                     Text(
-                      provider.description,
+                      _providerDescription(provider),
                       style: TextStyle(
                         fontSize: 11,
                         color: colors.textSecondary,

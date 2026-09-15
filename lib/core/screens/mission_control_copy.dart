@@ -1,16 +1,20 @@
 import 'package:flutter/widgets.dart';
 
+import '../../l10n/app_localizations.dart';
+
 final class MissionControlCopy {
   final bool _english;
+  final Strings _strings;
 
-  const MissionControlCopy._(this._english);
+  const MissionControlCopy._(this._english, this._strings);
 
   factory MissionControlCopy.of(BuildContext context) => MissionControlCopy._(
     Localizations.localeOf(context).languageCode.toLowerCase() == 'en',
+    Strings.of(context),
   );
 
   String get title => 'Bots';
-  String get allAgents => _english ? 'All agents' : 'Todos los agentes';
+  String get allAgents => _strings.missionAllAgents;
   String get chooseWorkspace =>
       _english ? 'Choose workspace' : 'Elegir espacio de trabajo';
   String get workspaces => _english ? 'Workspaces' : 'Espacios de trabajo';
@@ -51,7 +55,7 @@ final class MissionControlCopy {
   String botCount(int count) =>
       _english ? '$count ${count == 1 ? 'bot' : 'bots'}' : '$count bots';
   String get rooms => _english ? 'Rooms' : 'Salas';
-  String get work => _english ? 'Work' : 'Trabajo';
+  String get work => _strings.missionWork;
   String get globalWorkTray =>
       _english ? 'Other pending work' : 'Otros pendientes';
 
@@ -65,7 +69,7 @@ final class MissionControlCopy {
       ? 'Choose 2–6 bots and open their coordination room.'
       : 'Elige entre 2 y 6 bots y abre su sala de coordinación.';
   String get startTeam => _english ? 'Build your team' : 'Crear tu equipo';
-  String get newAgent => _english ? 'New agent' : 'Nuevo agente';
+  String get newAgent => _strings.missionNewAgent;
   String get botChat => 'Bot Chat';
   String get botDetails => _english ? 'Bot details' : 'Detalles del bot';
   String get noBots => _english
@@ -78,11 +82,11 @@ final class MissionControlCopy {
   String get needTwoAgents => _english
       ? 'Create at least two bots before opening a team room.'
       : 'Crea al menos dos bots antes de abrir una sala de equipo.';
-  String get searchAgents => _english ? 'Search bots' : 'Buscar bots';
+  String get searchAgents => _strings.missionSearchBots;
   String get clearSearch => _english ? 'Clear search' : 'Borrar búsqueda';
   String get activeNow => _english ? 'Active now' : 'Activos ahora';
   String get otherBots => _english ? 'Other bots' : 'Otros bots';
-  String get allBots => _english ? 'All bots' : 'Todos los bots';
+  String get allBots => _strings.missionAllBots;
   String get searchResults => _english ? 'Results' : 'Resultados';
   String showHiddenBots(int count) =>
       _english ? 'Show hidden ($count)' : 'Mostrar ocultos ($count)';

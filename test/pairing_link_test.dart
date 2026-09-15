@@ -115,5 +115,15 @@ void main() {
       final parsed = PairingLink.tryParse('  ${link.build()}  ')!;
       expect(parsed.token, tok);
     });
+
+    test('acepta nombres legacy del helper para Bridge', () {
+      final parsed = PairingLink.tryParse(
+        'hermes://pair?host=192.0.2.41&port=8642&token=gateway'
+        '&bridge_url=https%3A%2F%2Fbridge.example%2Fbridge'
+        '&bridgeToken=bridge-secret',
+      );
+      expect(parsed?.bridgeUrl, 'https://bridge.example/bridge');
+      expect(parsed?.bridgeToken, 'bridge-secret');
+    });
   });
 }

@@ -11,13 +11,14 @@ void main() {
     required KanbanTaskDetail detail,
     bool readOnly = false,
     KanbanCommentAction? onAddComment,
+    Locale locale = const Locale('es'),
     Size physicalSize = const Size(900, 1600),
   }) async {
     tester.view.physicalSize = physicalSize;
     tester.view.devicePixelRatio = 1;
     await tester.pumpWidget(
       MaterialApp(
-        locale: const Locale('es'),
+        locale: locale,
         localizationsDelegates: Strings.localizationsDelegates,
         supportedLocales: Strings.supportedLocales,
         theme: AppTheme.fromId('dark'),
@@ -169,6 +170,28 @@ void main() {
       onAddComment: (_) async {},
     );
     expect(find.text('next 1'), findsNothing);
+  });
+
+  testWidgets('детали Kanban используют русский каталог ARB', (tester) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await pumpSurface(
+      tester,
+      locale: const Locale('ru'),
+      detail: KanbanTaskDetail.fromJson({
+        'task': {
+          'id': 'ru-detail',
+          'title': 'Русская задача',
+          'body': 'Цель задачи',
+          'status': 'todo',
+        },
+        'comments': [
+          {'id': 1, 'author': 'qa', 'body': 'Комментарий'},
+        ],
+      }),
+    );
+    expect(find.text('Цель · прочитать полностью'), findsOneWidget);
+    expect(find.text('Objective · read all'), findsNothing);
   });
 
   testWidgets('operaciones triage y running son visibles sin expandir', (

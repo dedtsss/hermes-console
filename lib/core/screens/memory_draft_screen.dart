@@ -20,11 +20,11 @@ import 'bridge_config_screen.dart';
 import 'lock_screen.dart';
 import '../widgets/hermes_app_bar.dart';
 
-/// Editor LOCAL de un archivo de memoria.
+/// Editor de un archivo de memoria con borrador local y ruta Bridge segura.
 ///
-/// La API actual no permite guardar memoria remotamente: este editor guarda
-/// un borrador local (autosave) que se puede copiar, exportar a un archivo
-/// .md o descartar. Nunca muestra un "guardar remoto" ni finge sincronizar.
+/// El borrador se guarda automáticamente en el dispositivo. Cuando el Bridge
+/// autenticado anuncia lectura/escritura, el contenido real puede cargarse y
+/// aplicarse mediante dry-run, confirmación y backup del servidor.
 class MemoryDraftScreen extends StatefulWidget {
   final String connectionId;
   final String fileName; // sin extensión, p.ej. "memory" / "user"
@@ -80,7 +80,9 @@ class _MemoryDraftScreenState extends State<MemoryDraftScreen> {
     final c = _bridge.caps;
     if (!_bridge.connected || c.readOnly) return false;
     // `soul` usa soul_write; persona/user/memory usan memory_write.
-    return _bridgeTarget == 'soul' ? c.soulWrite : c.memoryWrite;
+    return _bridgeTarget == 'soul'
+        ? _bridge.connected && !c.readOnly && c.soulWrite
+        : bridgeMemoryWritable(_bridge);
   }
 
   bool get _bridgeCanRead =>
@@ -411,9 +413,8 @@ class _MemoryDraftScreenState extends State<MemoryDraftScreen> {
   Future<void> _copy() async {
     await Clipboard.setData(ClipboardData(text: _ctrl.text));
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(Strings.of(context).memCopied)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(Strings.of(context).memCopied)));
   }
 
   Future<void> _export() async {
@@ -596,7 +597,9 @@ class _MemoryDraftScreenState extends State<MemoryDraftScreen> {
                         color: colors.textPrimary,
                       ),
                       decoration: InputDecoration(
-                        hintText: s.memEditorHint(widget.fileName),
+                        hintText: _bridgeCanWrite
+                            ? s.memBridgeEditorHint(widget.fileName)
+                            : s.memEditorHint(widget.fileName),
                         hintStyle: TextStyle(
                           fontSize: 12.5,
                           color: colors.textDisabled,
@@ -637,9 +640,8 @@ class _MemoryDraftScreenState extends State<MemoryDraftScreen> {
                               _updatedAt == null
                                   ? s.memUnsaved
                                   : s.memAutosaved(
-                                      TimeOfDay.fromDateTime(
-                                        _updatedAt!,
-                                      ).format(context),
+                                      TimeOfDay.fromDateTime(_updatedAt!)
+                                          .format(context),
                                     ),
                               style: TextStyle(
                                 fontSize: 10,

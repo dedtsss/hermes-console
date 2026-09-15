@@ -6,8 +6,9 @@ import '../theme/app_theme.dart';
 
 typedef KanbanTaskAction = Future<void> Function();
 typedef KanbanCommentAction = Future<void> Function(String body);
-typedef KanbanAttachmentAction =
-    Future<void> Function(KanbanAttachment attachment);
+typedef KanbanAttachmentAction = Future<void> Function(
+  KanbanAttachment attachment,
+);
 typedef KanbanRunAction = Future<void> Function(KanbanRun run);
 typedef KanbanLinkedTaskAction = Future<void> Function(String taskId);
 
@@ -109,7 +110,7 @@ class _KanbanTaskDetailSurfaceState extends State<KanbanTaskDetailSurface> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).hermes;
     final s = Strings.of(context);
-    final copy = _KanbanDetailCopy.forLocale(s.localeName);
+    final copy = _KanbanDetailCopy(s);
     final detail = widget.detail;
     final task = detail.task;
     return SingleChildScrollView(
@@ -1055,57 +1056,45 @@ class _Notice extends StatelessWidget {
 }
 
 class _KanbanDetailCopy {
-  final bool spanish;
+  final Strings s;
 
-  const _KanbanDetailCopy._(this.spanish);
+  const _KanbanDetailCopy(this.s);
 
-  factory _KanbanDetailCopy.forLocale(String localeName) =>
-      _KanbanDetailCopy._(localeName.toLowerCase().startsWith('es'));
-
-  String get readOnly => spanish
-      ? 'Esta instancia está en modo solo lectura.'
-      : 'This instance is read-only.';
-  String get objective =>
-      spanish ? 'Objetivo · leer completo' : 'Objective · read all';
-  String get result => spanish ? 'Resultado' : 'Result';
-  String get latestSummary => spanish ? 'Último resumen' : 'Latest summary';
-  String get diagnostics => spanish ? 'Diagnósticos' : 'Diagnostics';
-  String get dependencies => spanish ? 'Dependencias' : 'Dependencies';
-  String get parents => spanish ? 'Depende de' : 'Depends on';
-  String get children => spanish ? 'Desbloquea' : 'Unblocks';
-  String get blockedBy => spanish ? 'Bloqueada por' : 'Blocked by';
-  String get blocks => spanish ? 'Bloquea' : 'Blocks';
-  String get childResults => spanish ? 'Subtareas' : 'Child tasks';
-  String get comments => spanish ? 'Comentarios' : 'Comments';
-  String get noComments =>
-      spanish ? 'Todavía no hay comentarios.' : 'No comments yet.';
-  String get someone => spanish ? 'Alguien' : 'Someone';
-  String get addComment => spanish ? 'Añadir comentario' : 'Add a comment';
-  String get messageWorker =>
-      spanish ? 'Enviar una nota al worker' : 'Message the worker';
-  String get send => spanish ? 'Enviar' : 'Send';
-  String get attachments => spanish ? 'Adjuntos' : 'Attachments';
-  String get noAttachments => spanish ? 'No hay adjuntos.' : 'No attachments.';
-  String get uploadAttachment =>
-      spanish ? 'Subir adjunto' : 'Upload attachment';
-  String get download => spanish ? 'Descargar' : 'Download';
-  String get deleteAttachment =>
-      spanish ? 'Eliminar adjunto' : 'Delete attachment';
-  String get runs => spanish ? 'Ejecuciones' : 'Runs';
-  String get run => spanish ? 'Ejecución' : 'Run';
-  String get inspect => spanish ? 'Inspeccionar' : 'Inspect';
-  String get terminate => spanish ? 'Terminar ejecución' : 'Terminate run';
-  String get log => spanish ? 'Log' : 'Log';
-  String get activity => spanish ? 'Actividad' : 'Activity';
-  String get showAll => spanish ? 'Mostrar toda' : 'Show all';
-  String get showLess => spanish ? 'Mostrar menos' : 'Show less';
-  String get operations => spanish ? 'Operaciones' : 'Operations';
-  String get model => spanish ? 'Modelo de esta tarea' : 'Task model';
-  String get inheritModel =>
-      spanish ? 'Heredar del perfil' : 'Inherit from profile';
-  String get reassign => spanish ? 'Reasignar' : 'Reassign';
-  String get reclaim =>
-      spanish ? 'Recuperar y reencolar' : 'Reclaim and requeue';
-  String get specify => spanish ? 'Especificar' : 'Specify';
-  String get decompose => spanish ? 'Descomponer' : 'Decompose';
+  String get readOnly => s.kanban020ReadOnly;
+  String get objective => s.kanban020Objective;
+  String get result => s.kanban020Result;
+  String get latestSummary => s.kanban020LatestSummary;
+  String get diagnostics => s.kanban020Diagnostics;
+  String get dependencies => s.kanban020Dependencies;
+  String get parents => s.kanban020Parents;
+  String get children => s.kanban020Children;
+  String get blockedBy => s.kanban020BlockedBy;
+  String get blocks => s.kanban020Blocks;
+  String get childResults => s.kanban020ChildTasks;
+  String get comments => s.kanban020Comments;
+  String get noComments => s.kanban020NoComments;
+  String get someone => s.kanban020Someone;
+  String get addComment => s.kanban020AddComment;
+  String get messageWorker => s.kanban020MessageWorker;
+  String get send => s.kanban020Send;
+  String get attachments => s.kanban020Attachments;
+  String get noAttachments => s.kanban020NoAttachments;
+  String get uploadAttachment => s.kanban020UploadAttachment;
+  String get download => s.kanban020Download;
+  String get deleteAttachment => s.kanban020DeleteAttachment;
+  String get runs => s.kanban020Runs;
+  String get run => s.kanban020Run;
+  String get inspect => s.kanban020Inspect;
+  String get terminate => s.kanban020Terminate;
+  String get log => s.kanban020WorkerLog;
+  String get activity => s.kanban020Activity;
+  String get showAll => s.kanban020ShowAll;
+  String get showLess => s.kanban020ShowLess;
+  String get operations => s.kanban020Operations;
+  String get model => s.kanban020TaskModel;
+  String get inheritModel => s.kanban020InheritModel;
+  String get reassign => s.kanban020Reassign;
+  String get reclaim => s.kanban020Reclaim;
+  String get specify => s.kanban020Specify;
+  String get decompose => s.kanban020Decompose;
 }
