@@ -598,8 +598,6 @@ class _KanbanTaskDetailSurfaceState extends State<KanbanTaskDetailSurface> {
                           const SizedBox(height: 3),
                           SelectableText(
                             run.summary!,
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 11.5,
                               color: colors.textSecondary,
