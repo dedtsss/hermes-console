@@ -31,6 +31,23 @@ TuiGatewayClient _clientFor(HttpServer server) => TuiGatewayClient(
   dashboard: _TicketDashboardClient(),
 );
 
+bool _acknowledgeClientCapabilities(
+  WebSocket socket,
+  Map<String, dynamic> frame,
+) {
+  if (frame['method'] != 'client.capabilities') return false;
+  socket.add(
+    jsonEncode({
+      'jsonrpc': '2.0',
+      'id': frame['id'],
+      'result': {
+        'server_requests': ['approval', 'clarify', 'sudo', 'secret'],
+      },
+    }),
+  );
+  return true;
+}
+
 void main() {
   test('clarify expired atraviesa el transporte real como terminal', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -38,8 +55,16 @@ void main() {
 
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (_acknowledgeClientCapabilities(socket, frame)) continue;
         socket.add(
           jsonEncode({
             'jsonrpc': '2.0',
@@ -71,8 +96,16 @@ void main() {
 
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (_acknowledgeClientCapabilities(socket, frame)) continue;
         final method = frame['method'] as String;
         final params = Map<String, dynamic>.from(frame['params'] as Map);
         final keys = params.keys.toList()..sort();
@@ -158,8 +191,10 @@ void main() {
     expect(terminalResult.status, DesktopPromptResponseStatus.ok);
     expect(sudo.isDisposed, isTrue);
     expect(sudo.hasValue, isFalse);
+    expect(sudo.disposeAttempts, 1);
     expect(secret.isDisposed, isTrue);
     expect(secret.hasValue, isFalse);
+    expect(secret.disposeAttempts, 1);
   });
 
   test('redacta el secreto antes de esperar la respuesta JSON-RPC', () async {
@@ -173,8 +208,16 @@ void main() {
 
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (_acknowledgeClientCapabilities(socket, frame)) continue;
         if (!requestReceived.isCompleted) requestReceived.complete();
         await releaseResponse.future;
         socket.add(
@@ -195,6 +238,7 @@ void main() {
     await requestReceived.future.timeout(const Duration(seconds: 2));
     expect(value.hasValue, isFalse);
     expect(value.isDisposed, isTrue);
+    expect(value.disposeAttempts, 1);
 
     releaseResponse.complete();
     expect((await response).status, DesktopPromptResponseStatus.ok);
@@ -209,8 +253,16 @@ void main() {
 
       server.listen((request) async {
         final socket = await WebSocketTransformer.upgrade(request);
+        socket.add(
+          jsonEncode({
+            'jsonrpc': '2.0',
+            'method': 'event',
+            'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+          }),
+        );
         await for (final raw in socket) {
           final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+          if (_acknowledgeClientCapabilities(socket, frame)) continue;
           final params = Map<String, dynamic>.from(frame['params'] as Map);
           socket.add(
             jsonEncode({
@@ -249,6 +301,64 @@ void main() {
       expect(failure.toString(), isNot(contains(sensitiveValue)));
       expect(value.isDisposed, isTrue);
       expect(value.hasValue, isFalse);
+      expect(value.disposeAttempts, 1);
+    },
+  );
+
+  test(
+    'sensitive pending socket close emits only a fixed safe stream error',
+    () async {
+      const sensitiveValue = 'PRIVATE_STREAM_SECRET_MARKER';
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+      final requestReceived = Completer<void>();
+
+      server.listen((request) async {
+        final socket = await WebSocketTransformer.upgrade(request);
+        socket.add(
+          jsonEncode({
+            'jsonrpc': '2.0',
+            'method': 'event',
+            'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+          }),
+        );
+        await for (final raw in socket) {
+          final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+          if (_acknowledgeClientCapabilities(socket, frame)) continue;
+          if (!requestReceived.isCompleted) requestReceived.complete();
+          await socket.close(1011, sensitiveValue);
+        }
+      });
+
+      final client = _clientFor(server);
+      addTearDown(client.close);
+      final streamFailure = Completer<(Object, StackTrace)>();
+      final subscription = client.events.listen(
+        (_) {},
+        onError: (Object error, StackTrace stackTrace) {
+          if (!streamFailure.isCompleted) {
+            streamFailure.complete((error, stackTrace));
+          }
+        },
+      );
+      addTearDown(subscription.cancel);
+      final value = EphemeralSensitiveValue(sensitiveValue);
+      final response = client.respondToSecret('secret-stream-close', value);
+      final responseFailure = expectLater(
+        response,
+        throwsA(isA<TuiGatewayRpcError>()),
+      );
+
+      await requestReceived.future.timeout(const Duration(seconds: 2));
+      final (error, stackTrace) = await streamFailure.future.timeout(
+        const Duration(seconds: 2),
+      );
+      await responseFailure;
+
+      expect(error, isA<TuiGatewayRpcError>());
+      expect(error.toString(), isNot(contains(sensitiveValue)));
+      expect(stackTrace.toString(), isNot(contains(sensitiveValue)));
+      expect(value.disposeAttempts, 1);
     },
   );
 
@@ -271,5 +381,6 @@ void main() {
     );
     expect(value.isDisposed, isTrue);
     expect(value.hasValue, isFalse);
+    expect(value.disposeAttempts, 1);
   });
 }

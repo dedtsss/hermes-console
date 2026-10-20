@@ -3,11 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_android/core/models/desktop_control_center.dart';
-import 'package:hermes_android/core/screens/agent_center_screen.dart';
 import 'package:hermes_android/core/screens/projects_center_screen.dart';
 import 'package:hermes_android/core/services/connection_manager.dart';
 import 'package:hermes_android/core/services/desktop_control_gateway.dart';
 import 'package:hermes_android/core/theme/app_theme.dart';
+import 'package:hermes_android/core/utils/byte_bounded_lru_cache.dart';
 import 'package:hermes_android/l10n/app_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -34,6 +34,12 @@ class _FakeControlGateway implements HermesDesktopControlGateway {
     snapshots: [],
     processes: [],
   );
+  SpawnTreeDetail spawnTreeDetail = const SpawnTreeDetail(
+    startedAt: 1,
+    finishedAt: 2,
+    subagents: [SpawnTreeSubagentEntry(status: AgentCenterStatus.completed)],
+  );
+  final List<String> loadedSpawnTreePaths = [];
   final List<String> killedProcesses = [];
 
   void _throwIfNeeded() {
@@ -63,16 +69,10 @@ class _FakeControlGateway implements HermesDesktopControlGateway {
   }
 
   @override
-  Future<SpawnTreeDetail> loadSpawnTree(String opaquePath) async =>
-      const SpawnTreeDetail(
-        sessionId: 'session-a',
-        label: 'Review',
-        startedAt: 1,
-        finishedAt: 2,
-        subagents: [
-          {'id': 'agent-a', 'status': 'completed', 'label': 'Audit UI'},
-        ],
-      );
+  Future<SpawnTreeDetail> loadSpawnTree(String opaquePath) async {
+    loadedSpawnTreePaths.add(opaquePath);
+    return spawnTreeDetail;
+  }
 
   @override
   Future<String> startBackgroundTask(
@@ -131,6 +131,14 @@ class _FakeControlGateway implements HermesDesktopControlGateway {
     bool enabled, {
     String runtimeSessionId = '',
   }) => throw UnimplementedError();
+
+  @override
+  Future<SessionGoalSnapshot?> readSessionGoal(String runtimeSessionId) =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> sendGoalAction(String runtimeSessionId, String action) =>
+      throw UnimplementedError();
 }
 
 Widget _app(Widget home, {Locale locale = const Locale('es')}) => MaterialApp(
@@ -193,11 +201,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Hermes Console'), findsOneWidget);
-    expect(find.textContaining('1 conversación'), findsOneWidget);
+    expect(find.textContaining('1 chat'), findsOneWidget);
     await tester.tap(find.text('Hermes Console'));
     await tester.pumpAndSettle();
-    expect(find.text('app'), findsOneWidget);
-    expect(find.text('main'), findsOneWidget);
+    // The trunk lane's chats sit directly inside the project folder.
+    expect(find.text('Theme Studio'), findsOneWidget);
   });
 
   testWidgets('Projects reopens from memory while refreshing in background', (
@@ -266,110 +274,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Fresh project'), findsOneWidget);
     expect(secondGateway.projectTreeCalls, 1);
-  });
-
-  testWidgets('Agents hides host path and destructive action without runtime', (
-    tester,
-  ) async {
-    final gateway = _FakeControlGateway()
-      ..agents = AgentCenterSnapshot.fromJson(
-        snapshots: {
-          'entries': [
-            {
-              'path': '/private/host/spawn.json',
-              'label': 'Parallel review',
-              'count': 2,
-              'started_at': 1704067200,
-            },
-          ],
-        },
-        processes: {
-          'processes': [
-            {
-              'session_id': 'proc-a',
-              'command': 'flutter test',
-              'status': 'running',
-            },
-          ],
-        },
-      );
-
-    await tester.pumpWidget(_app(AgentCenterScreen(gateway: gateway)));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Parallel review'), findsOneWidget);
-    expect(find.textContaining('No son perfiles'), findsOneWidget);
-    expect(find.textContaining('2024'), findsOneWidget);
-    expect(find.text('flutter test'), findsNothing);
-    expect(find.textContaining('/private/host'), findsNothing);
-    expect(find.byTooltip('Detener este proceso'), findsNothing);
-    expect(find.text('Nueva tarea'), findsNothing);
-  });
-
-  testWidgets('Agents integra nueva tarea y permite detener todos', (
-    tester,
-  ) async {
-    final gateway = _FakeControlGateway()
-      ..agents = AgentCenterSnapshot.fromJson(
-        snapshots: const {'entries': <Object>[]},
-        processes: const {
-          'processes': [
-            {'session_id': 'proc-a', 'command': 'tarea a', 'status': 'running'},
-            {'session_id': 'proc-b', 'command': 'tarea b', 'status': 'running'},
-          ],
-        },
-      );
-    await tester.pumpWidget(
-      _app(
-        AgentCenterScreen(gateway: gateway, runtimeSessionId: 'runtime-test'),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.byType(FloatingActionButton), findsNothing);
-    expect(find.byKey(const ValueKey('agent-center-new-task')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('agent-center-stop-all')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Detener todos'));
-    await tester.pumpAndSettle();
-
-    expect(gateway.killedProcesses, containsAll(['proc-a', 'proc-b']));
-  });
-
-  testWidgets('unsupported centre is explicit instead of an empty fake list', (
-    tester,
-  ) async {
-    final gateway = _FakeControlGateway()
-      ..failure = const DesktopControlFailure(
-        DesktopControlFailureKind.unsupported,
-        code: -32601,
-      );
-
-    await tester.pumpWidget(_app(AgentCenterScreen(gateway: gateway)));
-    await tester.pumpAndSettle();
-
-    expect(
-      find.text('Esta versión de Hermes no publica el centro de agentes.'),
-      findsOneWidget,
-    );
-    expect(find.text('Reintentar'), findsOneWidget);
-  });
-
-  testWidgets('Agents renders English empty-state copy', (tester) async {
-    final gateway = _FakeControlGateway();
-
-    await tester.pumpWidget(
-      _app(AgentCenterScreen(gateway: gateway), locale: const Locale('en')),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('Agents'), findsOneWidget);
-    expect(find.text('Running'), findsNothing);
-    expect(find.text('Saved delegations'), findsOneWidget);
-    expect(
-      find.text('Hermes has not saved any subagent delegations yet.'),
-      findsOneWidget,
-    );
+    // QA9343: la caché de proyectos es privada de la autoridad y se vacía
+    // con borrar conexión / revocar keys / cambiar perfil.
+    expect(ProjectsCenterScreen.memoryCacheLengthForTesting, greaterThan(0));
+    PrivateRenderCaches.clearAll();
+    expect(ProjectsCenterScreen.memoryCacheLengthForTesting, 0);
   });
 
   testWidgets('Projects renders English empty-state copy', (tester) async {
@@ -389,8 +298,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Projects'), findsOneWidget);
-    expect(find.text('Workspaces'), findsOneWidget);
-    expect(find.textContaining('working directory (cwd)'), findsWidgets);
+    // A calm empty state; the longer explanation lives behind (?).
     expect(find.text('No projects yet'), findsOneWidget);
+    expect(find.textContaining('server folder'), findsOneWidget);
+    expect(find.byTooltip('What is this?'), findsOneWidget);
   });
 }

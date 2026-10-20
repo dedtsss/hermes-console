@@ -6,6 +6,8 @@ import 'package:hermes_android/core/models/agent_profile.dart';
 import 'package:hermes_android/core/services/connection_manager.dart';
 import 'package:hermes_android/core/services/tui_gateway_client.dart';
 
+import 'support/rpc_frame_helpers.dart';
+
 class _TicketDashboardClient extends DashboardClient {
   _TicketDashboardClient()
     : super(host: '127.0.0.1', port: 1, manualToken: 'unused');
@@ -39,8 +41,19 @@ void main() {
       final requests = <Map<String, dynamic>>[];
       server.listen((request) async {
         final socket = await WebSocketTransformer.upgrade(request);
+        socket.add(
+          jsonEncode({
+            'jsonrpc': '2.0',
+            'method': 'event',
+            'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+          }),
+        );
         await for (final raw in socket) {
           final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+          if (isClientCapabilitiesFrame(frame)) {
+            socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+            continue;
+          }
           requests.add(frame);
           socket.add(
             jsonEncode({
@@ -102,8 +115,19 @@ void main() {
     final requests = <Map<String, dynamic>>[];
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (isClientCapabilitiesFrame(frame)) {
+          socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+          continue;
+        }
         requests.add(frame);
         socket.add(
           jsonEncode({
@@ -138,8 +162,19 @@ void main() {
       final requests = <Map<String, dynamic>>[];
       server.listen((request) async {
         final socket = await WebSocketTransformer.upgrade(request);
+        socket.add(
+          jsonEncode({
+            'jsonrpc': '2.0',
+            'method': 'event',
+            'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+          }),
+        );
         await for (final raw in socket) {
           final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+          if (isClientCapabilitiesFrame(frame)) {
+            socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+            continue;
+          }
           requests.add(frame);
           socket.add(
             jsonEncode({
@@ -170,6 +205,7 @@ void main() {
         'clone_from': 'default',
         'no_skills': false,
         'share_auth': true,
+        'mirror_credentials': true,
         'soul': '# QA\nVerify the build.',
         'model': 'gpt-5.6-codex',
         'provider': 'openai-codex',
@@ -185,6 +221,13 @@ void main() {
       var requests = 0;
       server.listen((request) async {
         final socket = await WebSocketTransformer.upgrade(request);
+        socket.add(
+          jsonEncode({
+            'jsonrpc': '2.0',
+            'method': 'event',
+            'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+          }),
+        );
         await for (final _ in socket) {
           requests++;
         }
@@ -254,8 +297,19 @@ void main() {
 
       server.listen((request) async {
         final socket = await WebSocketTransformer.upgrade(request);
+        socket.add(
+          jsonEncode({
+            'jsonrpc': '2.0',
+            'method': 'event',
+            'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+          }),
+        );
         await for (final raw in socket) {
           final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+          if (isClientCapabilitiesFrame(frame)) {
+            socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+            continue;
+          }
           requests.add(frame);
           final method = frame['method'] as String;
           final params = Map<String, dynamic>.from(frame['params'] as Map);
@@ -351,8 +405,19 @@ void main() {
 
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (isClientCapabilitiesFrame(frame)) {
+          socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+          continue;
+        }
         requests.add(frame);
         socket.add(
           jsonEncode({
@@ -395,6 +460,62 @@ void main() {
     expect(requests.map((request) => request['method']), ['profiles.list']);
   });
 
+  test('adopt-before-mint: a canonical chat created elsewhere blocks titling', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    final requests = <Map<String, dynamic>>[];
+
+    server.listen((request) async {
+      final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
+      await for (final raw in socket) {
+        final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (isClientCapabilitiesFrame(frame)) {
+          socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+          continue;
+        }
+        requests.add(frame);
+        socket.add(
+          jsonEncode({
+            'jsonrpc': '2.0',
+            'id': frame['id'],
+            'result': {
+              'profiles': [
+                {
+                  'name': 'infra',
+                  // Desktop minted the forever-chat meanwhile (no pin yet).
+                  'canonical_session': {
+                    'id': 'stored-desktop',
+                    'resolved_id': 'stored-desktop',
+                    'title': 'Bot Chat',
+                  },
+                },
+              ],
+            },
+          }),
+        );
+      }
+    });
+
+    final client = _clientFor(server);
+    addTearDown(client.close);
+    await expectLater(
+      client.persistCanonicalBotChat(
+        profile: 'infra',
+        runtimeSessionId: 'runtime-new',
+        storedSessionId: 'stored-new',
+      ),
+      throwsA(isA<TuiGatewayRpcError>()),
+    );
+    expect(requests.map((request) => request['method']), ['profiles.list']);
+  });
+
   test(
     'pins presentes pero malformados bloquean antes de session.title',
     () async {
@@ -408,6 +529,16 @@ void main() {
         final requests = <Map<String, dynamic>>[];
         server.listen((request) async {
           final socket = await WebSocketTransformer.upgrade(request);
+          socket.add(
+            jsonEncode({
+              'jsonrpc': '2.0',
+              'method': 'event',
+              'params': {
+                'type': 'gateway.ready',
+                'payload': <String, dynamic>{},
+              },
+            }),
+          );
           await for (final raw in socket) {
             final frame = jsonDecode(raw as String) as Map<String, dynamic>;
             requests.add(frame);
@@ -443,9 +574,12 @@ void main() {
               ),
             ),
           );
-          expect(requests.map((request) => request['method']), [
-            'profiles.list',
-          ]);
+          expect(
+            framesWithoutClientCapabilities(
+              requests,
+            ).map((request) => request['method']),
+            ['profiles.list'],
+          );
         } finally {
           await client.close();
           await server.close(force: true);
@@ -460,8 +594,19 @@ void main() {
     final requests = <Map<String, dynamic>>[];
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (isClientCapabilitiesFrame(frame)) {
+          socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+          continue;
+        }
         requests.add(frame);
         socket.add(
           jsonEncode({
@@ -508,8 +653,19 @@ void main() {
 
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (isClientCapabilitiesFrame(frame)) {
+          socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+          continue;
+        }
         requests.add(frame);
         final method = frame['method'] as String;
         if (method == 'session.set_hidden') {
@@ -575,8 +731,19 @@ void main() {
     final requests = <Map<String, dynamic>>[];
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (isClientCapabilitiesFrame(frame)) {
+          socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+          continue;
+        }
         requests.add(frame);
         socket.add(
           jsonEncode({
@@ -616,8 +783,19 @@ void main() {
 
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (isClientCapabilitiesFrame(frame)) {
+          socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+          continue;
+        }
         requests.add(frame);
         final method = frame['method'] as String;
         if (method == 'session.set_hidden') {

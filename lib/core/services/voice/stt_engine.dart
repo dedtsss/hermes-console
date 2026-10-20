@@ -79,6 +79,19 @@ abstract class SttEngine {
   bool get supportsPartials;
 }
 
+/// An on-device engine whose recogniser takes seconds to load and can stay
+/// loaded between captures, so the next one starts at once.
+abstract interface class WarmSttEngine {
+  /// Loads the recogniser ahead of the first capture. Does nothing while a
+  /// capture is starting or running, or once it is loaded.
+  Future<void> prewarm();
+
+  /// Ends the capture now: the microphone is released and nothing is
+  /// transcribed, as [SttEngine.dispose] does, but the recogniser stays
+  /// loaded for the next [SttEngine.listen].
+  Future<void> park();
+}
+
 /// Motor local capaz de transcribir un WAV ya capturado por el recorder
 /// full-duplex. No abre un segundo micrófono ni cambia el origen del audio.
 abstract interface class CapturedWavSttEngine {
@@ -279,11 +292,9 @@ class SystemSttEngine implements SttEngine {
       }
       _resolvedLocale = pick;
       _localeResolved = true;
-    } catch (e) {
+    } catch (error) {
       if (operation != null && !_isCurrent(operation)) return;
-      debugPrint(
-        '[stt] excepción silenciada (fallback: _resolvedLocale = null): $e',
-      );
+      debugPrint('[stt] locale resolution unavailable (${error.runtimeType})');
       _resolvedLocale = null;
       _localeResolved = true;
     }
@@ -295,10 +306,10 @@ class SystemSttEngine implements SttEngine {
     lastError = null;
     try {
       micGranted = await _runtime.hasPermission();
-    } catch (e) {
+    } catch (_) {
       if (!current()) return false;
       micGranted = false;
-      lastError = 'Could not request microphone permission: $e';
+      lastError = 'Could not request microphone permission.';
       return false;
     }
     if (!current()) return false;
@@ -307,8 +318,8 @@ class SystemSttEngine implements SttEngine {
       return false;
     }
     _initialized = await _runtime.initialize(
-      onError: (message) {
-        if (current()) lastError = message;
+      onError: (_) {
+        if (current()) lastError = 'System speech recognizer failed.';
       },
     );
     if (!current()) return false;
@@ -396,9 +407,9 @@ class SystemSttEngine implements SttEngine {
         if (!continuous) {
           _armIdleSilenceTimer(operation);
         }
-      } catch (e) {
+      } catch (_) {
         if (_isCurrent(operation) && !controller.isClosed) {
-          controller.addError(e);
+          controller.addError(Exception('Speech recognition failed.'));
           await controller.close();
         }
       }
@@ -770,10 +781,10 @@ class WhisperSttEngine implements SttEngine {
       _startedAt = DateTime.now();
       _startVad(operation);
       _armIdleSilenceTimer(operation);
-    } catch (e) {
+    } catch (_) {
       _deleteAudioFile(path);
       if (_isCurrent(operation) && !controller.isClosed) {
-        controller.addError(Exception('Could not record: $e'));
+        controller.addError(Exception('Could not record audio.'));
         await controller.close();
       }
     } finally {
@@ -947,8 +958,8 @@ class WhisperSttEngine implements SttEngine {
     try {
       final file = File(path);
       if (file.existsSync()) file.deleteSync();
-    } catch (e) {
-      debugPrint('[stt] no se pudo borrar el WAV temporal: $e');
+    } catch (error) {
+      debugPrint('[stt] temporary WAV cleanup failed (${error.runtimeType})');
     }
     if (_audioPath == path) _audioPath = null;
   }
@@ -1046,9 +1057,9 @@ class WhisperSttEngine implements SttEngine {
         controller.add(SttResult(text, true));
       }
       await controller.close();
-    } catch (e) {
+    } catch (_) {
       if (!controller.isClosed) {
-        controller.addError(Exception('Transcription failed: $e'));
+        controller.addError(Exception('Transcription failed.'));
         await controller.close();
       }
     } finally {
@@ -1078,8 +1089,8 @@ class WhisperSttEngine implements SttEngine {
         String? path;
         try {
           path = await _runtime.stop();
-        } catch (e) {
-          debugPrint('[stt] no se pudo detener el grabador al liberar: $e');
+        } catch (error) {
+          debugPrint('[stt] recorder cleanup failed (${error.runtimeType})');
         } finally {
           _deleteAudioFile(path ?? _audioPath);
         }

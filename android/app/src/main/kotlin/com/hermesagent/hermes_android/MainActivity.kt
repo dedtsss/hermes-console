@@ -1,15 +1,14 @@
 package com.hermesagent.hermes_android
 
-import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.UiModeManager
-import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.graphics.Rect
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -20,7 +19,6 @@ import android.provider.Settings
 import android.util.Log
 import android.view.WindowManager
 import android.webkit.MimeTypeMap
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -32,9 +30,9 @@ import java.util.UUID
 // FlutterFragmentActivity (no FlutterActivity): BiometricPrompt de local_auth
 // solo funciona con hosts FragmentActivity.
 //
-// Canal nativo "hermes/android_apps": detectar / abrir apps externas y lanzar
-// el instalador del agente en Termux. La UI nunca toca intents directamente;
-// todo pasa por el adaptador Dart `AndroidApps`.
+// Canal nativo "hermes/android_apps": detectar / abrir apps externas y consultar
+// el dispositivo. La UI nunca toca intents directamente; todo pasa por
+// el adaptador Dart `AndroidApps`.
 class MainActivity : FlutterFragmentActivity() {
     private val channelName = "hermes/android_apps"
     private val securityChannelName = "hermes/security"
@@ -47,22 +45,43 @@ class MainActivity : FlutterFragmentActivity() {
     private val fullDuplexCaptureEventsName = "hermes/full_duplex_capture_events"
     private val documentPreviewChannelName = "hermes/document_preview"
     private val memoryChannelName = "hermes/memory"
+    private val networkAvailabilityEventsName = "hermes/network_availability"
     private val platformInfoChannelName = "hermes/platform_info"
     private val foregroundRestartContractChannelName =
         "hermes/foreground_restart_contract"
     private val foregroundExternalDataSyncChannelName =
         "hermes/foreground_external_data_sync"
     private var shareChannel: MethodChannel? = null
+    private var richNotificationsChannel: MethodChannel? = null
     private var newSessionLaunchChannel: MethodChannel? = null
     private var memoryChannel: MethodChannel? = null
     private var externalDataSyncChannel: MethodChannel? = null
     private var pcmStreamHandler: HermesPcmStreamHandler? = null
     private var fullDuplexCaptureHandler: HermesFullDuplexCaptureHandler? = null
     private var documentPreviewHandler: HermesDocumentPreviewHandler? = null
+    private var clipboardImageHandler: HermesClipboardImageHandler? = null
     private var pendingShare: Map<String, Any?>? = null
     private var pendingNewSessionLaunch: Map<String, Any?>? = null
     private var pendingExternalDataSyncStop = false
     private var externalDataSyncStopReceiverRegistered = false
+    private var networkAvailabilitySink: EventChannel.EventSink? = null
+    private var networkCallbackRegistered = false
+    private val networkCallback =
+        object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val sink = networkAvailabilitySink ?: return
+                runOnUiThread {
+                    if (networkAvailabilitySink === sink) sink.success("available")
+                }
+            }
+
+            override fun onLost(network: Network) {
+                val sink = networkAvailabilitySink ?: return
+                runOnUiThread {
+                    if (networkAvailabilitySink === sink) sink.success("lost")
+                }
+            }
+        }
     private val externalDataSyncStopReceiver =
         object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -74,12 +93,6 @@ class MainActivity : FlutterFragmentActivity() {
                 deliverExternalDataSyncStop()
             }
         }
-
-    // Permiso (dangerous) que exige el RunCommandService de Termux. Se
-    // auto-concede si la Consola se instala DESPUÉS de Termux, pero al reinstalar
-    // el APK (desarrollo) se pierde; entonces hay que pedirlo en runtime.
-    private val termuxRunPermission = "com.termux.permission.RUN_COMMAND"
-    private val termuxPermissionRequestCode = 4242
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val externalDataSyncStop =
@@ -125,6 +138,13 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        clipboardImageHandler?.close()
+        clipboardImageHandler = HermesClipboardImageHandler(applicationContext).also { handler ->
+            MethodChannel(
+                flutterEngine.dartExecutor.binaryMessenger,
+                HermesClipboardImageHandler.CHANNEL_NAME,
+            ).setMethodCallHandler(handler)
+        }
         documentPreviewHandler?.close()
         documentPreviewHandler = HermesDocumentPreviewHandler(applicationContext).also { handler ->
             MethodChannel(
@@ -159,12 +179,65 @@ class MainActivity : FlutterFragmentActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             memoryChannelName,
         )
+        richNotificationsChannel?.let { HermesRichNotifications.detach(it) }
+        richNotificationsChannel =
+            MethodChannel(
+                flutterEngine.dartExecutor.binaryMessenger,
+                HermesRichNotifications.CHANNEL_NAME,
+            ).also { HermesRichNotifications.attach(applicationContext, it) }
+        stopNetworkAvailabilityEvents()
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            networkAvailabilityEventsName,
+        ).setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                    startNetworkAvailabilityEvents(events)
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    stopNetworkAvailabilityEvents()
+                }
+            },
+        )
+        val liveAudioEvents = HermesLiveAudioEvents(applicationContext)
+        liveAudioEvents.installFocusListener()
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "hermes/live_audio_events",
+        ).setStreamHandler(liveAudioEvents)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             platformInfoChannelName,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getSdkInt" -> result.success(Build.VERSION.SDK_INT)
+                "getPerformanceClass" -> {
+                    val activity =
+                        getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                    val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+                    result.success(
+                        mapOf(
+                            "lowRamDevice" to activity.isLowRamDevice,
+                            "powerSaveMode" to power.isPowerSaveMode,
+                        ),
+                    )
+                }
+                "getInstallerPackage" -> {
+                    val installer =
+                        try {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                packageManager.getInstallSourceInfo(packageName)
+                                    .installingPackageName
+                            } else {
+                                @Suppress("DEPRECATION")
+                                packageManager.getInstallerPackageName(packageName)
+                            }
+                        } catch (_: Exception) {
+                            null
+                        }
+                    result.success(installer)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -363,19 +436,6 @@ class MainActivity : FlutterFragmentActivity() {
                         result.success(isPackageInstalled(call.argument<String>("package") ?: ""))
                     "launch" ->
                         result.success(launchPackage(call.argument<String>("package") ?: ""))
-                    "runInTermux" ->
-                        result.success(
-                            runInTermux(
-                                call.argument<String>("command") ?: "",
-                                call.argument<Boolean>("background") ?: true
-                            )
-                        )
-                    "launchTermuxForeground" ->
-                        result.success(
-                            launchTermuxForeground(call.argument<String>("command") ?: "")
-                        )
-                    "probeTermux" ->
-                        probeTermux(call.argument<String>("command") ?: "", result)
                     "deviceInfo" -> result.success(deviceInfo())
                     "openAppSettings" -> result.success(openAppSettings())
                     else -> result.notImplemented()
@@ -384,6 +444,8 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     override fun onDestroy() {
+        richNotificationsChannel?.let { HermesRichNotifications.detach(it) }
+        richNotificationsChannel = null
         if (externalDataSyncStopReceiverRegistered) {
             unregisterReceiver(externalDataSyncStopReceiver)
             externalDataSyncStopReceiverRegistered = false
@@ -391,13 +453,43 @@ class MainActivity : FlutterFragmentActivity() {
         externalDataSyncChannel = null
         newSessionLaunchChannel = null
         memoryChannel = null
+        stopNetworkAvailabilityEvents()
         documentPreviewHandler?.close()
         documentPreviewHandler = null
+        clipboardImageHandler?.close()
+        clipboardImageHandler = null
         fullDuplexCaptureHandler?.close()
         fullDuplexCaptureHandler = null
         pcmStreamHandler?.close()
         pcmStreamHandler = null
         super.onDestroy()
+    }
+
+    private fun startNetworkAvailabilityEvents(events: EventChannel.EventSink) {
+        stopNetworkAvailabilityEvents()
+        networkAvailabilitySink = events
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        try {
+            connectivityManager.registerDefaultNetworkCallback(networkCallback)
+            networkCallbackRegistered = true
+        } catch (_: SecurityException) {
+            networkAvailabilitySink = null
+            events.error("network_state_unavailable", null, null)
+        }
+    }
+
+    private fun stopNetworkAvailabilityEvents() {
+        networkAvailabilitySink = null
+        if (!networkCallbackRegistered) return
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        try {
+            connectivityManager.unregisterNetworkCallback(networkCallback)
+        } catch (_: IllegalArgumentException) {
+            // The platform already removed the callback with the Activity.
+        }
+        networkCallbackRegistered = false
     }
 
     private fun deliverExternalDataSyncStop() {
@@ -481,21 +573,35 @@ class MainActivity : FlutterFragmentActivity() {
             ?.take(65536)
             .orEmpty()
         val text = when {
+            // Compartir un enlace pega solo el enlace: el título de la página
+            // (EXTRA_SUBJECT) no es lo que la persona quiso enviar.
+            SHARED_LINK_ONLY.matches(body) -> body
             subject.isEmpty() -> body
             body.isEmpty() -> subject
             body.startsWith(subject) -> body
             else -> "$subject\n\n$body"
         }
 
+        // En un compartido de texto (enlace, selección) los URI de EXTRA_STREAM
+        // y del ClipData son la vista previa que añade la app emisora (la
+        // miniatura de la página), no un archivo elegido por la persona. Un
+        // archivo de texto compartido sin cuerpo sí sigue adjuntándose.
+        val isTextShare = source.type?.startsWith("text/") == true
+        val streamsArePreview = source.action == Intent.ACTION_SEND &&
+            isTextShare &&
+            body.isNotEmpty()
+
         val uris = linkedSetOf<Uri>()
-        if (source.action == Intent.ACTION_SEND_MULTIPLE) {
-            uris.addAll(parcelableUriList(source))
-        } else {
-            parcelableUri(source)?.let(uris::add)
-        }
-        source.clipData?.let { clip ->
-            for (index in 0 until clip.itemCount.coerceAtMost(10)) {
-                clip.getItemAt(index).uri?.let(uris::add)
+        if (!streamsArePreview) {
+            if (source.action == Intent.ACTION_SEND_MULTIPLE) {
+                uris.addAll(parcelableUriList(source))
+            } else {
+                parcelableUri(source)?.let(uris::add)
+            }
+            source.clipData?.let { clip ->
+                for (index in 0 until clip.itemCount.coerceAtMost(10)) {
+                    clip.getItemAt(index).uri?.let(uris::add)
+                }
             }
         }
 
@@ -548,7 +654,7 @@ class MainActivity : FlutterFragmentActivity() {
         fallbackMime: String?,
         remainingBatchBytes: Long,
     ): Map<String, Any>? {
-        if (remainingBatchBytes <= 0L) return null
+        if (uri.scheme != "content" || remainingBatchBytes <= 0L) return null
         val mime = contentResolver.getType(uri)
             ?.takeIf { it.length <= 160 }
             ?: fallbackMime?.takeIf { it.length <= 160 }
@@ -653,6 +759,9 @@ class MainActivity : FlutterFragmentActivity() {
     companion object {
         private const val MAX_SHARE_ITEM_BYTES = 8L * 1024L * 1024L
         private const val MAX_SHARE_BATCH_BYTES = 24L * 1024L * 1024L
+
+        /** Un único enlace http(s) sin espacios ni saltos de línea. */
+        private val SHARED_LINK_ONLY = Regex("^https?://\\S+$", RegexOption.IGNORE_CASE)
     }
 
     private fun openAppSettings(): Boolean {
@@ -680,8 +789,7 @@ class MainActivity : FlutterFragmentActivity() {
         )
     }
 
-    // Bytes libres en /data (mismo sistema de ficheros que usa Termux), para el
-    // pre-flight de instalación del agente local.
+    // Bytes libres en el sistema de ficheros de los datos de la aplicación.
     private fun freeDiskBytes(): Long {
         return try {
             StatFs(filesDir.absolutePath).availableBytes
@@ -705,192 +813,6 @@ class MainActivity : FlutterFragmentActivity() {
         return try {
             val intent = packageManager.getLaunchIntentForPackage(pkg) ?: return false
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    // Lanza un comando en Termux vía el servicio RUN_COMMAND. Requiere que el
-    // usuario tenga Termux con `allow-external-apps=true` y conceda el permiso
-    // com.termux.permission.RUN_COMMAND; si no es posible, devuelve false y la
-    // UI ofrece reintento/cancelación.
-    //
-    // background=true: corre sin abrir terminal; la app
-    //   muestra el progreso leyendo el log por localhost). Es el modo normal.
-    // background=false existe por compatibilidad con Termux, pero la app no lo
-    //   usa en flujos de usuario.
-    // ¿Está concedido el permiso RUN_COMMAND de Termux?
-    private fun hasTermuxRunPermission(): Boolean =
-        ContextCompat.checkSelfPermission(this, termuxRunPermission) ==
-            PackageManager.PERMISSION_GRANTED
-
-    // Pide al sistema excluir a Termux del ahorro de batería (Doze / App
-    // Standby). Sin esto, Android congela com.termux y mata los procesos en
-    // background lanzados por RUN_COMMAND (gateway/dashboard del agente local)
-    // antes de que terminen de arrancar — el instalador se quedaba esperando la
-    // salida del wrapper indefinidamente. Best-effort: si ya está excluido o el
-    // diálogo no se puede mostrar, no hace nada.
-    @android.annotation.SuppressLint("BatteryLife")
-    private fun whitelistTermux() {
-        try {
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            if (!pm.isIgnoringBatteryOptimizations("com.termux")) {
-                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                intent.data = Uri.parse("package:com.termux")
-                startActivity(intent)
-            }
-        } catch (e: Exception) {
-            // ignorar: es una optimización best-effort, no bloquea el flujo.
-        }
-    }
-
-    @SuppressLint("SdCardPath") // Rutas contractuales de la API RUN_COMMAND de Termux.
-    private fun runInTermux(command: String, background: Boolean): Boolean {
-        if (command.isEmpty()) return false
-        // Antes de lanzar el RUN_COMMAND, asegurar que Termux no será congelado
-        // por App Standby mientras el proceso background corre (ver Bug 1).
-        if (background) whitelistTermux()
-        // Safety net: si el permiso no está concedido (p.ej. tras reinstalar el
-        // APK en desarrollo, donde se pierde el auto-grant), lo solicitamos en
-        // runtime de forma transparente y devolvemos false. El RunCommandService
-        // rechazaría el intent igualmente; tras conceder el permiso, al volver el
-        // foco a la app el flujo de instalación reintenta el RUN_COMMAND.
-        if (!hasTermuxRunPermission()) {
-            ActivityCompat.requestPermissions(
-                this, arrayOf(termuxRunPermission), termuxPermissionRequestCode
-            )
-            return false
-        }
-        return try {
-            val intent = Intent()
-            intent.setClassName("com.termux", "com.termux.app.RunCommandService")
-            intent.action = "com.termux.RUN_COMMAND"
-            intent.putExtra(
-                "com.termux.RUN_COMMAND_PATH",
-                "/data/data/com.termux/files/usr/bin/bash"
-            )
-            intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", command))
-            intent.putExtra(
-                "com.termux.RUN_COMMAND_WORKDIR",
-                "/data/data/com.termux/files/home"
-            )
-            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", background)
-            // SESSION_ACTION 0: cuando NO es background, abre/activa la sesión en
-            // primer plano para que el usuario vea la ejecución.
-            intent.putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0")
-            startServiceCompat(intent)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    // Ejecuta un comando CORTO en Termux y devuelve su stdout a Dart usando el
-    // PendingIntent de resultado de RUN_COMMAND. Es la única forma de SONDEAR el
-    // sistema de archivos de Termux desde la app (p. ej. saber si el agente
-    // Hermes está instalado aunque esté parado) sin servidor ni dependencias.
-    //
-    // Termux ejecuta el comando y, al terminar, envía un broadcast a nuestro
-    // PendingIntent con un Bundle "result" {stdout, stderr, exitCode}. Registramos
-    // un receiver efímero con acción única, esperamos con timeout y devolvemos el
-    // stdout (o null si Termux no responde / falta el permiso / se agota).
-    @SuppressLint("SdCardPath") // Rutas contractuales de la API RUN_COMMAND de Termux.
-    private fun probeTermux(command: String, result: MethodChannel.Result) {
-        if (command.isEmpty() || !hasTermuxRunPermission()) {
-            result.success(null)
-            return
-        }
-        val handler = android.os.Handler(mainLooper)
-        val action = "$packageName.TERMUX_PROBE_RESULT.${System.nanoTime()}"
-        val replied = java.util.concurrent.atomic.AtomicBoolean(false)
-        var receiverRef: BroadcastReceiver? = null
-
-        fun finish(stdout: String?) {
-            if (!replied.compareAndSet(false, true)) return
-            receiverRef?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
-            handler.post { result.success(stdout) }
-        }
-
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                val bundle = intent.getBundleExtra("result")
-                finish(bundle?.getString("stdout"))
-            }
-        }
-        receiverRef = receiver
-        try {
-            val filter = IntentFilter(action)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("UnspecifiedRegisterReceiverFlag")
-                registerReceiver(receiver, filter)
-            }
-        } catch (e: Exception) {
-            finish(null)
-            return
-        }
-        // Red de seguridad: si Termux nunca responde, no dejamos a Dart colgado.
-        handler.postDelayed({ finish(null) }, 8000)
-        try {
-            val piFlags = PendingIntent.FLAG_UPDATE_CURRENT or
-                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                    PendingIntent.FLAG_MUTABLE else 0)
-            val callback = PendingIntent.getBroadcast(
-                this, 0, Intent(action).setPackage(packageName), piFlags
-            )
-            val intent = Intent()
-            intent.setClassName("com.termux", "com.termux.app.RunCommandService")
-            intent.action = "com.termux.RUN_COMMAND"
-            intent.putExtra(
-                "com.termux.RUN_COMMAND_PATH",
-                "/data/data/com.termux/files/usr/bin/bash"
-            )
-            intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", command))
-            intent.putExtra(
-                "com.termux.RUN_COMMAND_WORKDIR",
-                "/data/data/com.termux/files/home"
-            )
-            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
-            intent.putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", callback)
-            startServiceCompat(intent)
-        } catch (e: Exception) {
-            finish(null)
-        }
-    }
-
-    private fun startServiceCompat(intent: Intent) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
-    }
-
-    // Abre Termux como ACTIVIDAD en primer plano (TermuxActivity) ejecutando un
-    // comando. Es la vía del BOOTSTRAP: TermuxActivity acepta los extras de
-    // comando aunque `allow-external-apps` aún no esté activo, al contrario que
-    // el RunCommandService (background), que lo exige. Se usa una sola vez para
-    // que el propio comando active la propiedad y devuelva el foco a la Consola.
-    @SuppressLint("SdCardPath") // Rutas contractuales de la API RUN_COMMAND de Termux.
-    private fun launchTermuxForeground(command: String): Boolean {
-        if (command.isEmpty()) return false
-        return try {
-            val intent = Intent()
-            intent.setClassName("com.termux", "com.termux.app.TermuxActivity")
-            intent.addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_NO_ANIMATION or
-                Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
-                Intent.FLAG_FROM_BACKGROUND
-            )
-            intent.putExtra(
-                "com.termux.RUN_COMMAND_PATH",
-                "/data/data/com.termux/files/usr/bin/bash"
-            )
-            intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", command))
             startActivity(intent)
             true
         } catch (e: Exception) {

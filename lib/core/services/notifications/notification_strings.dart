@@ -28,15 +28,14 @@ class NotifL10n {
 
   // ── Marca / genéricos ─────────────────────────────────────────────────────
   String get brand => 'Hermes';
-  String get agentTask => _('Tarea del agente', 'Agent task');
   String get privateTitle =>
       _('Nueva actividad en Hermes', 'New Hermes activity');
-  String get privateBody => _(
-    'Abre la aplicación para ver los detalles.',
-    'Open the app to view the details.',
-  );
-  String get groupSummaryBody =>
-      _('Tienes varios avisos recientes.', 'You have several recent alerts.');
+  String get privateBody => _('Toca para verla', 'Tap to see it');
+
+  /// Resumen del grupo con el número real de avisos activos (más concreto que
+  /// "varios" y estable a la vista en la bandeja).
+  String groupSummaryCount(int n) =>
+      _('$n avisos recientes', '$n recent alerts');
 
   // ── Canales (nombre + descripción) ────────────────────────────────────────
   String get chApprovals => _('Aprobaciones', 'Approvals');
@@ -60,28 +59,67 @@ class NotifL10n {
   String get chVoice => _('Modo voz', 'Voice mode');
   String get chVoiceDesc =>
       _('Estado del modo voz activo', 'Active voice mode status');
+  String get chOperations => _('Operaciones locales', 'Local operations');
+  String get chOperationsDesc => _(
+    'Progreso de operaciones locales que has iniciado',
+    'Progress of local operations you started',
+  );
 
   // ── Aprobaciones ──────────────────────────────────────────────────────────
   String get approvalTitle =>
       _('Hermes necesita tu atención', 'Hermes needs your attention');
-  String approvalBody(String tool, String where) => _(
-    'Abre Hermes para revisar una decisión pendiente.',
-    'Open Hermes to review a pending decision.',
-  );
+  String approvalBody(String tool, String where) =>
+      _('Toca para responder', 'Tap to answer');
 
   // ── Ejecuciones ───────────────────────────────────────────────────────────
-  String get runCompleted => _('Ejecución completada', 'Run completed');
-  String get runFailed => _('Ejecución con errores', 'Run failed');
-  String get cronCompleted => _('Cron completado', 'Cron completed');
-  String get cronFailed => _('Cron falló', 'Cron failed');
-  String get kanbanCompleted =>
-      _('Tarea de Kanban completada', 'Kanban task completed');
-  String get kanbanBlocked =>
-      _('Tarea de Kanban bloqueada', 'Kanban task blocked');
+  String get runCompleted => _('Terminó', 'Finished');
+  String get runFailed => _('No pudo terminar', 'Couldn’t finish');
+
+  // ── Actividad en otra superficie (Desktop / otra Console / TUI) ──────────
+  String get sessionActivityFinishedTitle =>
+      _('Terminó en otro dispositivo', 'Finished on another device');
+  String get sessionActivityFailedTitle =>
+      _('Falló en otro dispositivo', 'Failed on another device');
+  String get sessionActivityInterruptedTitle =>
+      _('Se detuvo en otro dispositivo', 'Stopped on another device');
+  String get sessionActivityBody =>
+      _('Toca para ver el resultado', 'Tap to see the result');
+
+  // ── Tarea en segundo plano (prompt.background / background.complete) ─────
+  String get backgroundTaskFinishedTitle =>
+      _('Terminó una tarea en segundo plano', 'A background task finished');
+  String get backgroundTaskFailedTitle =>
+      _('Falló una tarea en segundo plano', 'A background task failed');
+  String get backgroundTaskBody =>
+      _('Toca para ver el resultado', 'Tap to see the result');
+  String get cronCompleted =>
+      _('Tarea programada terminada', 'Scheduled task finished');
+  String get cronFailed =>
+      _('Falló una tarea programada', 'Scheduled task failed');
+  String get kanbanCompleted => _('Tarea terminada', 'Task done');
+  String get kanbanBlocked => _('Tarea bloqueada', 'Task blocked');
   String get kanbanNeedsAttention =>
-      _('Kanban necesita tu atención', 'Kanban needs your attention');
-  String get kanbanUpdated =>
-      _('Tarea de Kanban actualizada', 'Kanban task updated');
+      _('Una tarea te necesita', 'A task needs you');
+  String get kanbanUpdated => _('Tarea actualizada', 'Task updated');
+  String get kanbanCrashed => _(
+    'Una tarea falló y se va a reintentar',
+    'A task failed and will be retried',
+  );
+  String get kanbanTimedOut => _(
+    'Una tarea tardó demasiado y se va a reintentar',
+    'A task took too long and will be retried',
+  );
+  String get kanbanGaveUp => _('Tarea detenida', 'Task stopped');
+  String get kanbanBlockLoop =>
+      _('Una tarea necesita que decidas', 'A task needs your decision');
+
+  // ── Standing goals ────────────────────────────────────────────────────────
+  String get goalDone => _('Objetivo cumplido', 'Goal reached');
+  String get goalPaused => _('Objetivo en pausa', 'Goal paused');
+  String get goalBlocked => _('Objetivo bloqueado', 'Goal blocked');
+  String get goalWaiting => _('Objetivo en espera', 'Goal waiting');
+  String goalBody(String title) =>
+      title.isEmpty ? _('Sin título', 'Untitled') : title;
 
   // ── Respuestas ────────────────────────────────────────────────────────────
   String replyTitle(String? session) {
@@ -133,10 +171,10 @@ class NotifL10n {
   );
 
   // ── Prueba ────────────────────────────────────────────────────────────────
-  String get testTitle => 'Hermes Console';
+  String get testTitle => 'Console';
   String get testBody => _(
-    'Las notificaciones funcionan. Te avisaré de aprobaciones, ejecuciones y respuestas.',
-    'Notifications are working. I will notify you of approvals, runs and replies.',
+    'Las notificaciones funcionan. Te avisaré cuando Hermes termine o te necesite.',
+    'Notifications work. I’ll tell you when Hermes finishes or needs you.',
   );
 
   // ── Acciones ──────────────────────────────────────────────────────────────
@@ -150,12 +188,9 @@ class NotifL10n {
   );
   String get bgActive =>
       _('Activo en segundo plano', 'Active in the background');
-  String get bgPaused => _(
-    'Escucha pausada · abre Hermes para reanudar',
-    'Listening paused · open Hermes to resume',
-  );
-  String bgWatching(int n) =>
-      _('Vigilando $n ejecución(es)', 'Watching $n run(s)');
+
+  /// The fixed card while Console stays connected with the app closed.
+  String get bgConnected => _('Conectado a Hermes', 'Connected to Hermes');
   String get bgStop => _('Detener', 'Stop');
 
   // ── Modo voz (estados) ────────────────────────────────────────────────────

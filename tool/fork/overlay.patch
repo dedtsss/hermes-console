@@ -1,0 +1,494 @@
+diff --git a/.github/workflows/pr-quality.yml b/.github/workflows/pr-quality.yml
+index 3abb7f3..dca8620 100644
+--- a/.github/workflows/pr-quality.yml
++++ b/.github/workflows/pr-quality.yml
+@@ -1,6 +1,8 @@
+ name: Code Quality Checks
+ 
+ on:
++  workflow_dispatch:
++  # Manual fallback for fork CI diagnostics.
+   pull_request:
+     # Also the 1.2.15 integration and review-only bases, so reviewers see CI.
+     branches: [main, 'feat/**', 'review/**']
+@@ -26,6 +28,12 @@ jobs:
+           fetch-depth: 0
+           persist-credentials: false
+ 
++      - name: Verify RU translation and stable overlay
++        run: |
++          python3 tool/fork/localization.py check
++          python3 tool/fork/sync.py check-overlay
++          python3 tool/fork/check_identity.py
++
+       - name: Set up Flutter
+         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+         with:
+diff --git a/.github/workflows/review-core-label.yml b/.github/workflows/review-core-label.yml
+index 9687614..6b086d1 100644
+--- a/.github/workflows/review-core-label.yml
++++ b/.github/workflows/review-core-label.yml
+@@ -18,6 +18,7 @@ concurrency:
+ 
+ jobs:
+   classify:
++    if: github.repository == 'xP3ta/hermes-console'
+     name: Classify core paths
+     runs-on: ubuntu-24.04
+     timeout-minutes: 5
+diff --git a/AGENTS.md b/AGENTS.md
+index f770764..b958721 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -3,6 +3,8 @@
+ Read `docs/PROJECT_BRIEF.md`, `docs/SECURITY_POLICY.md` and
+ `docs/RELEASE_DISTRIBUTION.md` before changing release or distribution files.
+ 
++For this user-owned localization fork, also read `docs/FORK_POLICY.md` before changing package identity, localization, pairing/deep links, distribution, or upstream-sync behavior.
++
+ ## Non-negotiable channel separation
+ 
+ - Google Play accepts only the signed `play` AAB. Never commit it, attach it to
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+index fd99311..8e8725a 100644
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -25,10 +25,8 @@ android {
+    }
+ 
+    defaultConfig {
+-       // Identidad pública en Play (inmutable tras la primera publicación).
+-       // Propia de XPeta Lab para no colisionar con el package de Nous/Hermes.
+-       // El namespace interno no cambia: las clases Kotlin siguen donde están.
+-       applicationId = "dev.xpetalab.hermesconsole"
++       // Existing RU package: preserves updates and coexists with upstream.
++       applicationId = "io.github.dedtsss.hermesconsole"
+        minSdk = 24
+        targetSdk = 36
+        versionCode = flutter.versionCode
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index 9a7341e..d65dcc9 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -75,7 +75,7 @@
+         tools:node="remove" />
+     <application
+         android:name=".HermesApplication"
+-        android:label="Console"
++        android:label="@string/app_name"
+         android:icon="@mipmap/ic_launcher"
+         android:roundIcon="@mipmap/ic_launcher_round"
+         android:allowBackup="false"
+@@ -153,13 +153,13 @@
+              permiten proyectar un glifo limpio para el trabajo en segundo plano
+              y un orbe específico para la conversación de voz. -->
+         <meta-data
+-            android:name="dev.xpetalab.hermesconsole.service.NOTIFICATION_ICON"
++            android:name="io.github.dedtsss.hermesconsole.service.NOTIFICATION_ICON"
+             android:resource="@drawable/ic_stat_hermes" />
+         <meta-data
+-            android:name="dev.xpetalab.hermesconsole.voice.NOTIFICATION_ICON_ACTIVE"
++            android:name="io.github.dedtsss.hermesconsole.voice.NOTIFICATION_ICON_ACTIVE"
+             android:resource="@drawable/ic_stat_voice_orb_active" />
+         <meta-data
+-            android:name="dev.xpetalab.hermesconsole.voice.NOTIFICATION_ICON_PAUSED"
++            android:name="io.github.dedtsss.hermesconsole.voice.NOTIFICATION_ICON_PAUSED"
+             android:resource="@drawable/ic_stat_voice_orb_paused" />
+         <!-- Servicio Flutter de automatización y audio. La escucha usa
+              remoteMessaging en API >=35 y dataSync en API <=34;
+diff --git a/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesExternalDataSyncService.kt b/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesExternalDataSyncService.kt
+index 9977b19..9839d61 100644
+--- a/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesExternalDataSyncService.kt
++++ b/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesExternalDataSyncService.kt
+@@ -135,11 +135,11 @@ class HermesExternalDataSyncService : Service() {
+ 
+     companion object {
+         private const val ACTION_START =
+-            "dev.xpetalab.hermesconsole.action.START_EXTERNAL_DATA_SYNC"
++            "io.github.dedtsss.hermesconsole.action.START_EXTERNAL_DATA_SYNC"
+         private const val ACTION_STOP_REQUESTED =
+-            "dev.xpetalab.hermesconsole.action.STOP_EXTERNAL_DATA_SYNC"
++            "io.github.dedtsss.hermesconsole.action.STOP_EXTERNAL_DATA_SYNC"
+         const val ACTION_OWNER_STOP_REQUIRED =
+-            "dev.xpetalab.hermesconsole.action.EXTERNAL_DATA_SYNC_OWNER_STOP_REQUIRED"
++            "io.github.dedtsss.hermesconsole.action.EXTERNAL_DATA_SYNC_OWNER_STOP_REQUIRED"
+         private const val CHANNEL_ID = "hermes_external_data_sync"
+         private const val NOTIFICATION_ID = 257
+         private const val CONTROL_PREFS = "hermes_external_data_sync_control"
+diff --git a/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesRichNotifications.kt b/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesRichNotifications.kt
+index 65b485e..b5f204c 100644
+--- a/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesRichNotifications.kt
++++ b/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesRichNotifications.kt
+@@ -1898,7 +1898,7 @@ internal object HermesNotificationActionInbox {
+  */
+ class HermesNotificationActionReceiver : BroadcastReceiver() {
+     companion object {
+-        const val ACTION = "dev.xpetalab.hermesconsole.action.RICH_NOTIFICATION"
++        const val ACTION = "io.github.dedtsss.hermesconsole.action.RICH_NOTIFICATION"
+         const val EXTRA_ACTION_ID = "rich_action_id"
+         const val EXTRA_PAYLOAD = "rich_payload"
+         const val EXTRA_NOTIFICATION_ID = "rich_notification_id"
+diff --git a/android/app/src/main/kotlin/com/hermesagent/hermes_android/NewSessionLaunchContract.kt b/android/app/src/main/kotlin/com/hermesagent/hermes_android/NewSessionLaunchContract.kt
+index 014ae74..425ee12 100644
+--- a/android/app/src/main/kotlin/com/hermesagent/hermes_android/NewSessionLaunchContract.kt
++++ b/android/app/src/main/kotlin/com/hermesagent/hermes_android/NewSessionLaunchContract.kt
+@@ -28,13 +28,13 @@ internal fun parseNewSessionLaunchTarget(raw: String?): NewSessionLaunchTarget?
+  * fields.
+  */
+ object NewSessionLaunchContract {
+-    const val ACTION_NEW_SESSION = "dev.xpetalab.hermesconsole.action.NEW_SESSION"
+-    const val ACTION_NEW_SESSION_CAMERA = "dev.xpetalab.hermesconsole.action.NEW_SESSION_CAMERA"
+-    const val ACTION_NEW_SESSION_GALLERY = "dev.xpetalab.hermesconsole.action.NEW_SESSION_GALLERY"
+-    const val ACTION_NEW_SESSION_VOICE = "dev.xpetalab.hermesconsole.action.NEW_SESSION_VOICE"
+-    const val ACTION_OPEN_APP = "dev.xpetalab.hermesconsole.action.OPEN_APP"
+-    const val ACTION_OPEN_SESSION = "dev.xpetalab.hermesconsole.action.OPEN_SESSION"
+-    const val ACTION_OPEN_SETUP = "dev.xpetalab.hermesconsole.action.OPEN_SETUP"
++    const val ACTION_NEW_SESSION = "io.github.dedtsss.hermesconsole.action.NEW_SESSION"
++    const val ACTION_NEW_SESSION_CAMERA = "io.github.dedtsss.hermesconsole.action.NEW_SESSION_CAMERA"
++    const val ACTION_NEW_SESSION_GALLERY = "io.github.dedtsss.hermesconsole.action.NEW_SESSION_GALLERY"
++    const val ACTION_NEW_SESSION_VOICE = "io.github.dedtsss.hermesconsole.action.NEW_SESSION_VOICE"
++    const val ACTION_OPEN_APP = "io.github.dedtsss.hermesconsole.action.OPEN_APP"
++    const val ACTION_OPEN_SESSION = "io.github.dedtsss.hermesconsole.action.OPEN_SESSION"
++    const val ACTION_OPEN_SETUP = "io.github.dedtsss.hermesconsole.action.OPEN_SETUP"
+     const val CHANNEL_NAME = "hermes/new_session_launch"
+     const val CONTRACT_VERSION = 1
+ 
+diff --git a/android/app/src/main/res/values/new_session_widget.xml b/android/app/src/main/res/values/new_session_widget.xml
+index 020f2b1..eb8f8f9 100644
+--- a/android/app/src/main/res/values/new_session_widget.xml
++++ b/android/app/src/main/res/values/new_session_widget.xml
+@@ -6,5 +6,5 @@
+     <string name="new_session_shortcut_long_label">Start a new Hermes conversation</string>
+     <string name="hermes_widget_not_configured">Not configured</string>
+     <string name="hermes_widget_setup_action">Set up Hermes</string>
+-    <string name="new_session_target_package" translatable="false">dev.xpetalab.hermesconsole</string>
++    <string name="new_session_target_package" translatable="false">io.github.dedtsss.hermesconsole</string>
+ </resources>
+diff --git a/android/app/src/main/res/values/strings.xml b/android/app/src/main/res/values/strings.xml
+index ad4b891..7131b63 100644
+--- a/android/app/src/main/res/values/strings.xml
++++ b/android/app/src/main/res/values/strings.xml
+@@ -1,5 +1,6 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
++    <string name="app_name">Hermes Console RU</string>
+     <string name="voice_notification_title">Hermes Voice</string>
+     <string name="voice_notification_active">Listening</string>
+     <string name="voice_notification_paused">Paused</string>
+diff --git a/android/app/src/main/res/xml/shortcuts.xml b/android/app/src/main/res/xml/shortcuts.xml
+index 4cb43d1..eb90b4b 100644
+--- a/android/app/src/main/res/xml/shortcuts.xml
++++ b/android/app/src/main/res/xml/shortcuts.xml
+@@ -7,7 +7,7 @@
+         android:shortcutLongLabel="@string/new_session_shortcut_long_label"
+         android:shortcutShortLabel="@string/new_session_shortcut_short_label">
+         <intent
+-            android:action="dev.xpetalab.hermesconsole.action.NEW_SESSION"
++            android:action="io.github.dedtsss.hermesconsole.action.NEW_SESSION"
+             android:targetClass="com.hermesagent.hermes_android.MainActivity"
+             android:targetPackage="@string/new_session_target_package">
+             <extra
+diff --git a/android/app/src/qa/AndroidManifest.xml b/android/app/src/qa/AndroidManifest.xml
+index 485f791..d416952 100644
+--- a/android/app/src/qa/AndroidManifest.xml
++++ b/android/app/src/qa/AndroidManifest.xml
+@@ -1,7 +1,7 @@
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:tools="http://schemas.android.com/tools">
+     <application
+-        android:label="Console QA"
++        android:label="@string/app_name_qa"
+         tools:replace="android:label">
+         <!-- QA-only: renders the real launcher widgets with sample data to PNG. -->
+         <activity
+diff --git a/android/app/src/qa/res/values/new_session_widget.xml b/android/app/src/qa/res/values/new_session_widget.xml
+index 3b759d3..ff1f933 100644
+--- a/android/app/src/qa/res/values/new_session_widget.xml
++++ b/android/app/src/qa/res/values/new_session_widget.xml
+@@ -1,4 +1,5 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
+-    <string name="new_session_target_package" translatable="false">dev.xpetalab.hermesconsole.qa</string>
++    <string name="app_name_qa">Hermes Console RU QA</string>
++    <string name="new_session_target_package" translatable="false">io.github.dedtsss.hermesconsole.qa</string>
+ </resources>
+diff --git a/docs/RELEASE_DISTRIBUTION.md b/docs/RELEASE_DISTRIBUTION.md
+index 7f1e71d..683e142 100644
+--- a/docs/RELEASE_DISTRIBUTION.md
++++ b/docs/RELEASE_DISTRIBUTION.md
+@@ -1,5 +1,11 @@
+ # Release and distribution
+ 
++> RU fork: this document and `tool/release/release_contract.json` describe the
++> upstream release policy. Upstream certificate, source actor and Play anchors
++> are not authority for `io.github.dedtsss.hermesconsole`. Preserve the existing
++> RU signer/alias and follow [STABLE_UPSTREAM_SYNC.md](STABLE_UPSTREAM_SYNC.md)
++> for fork CI and the separate owner-approved release boundary.
++
+ Hermes Console has three Android flavors built from one reviewed source commit.
+ A flavor name is a security boundary, not a rename operation.
+ 
+diff --git a/lib/core/services/install_source.dart b/lib/core/services/install_source.dart
+index 5ce9e16..7225daf 100644
+--- a/lib/core/services/install_source.dart
++++ b/lib/core/services/install_source.dart
+@@ -1,16 +1,12 @@
+ import 'package:flutter/foundation.dart';
+ import 'package:flutter/services.dart';
+ 
+-/// Where this build receives updates from. Play and GitHub/Obtainium builds
+-/// are signed with different keys, so Android refuses to update one with the
+-/// other ("App not installed") — switching channel requires uninstalling.
++/// The installer is displayed for information; RU updates stay in this fork.
+ enum InstallSource { googlePlay, githubObtainium, manual }
+ 
+ abstract final class InstallSourceInfo {
+-  static const playListingUrl =
+-      'https://play.google.com/store/apps/details?id=dev.xpetalab.hermesconsole';
+   static const githubReleasesUrl =
+-      'https://github.com/xP3ta/hermes-console/releases';
++      'https://github.com/dedtsss/hermes-console/releases';
+ 
+   static const _channel = MethodChannel('hermes/platform_info');
+ 
+@@ -44,6 +40,5 @@ abstract final class InstallSourceInfo {
+     return classify(installer);
+   }
+ 
+-  static String updateUrl(InstallSource source) =>
+-      source == InstallSource.googlePlay ? playListingUrl : githubReleasesUrl;
++  static String updateUrl(InstallSource source) => githubReleasesUrl;
+ }
+diff --git a/lib/core/services/notifications/background_listener.dart b/lib/core/services/notifications/background_listener.dart
+index 3045135..0a6ae50 100644
+--- a/lib/core/services/notifications/background_listener.dart
++++ b/lib/core/services/notifications/background_listener.dart
+@@ -2929,11 +2929,11 @@ class BackgroundListener {
+   static const String readAloudEndButtonId = 'read_aloud_end';
+ 
+   static const String _serviceIconMeta =
+-      'dev.xpetalab.hermesconsole.service.NOTIFICATION_ICON';
++      'io.github.dedtsss.hermesconsole.service.NOTIFICATION_ICON';
+   static const String _voiceActiveIconMeta =
+-      'dev.xpetalab.hermesconsole.voice.NOTIFICATION_ICON_ACTIVE';
++      'io.github.dedtsss.hermesconsole.voice.NOTIFICATION_ICON_ACTIVE';
+   static const String _voicePausedIconMeta =
+-      'dev.xpetalab.hermesconsole.voice.NOTIFICATION_ICON_PAUSED';
++      'io.github.dedtsss.hermesconsole.voice.NOTIFICATION_ICON_PAUSED';
+ 
+   static const NotificationIcon _serviceNotificationIcon = NotificationIcon(
+     metaDataName: _serviceIconMeta,
+diff --git a/lib/core/widgets/install_source_section.dart b/lib/core/widgets/install_source_section.dart
+index 18788d6..dc6b857 100644
+--- a/lib/core/widgets/install_source_section.dart
++++ b/lib/core/widgets/install_source_section.dart
+@@ -43,7 +43,6 @@ class _InstallSourceSectionState extends State<InstallSourceSection> {
+       InstallSource.manual => s.aboutUpdatesManual,
+       null => '…',
+     };
+-    final isPlay = source == InstallSource.googlePlay;
+     return Column(
+       crossAxisAlignment: CrossAxisAlignment.stretch,
+       children: [
+@@ -61,9 +60,7 @@ class _InstallSourceSectionState extends State<InstallSourceSection> {
+                 key: const ValueKey('install-source-open'),
+                 icon: Icons.open_in_new_rounded,
+                 iconColor: colors.accentText,
+-                title: isPlay
+-                    ? s.aboutUpdatesOpenPlay
+-                    : s.aboutUpdatesOpenReleases,
++                title: s.aboutUpdatesOpenReleases,
+                 showChevron: false,
+                 onTap: () => launchUrl(
+                   Uri.parse(InstallSourceInfo.updateUrl(source)),
+diff --git a/lib/main.dart b/lib/main.dart
+index 4643adb..8fe0b15 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -540,6 +540,7 @@ class AppLocales {
+     AppLocaleOption('system', 'Sistema', null),
+     AppLocaleOption('es', 'Español', Locale('es')),
+     AppLocaleOption('en', 'English', Locale('en')),
++    AppLocaleOption('ru', 'Русский', Locale('ru')),
+   ];
+ 
+   static AppLocaleOption byId(String? id) =>
+@@ -3103,7 +3104,7 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
+           builder: (context, font, _) => ValueListenableBuilder<String>(
+             valueListenable: localeId,
+             builder: (context, locId, _) => MaterialApp(
+-              title: 'Console',
++              title: 'Hermes Console RU',
+               debugShowCheckedModeBanner: false,
+               // Scroll con inercia (coasting) en toda la app: un flick sigue
+               // rodando y frena solo, en vez del frenazo seco de Material.
+@@ -3111,13 +3112,10 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
+               locale: AppLocales.byId(locId).locale,
+               localizationsDelegates: Strings.localizationsDelegates,
+               supportedLocales: Strings.supportedLocales,
+-              // El único idioma completo además del inglés es el español: si el
+-              // sistema (o la elección manual) es español lo usamos; en cualquier
+-              // otro caso caemos a inglés, nunca a un español a medias. Cubre los
+-              // tres casos: elección manual 'es'/'en' y modo "Sistema" (locale
+-              // nulo → llega el idioma del dispositivo).
++              // RU remains complete; the source gate rejects missing translations.
+               localeResolutionCallback: (locale, supported) {
+                 if (locale?.languageCode == 'es') return const Locale('es');
++                if (locale?.languageCode == 'ru') return const Locale('ru');
+                 return const Locale('en');
+               },
+               theme: AppFonts.applyToTheme(activeTheme, AppFonts.byId(font)),
+diff --git a/test/design/install_source_test.dart b/test/design/install_source_test.dart
+index 74803d8..0f531a3 100644
+--- a/test/design/install_source_test.dart
++++ b/test/design/install_source_test.dart
+@@ -30,16 +30,16 @@ void main() {
+     );
+     expect(
+       InstallSourceInfo.updateUrl(InstallSource.googlePlay),
+-      contains('id=dev.xpetalab.hermesconsole'),
++      'https://github.com/dedtsss/hermes-console/releases',
+     );
+     expect(
+       InstallSourceInfo.updateUrl(InstallSource.manual),
+-      'https://github.com/xP3ta/hermes-console/releases',
++      'https://github.com/dedtsss/hermes-console/releases',
+     );
+   });
+ 
+   for (final (source, label, button) in const [
+-    (InstallSource.googlePlay, 'Google Play', 'Abrir en Google Play'),
++    (InstallSource.googlePlay, 'Google Play', 'Abrir versiones en GitHub'),
+     (
+       InstallSource.githubObtainium,
+       'GitHub / Obtainium',
+diff --git a/test/diagnostic_bundle_service_test.dart b/test/diagnostic_bundle_service_test.dart
+index 0f2f494..50e394e 100644
+--- a/test/diagnostic_bundle_service_test.dart
++++ b/test/diagnostic_bundle_service_test.dart
+@@ -43,7 +43,7 @@ void main() {
+       'prompt ultra secreto',
+       'respuesta privada del agente',
+       'tool output confidencial',
+-      '/data/user/0/dev.xpetalab.hermesconsole.qa/cache/private.png',
++      '/data/user/0/io.github.dedtsss.hermesconsole.qa/cache/private.png',
+       '/home/demo/.hermes/cache/images/private.png',
+       r'C:\Users\Server\private.png',
+       'private-attachment.png',
+@@ -78,7 +78,7 @@ void main() {
+       attachments: const [
+         AttachmentDraft(
+           localPath:
+-              '/data/user/0/dev.xpetalab.hermesconsole.qa/cache/private.png',
++              '/data/user/0/io.github.dedtsss.hermesconsole.qa/cache/private.png',
+           name: 'private-attachment.png',
+           mimeType: 'image/png',
+           sizeBytes: 123,
+diff --git a/test/l10n_catalog_parity_test.dart b/test/l10n_catalog_parity_test.dart
+index 7e16689..f47fb99 100644
+--- a/test/l10n_catalog_parity_test.dart
++++ b/test/l10n_catalog_parity_test.dart
+@@ -4,6 +4,7 @@ import 'dart:io';
+ import 'package:flutter_test/flutter_test.dart';
+ import 'package:hermes_android/l10n/app_localizations_en.dart';
+ import 'package:hermes_android/l10n/app_localizations_es.dart';
++import 'package:hermes_android/l10n/app_localizations_ru.dart';
+ 
+ Map<String, Object?> _readCatalog(String path) =>
+     jsonDecode(File(path).readAsStringSync()) as Map<String, Object?>;
+@@ -11,30 +12,61 @@ Map<String, Object?> _readCatalog(String path) =>
+ Set<String> _messageKeys(Map<String, Object?> catalog) =>
+     catalog.keys.where((key) => !key.startsWith('@')).toSet();
+ 
+-Set<String> _placeholders(Object? message) => RegExp(
+-  r'\{([A-Za-z][A-Za-z0-9_]*)\s*(?:\}|,)',
+-).allMatches(message as String).map((match) => match.group(1)!).toSet();
++Set<String> _placeholders(Object? message) =>
++    RegExp(r'\{([A-Za-z][A-Za-z0-9_]*)\s*(?:\}|,)')
++        .allMatches(message as String)
++        .map((match) => match.group(1)!)
++        .toSet();
+ 
+ void main() {
+-  test(
+-    'los catálogos español e inglés tienen las mismas claves y variables',
+-    () {
+-      final es = _readCatalog('lib/l10n/app_es.arb');
+-      final en = _readCatalog('lib/l10n/app_en.arb');
++  test('Spanish retains the English canonical message contract', () {
++    final en = _readCatalog('lib/l10n/app_en.arb');
++    final es = _readCatalog('lib/l10n/app_es.arb');
+ 
+-      // app_es.arb es la plantilla de gen-l10n y por eso conserva más entradas
+-      // @metadata. El contrato traducible son las claves de mensaje sin @.
+-      expect(_messageKeys(en), _messageKeys(es));
+-
+-      for (final key in _messageKeys(es)) {
+-        expect(
+-          _placeholders(en[key]),
+-          _placeholders(es[key]),
+-          reason: 'Los placeholders de $key deben coincidir en ES/EN',
+-        );
+-      }
+-    },
+-  );
++    expect(_messageKeys(es), _messageKeys(en));
++    for (final key in _messageKeys(en)) {
++      expect(
++        _placeholders(es[key]),
++        _placeholders(en[key]),
++        reason: 'Placeholders of $key must match EN/ES',
++      );
++    }
++  });
++
++  test('Russian implements all source keys and typed placeholder metadata', () {
++    final es = _readCatalog('lib/l10n/app_es.arb');
++    final en = _readCatalog('lib/l10n/app_en.arb');
++    final ru = _readCatalog('lib/l10n/app_ru.arb');
++
++    expect(_messageKeys(ru), _messageKeys(en));
++    expect(ru['@@locale'], 'ru');
++
++    for (final key in _messageKeys(en)) {
++      expect(
++        (ru[key] as String).trim(),
++        isNotEmpty,
++        reason: 'Russian translation for $key must not be blank',
++      );
++      expect(
++        _placeholders(ru[key]),
++        _placeholders(en[key]),
++        reason: 'Placeholders of $key must match EN/RU',
++      );
++      expect(
++        (ru['@$key'] as Map<String, Object?>?)?['placeholders'],
++        (es['@$key'] as Map<String, Object?>?)?['placeholders'],
++        reason: 'Placeholder metadata of $key must match source ES/RU',
++      );
++    }
++  });
++
++  test('Russian generated catalog resolves new copy and typed plurals', () {
++    final ru = StringsRu();
++    expect(ru.commonCancel, 'Отмена');
++    expect(ru.o2WelcomeTitle, 'Подключитесь к своему Hermes');
++    expect(ru.chaBackgroundWorkRemaining(1), contains('1 фоновая задача'));
++    expect(ru.chaBackgroundWorkRemaining(5), contains('5'));
++  });
+ 
+   test(
+     'Notificaciones conserva la misma mayúscula inicial que cada pantalla',
+diff --git a/test/new_session_android_resources_test.dart b/test/new_session_android_resources_test.dart
+index f01b497..14a9d11 100644
+--- a/test/new_session_android_resources_test.dart
++++ b/test/new_session_android_resources_test.dart
+@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
+ 
+ void main() {
+   test('shortcut and widget use collision-free secret-free native actions', () {
+-    const action = 'dev.xpetalab.hermesconsole.action.NEW_SESSION';
++    const action = 'io.github.dedtsss.hermesconsole.action.NEW_SESSION';
+     final shortcut = File(
+       'android/app/src/main/res/xml/shortcuts.xml',
+     ).readAsStringSync();

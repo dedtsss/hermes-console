@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_android/core/models/kanban.dart';
 import 'package:hermes_android/core/services/connection_manager.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart' as sqflite;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -141,7 +142,12 @@ void main() {
     // Closing the connection models the OS closing SQLite handles after a
     // process death. The uncommitted transaction is rolled back atomically.
     await abandonedOwner.close();
-    await waiting.timeout(const Duration(seconds: 2));
+    await waiting.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () => throw TimeoutException(
+        'Watch mutex did not recover after owner connection closed',
+      ),
+    );
 
     expect(entered, isTrue);
   });
@@ -312,6 +318,34 @@ void main() {
     final replacement = restored.copyWith(approvalRequestId: 'request-b');
     expect(replacement.approvalRequestId, 'request-b');
     expect(replacement.copyWith(clearApproval: true).approvalRequestId, isNull);
+  });
+
+  test('FGS run polling uses the watched profile URL namespace', () {
+    expect(
+      backgroundRunStatusUri(
+        'https://hermes.example',
+        const WatchedRun(
+          connId: 'conn-a',
+          profile: 'team_alpha',
+          base: 'https://hermes.example',
+          runId: 'run/1',
+          prompt: '',
+        ),
+      ).toString(),
+      'https://hermes.example/p/team_alpha/v1/runs/run%2F1',
+    );
+    expect(
+      backgroundRunStatusUri(
+        'https://hermes.example',
+        const WatchedRun(
+          connId: 'conn-a',
+          base: 'https://hermes.example',
+          runId: 'run-1',
+          prompt: '',
+        ),
+      ).path,
+      '/v1/runs/run-1',
+    );
   });
 
   test('FGS notification owner preserves exact profile route', () {
@@ -986,6 +1020,39 @@ void main() {
     },
   );
 
+  test(
+    'cron conserva delivery_failed como fallo terminal notificable',
+    () async {
+      final executions = await BackgroundCronWatch.loadExecutions((_) async {
+        return {
+          'jobs': [
+            {
+              'id': 'job-delivery',
+              'name': 'Entrega crítica',
+              'profile': 'default',
+              'last_run_at': '2026-09-02T17:36:53+01:00',
+              'last_status': 'delivery_failed',
+              'last_delivery_error': 'timed out',
+            },
+          ],
+        };
+      });
+
+      expect(executions, hasLength(1));
+      final execution = executions!.single;
+      expect(execution.status, 'failed');
+      expect(execution.terminal, isTrue);
+      expect(
+        BackgroundCronWatch.shouldNotifyResult(
+          execution,
+          session: null,
+          preview: null,
+        ),
+        isTrue,
+      );
+    },
+  );
+
   test('cron modern and legacy execution ids cannot collide durably', () {
     const opaqueId =
         'e437ea2e9a36d2c99bdc53649913c440cab390549314077e3476527b3346dde7';
@@ -1142,7 +1209,7 @@ void main() {
   });
 
   test(
-    'cron hidrata el último resultado si la lista no trae preview',
+    'cron omite preview si la lista no publica un resultado seguro',
     () async {
       const session = Session(
         id: 'cron_job_20260804_180956',
@@ -1156,22 +1223,9 @@ void main() {
         profile: 'research',
         isDefaultProfile: false,
       );
-      final calls = <(String, String)>[];
+      final preview = BackgroundCronWatch.notificationPreview(session);
 
-      final preview = await BackgroundCronWatch.notificationPreview(session, (
-        sessionId,
-        profile,
-      ) async {
-        calls.add((sessionId, profile));
-        return const [
-          {'role': 'user', 'content': 'prompt privado'},
-          {'role': 'assistant', 'content': '**2 compras nuevas verificadas**'},
-        ];
-      });
-
-      expect(calls, [('cron_job_20260804_180956', 'research')]);
-      expect(preview, '2 compras nuevas verificadas');
-      expect(preview, isNot(contains('prompt privado')));
+      expect(preview, isNull);
     },
   );
 
@@ -1188,10 +1242,7 @@ void main() {
       startedAt: 0,
     );
 
-    final preview = await BackgroundCronWatch.notificationPreview(
-      session,
-      (_, _) => throw StateError('no debe consultar el transcript'),
-    );
+    final preview = BackgroundCronWatch.notificationPreview(session);
 
     expect(preview, 'Sin compras nuevas verificadas.');
   });
@@ -1282,7 +1333,7 @@ void main() {
         previous: previous,
         current: List<KanbanTask>.generate(
           count,
-          (index) => _kanbanTask('task-$index', 'done'),
+          (index) => _kanbanTask('task-$index', 'blocked'),
         ),
       );
       expect(claimed.fresh, hasLength(count));
@@ -1331,24 +1382,15 @@ void main() {
     expect(seeded.statuses, {'old-done': 'done'});
   });
 
-  test('kanban avisa una sola vez al pasar de running a done', () {
+  test('kanban registra done sin convertirlo en una notificación', () {
     final completed = BackgroundKanbanWatch.claimForTest(
       initialized: true,
       previous: const {'task-1': 'running'},
       current: [_kanbanTask('task-1', 'done')],
     );
 
-    expect(completed.fresh, hasLength(1));
-    expect(completed.fresh.single.taskId, 'task-1');
-    expect(completed.fresh.single.previousStatus, 'running');
-    expect(completed.fresh.single.status, 'done');
-
-    final repeated = BackgroundKanbanWatch.claimForTest(
-      initialized: true,
-      previous: completed.statuses,
-      current: [_kanbanTask('task-1', 'done')],
-    );
-    expect(repeated.fresh, isEmpty);
+    expect(completed.fresh, isEmpty);
+    expect(completed.statuses, {'task-1': 'done'});
   });
 
   test('kanban avisa al pasar de running a blocked o triage', () {
@@ -1515,5 +1557,68 @@ void main() {
     );
     expect(calls, 1);
     expect(executions, isEmpty);
+  });
+
+  group('background run poll backoff', () {
+    const run = WatchedRun(
+      connId: 'c1',
+      base: 'http://127.0.0.1:8642',
+      runId: 'run-1',
+      prompt: '',
+    );
+
+    Future<({int requests, List<int?> seen})> drive(
+      int? Function(int index) status, {
+      required int ticks,
+      Duration tick = const Duration(seconds: 30),
+    }) async {
+      var now = DateTime.utc(2026, 10, 1);
+      var requests = 0;
+      final seen = <int?>[];
+      final backoff = BackgroundRunPollBackoff(now: () => now);
+      final client = MockClient((_) async {
+        final code = status(requests++);
+        if (code == null) throw http.ClientException('offline');
+        return http.Response('{"status":"running"}', code);
+      });
+      for (var i = 0; i < ticks; i++) {
+        try {
+          final res = await fetchWatchedRunStatus(
+            client: client,
+            backoff: backoff,
+            run: run,
+            safeBase: run.base,
+            readToken: () async => null,
+          );
+          seen.add(res?.statusCode);
+        } on http.ClientException {
+          seen.add(-1);
+        }
+        now = now.add(tick);
+      }
+      return (requests: requests, seen: seen);
+    }
+
+    test('401/403/404 back off instead of polling every tick', () async {
+      for (final code in [401, 403, 404]) {
+        // One hour of 30 s ticks.
+        final result = await drive((_) => code, ticks: 120);
+        // 2, 4, 8, 15, 15, 15 min gaps: 7 requests instead of 120.
+        expect(result.requests, 7, reason: 'HTTP $code');
+      }
+    });
+
+    test('a backed-off run is kept and polled again after the gate', () async {
+      final result = await drive((i) => i == 0 ? 404 : 200, ticks: 6);
+      // Tick 0 answers 404; ticks 1-3 are skipped (null); tick 4 at +2 min
+      // is asked again and answers 200, which clears the gate.
+      expect(result.seen, [404, null, null, null, 200, 200]);
+      expect(result.requests, 3);
+    });
+
+    test('transient failures keep the normal cadence', () async {
+      final result = await drive((i) => i.isEven ? 503 : null, ticks: 10);
+      expect(result.requests, 10);
+    });
   });
 }

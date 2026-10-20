@@ -1,17 +1,51 @@
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:hermes_android/core/services/bridge_client.dart';
+import 'package:hermes_android/core/models/core_read.dart';
 import 'package:hermes_android/core/services/connection_manager.dart';
 import 'package:hermes_android/core/services/session_repository.dart';
+import 'package:hermes_android/core/utils/byte_bounded_lru_cache.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  // Dashboard page tokens are shared per base URL across clients.
+  setUp(DashboardClient.resetSharedPasswordSessionsForTesting);
+  // `_loadApiKeys` now reads Keystore for every connection without a plaintext
+  // key (not just migrating ones), and a storage failure there aborts init
+  // instead of being swallowed as corrupt metadata — see connection_manager.dart.
+  // Without this mock, that read throws MissingPluginException in every test
+  // that constructs a ConnectionManager, regardless of what it's testing.
+  final secureStorageValues = <String, String>{};
+  setUp(() {
+    secureStorageValues.clear();
+    TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
+          (call) async {
+            final args = (call.arguments as Map).cast<String, dynamic>();
+            final key = args['key'] as String?;
+            switch (call.method) {
+              case 'read':
+                return secureStorageValues[key];
+              case 'readAll':
+                return Map<String, String>.of(secureStorageValues);
+              case 'write':
+                secureStorageValues[key!] = args['value'] as String;
+              case 'delete':
+                secureStorageValues.remove(key);
+            }
+            return null;
+          },
+        );
+  });
   group('SavedConnection', () {
     test('normalizes bare HTTP gateway hosts with fallback port', () {
       final normalized = SavedConnection.normalizeHostAndPort(
@@ -77,7 +111,7 @@ void main() {
         expect(conn.copyWith(label: 'otro').onDeviceLoopback, isTrue);
         // El loopback on-device NO se reescribe a 10.0.2.2.
         expect(conn.baseUrl, 'http://127.0.0.1:9119');
-        expect(conn.derivedBridgeUrl, 'http://127.0.0.1:9131');
+        expect(conn.gatewayUrl, 'http://127.0.0.1:9119');
       },
     );
 
@@ -355,7 +389,13 @@ void main() {
 
       await expectLater(
         client.getMessages('stored-chat'),
-        throwsA(isA<FormatException>()),
+        throwsA(
+          isA<CoreReadException>().having(
+            (error) => error.kind,
+            'kind',
+            CoreReadErrorKind.malformed,
+          ),
+        ),
       );
     });
 
@@ -398,6 +438,7 @@ void main() {
         expect(requests.single.url.path, '/api/sessions');
         expect(requests.single.url.queryParameters, {
           'limit': '200',
+          'offset': '0',
           'include_children': 'true',
         });
         expect(sessions.map((session) => session.id), [
@@ -630,6 +671,55 @@ void main() {
             return http.Response('unauthorized', 401);
           }
           return http.Response('not found', 404);
+        }),
+      );
+
+      expect(await client.healthCheck(), isFalse);
+      client.close();
+    });
+
+    // #1215: /health answers 200 while the server is busy streaming large
+    // transcripts; the authenticated probe can time out or return 5xx. That
+    // is a slow server, not a missing one, and the library must not flip to
+    // "no gateway connection" for it.
+    for (final outcome in ['503', '429', 'timeout', 'reset']) {
+      test('healthCheck keeps a reachable server online when the auth probe '
+          'is slow or overloaded ($outcome)', () async {
+        final client = ApiClient(
+          baseUrl: 'http://hermes.local:8642',
+          apiKey: 'valid-key',
+          httpClient: MockClient((request) async {
+            if (request.url.path == '/health') {
+              return http.Response('{}', 200);
+            }
+            if (request.url.path == '/api/sessions') {
+              switch (outcome) {
+                case 'timeout':
+                  throw TimeoutException('slow list');
+                case 'reset':
+                  throw http.ClientException('connection reset');
+                default:
+                  return http.Response('busy', int.parse(outcome));
+              }
+            }
+            return http.Response('not found', 404);
+          }),
+        );
+
+        expect(await client.healthCheck(), isTrue);
+        client.close();
+      });
+    }
+
+    test('healthCheck still fails when /health itself fails', () async {
+      final client = ApiClient(
+        baseUrl: 'http://hermes.local:8642',
+        apiKey: 'valid-key',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/health') {
+            throw http.ClientException('connection refused');
+          }
+          return http.Response('{"object":"list","data":[]}', 200);
         }),
       );
 
@@ -1114,6 +1204,8 @@ void main() {
           'runs_gone': '[]',
           'approval_rules_gone': '[]',
           'hidden_sessions_gone': <String>['x'],
+          'hidden_rows_gone': <String>['{"id":"x"}'],
+          'session_auto_titles_gone': <String>['x\tTitle'],
           'mission_control.organizations.v1.gone': '[]',
           'mission_control.rooms.v1.gone': '[]',
           'mission_control.bot_chat_pins.v1.gone': '{}',
@@ -1132,6 +1224,8 @@ void main() {
         expect(prefs.containsKey('runs_gone'), isFalse);
         expect(prefs.containsKey('approval_rules_gone'), isFalse);
         expect(prefs.containsKey('hidden_sessions_gone'), isFalse);
+        expect(prefs.containsKey('hidden_rows_gone'), isFalse);
+        expect(prefs.containsKey('session_auto_titles_gone'), isFalse);
         expect(
           prefs.containsKey('mission_control.organizations.v1.gone'),
           isFalse,
@@ -1411,6 +1505,356 @@ void main() {
         expect(revisions[1], greaterThan(revisions[0]));
       },
     );
+    test(
+      'upsert material publica ambas revisiones una vez y solo tras persistir',
+      () async {
+        final fixture = await managerWithCapabilities();
+        final connectionRevision = fixture.manager.connectionRevisionFor(id);
+        final observed = <String>[];
+        var fenceSawOldState = false;
+
+        fixture.manager.connectionWillChangeFor(id).addListener(() {
+          final persisted = fixture.manager.getConnections().single;
+          fenceSawOldState = persisted.label == 'Server';
+          expect(connectionRevision.value, 0);
+          expect(fixture.manager.connectionsRevision.value, 0);
+        });
+        connectionRevision.addListener(() {
+          observed.add('connection');
+          final persisted = fixture.manager.getConnections().single;
+          expect(persisted.label, 'Server editado');
+          expect(persisted.dashboardUrl, 'https://dashboard.example.test');
+        });
+        fixture.manager.connectionsRevision.addListener(() {
+          observed.add('global');
+          final persisted = fixture.manager.getConnections().single;
+          expect(persisted.label, 'Server editado');
+          expect(persisted.dashboardUrl, 'https://dashboard.example.test');
+        });
+
+        final saving = fixture.manager.upsertConnection(
+          SavedConnection(
+            id: id,
+            label: 'Server editado',
+            host: 'hermes.example.test',
+            port: 443,
+            apiKey: '',
+            useHttps: true,
+            dashboardUrl: 'https://dashboard.example.test',
+          ),
+        );
+
+        expect(fenceSawOldState, isTrue);
+        expect(observed, isEmpty);
+        await saving;
+
+        expect(observed, const ['connection', 'global']);
+        expect(connectionRevision.value, 1);
+        expect(fixture.manager.connectionsRevision.value, 1);
+      },
+    );
+    test(
+      'un probe rutinario no invalida el lifecycle general ni un turno activo',
+      () async {
+        final fixture = await managerWithCapabilities();
+        final connectionRevision = fixture.manager.connectionRevisionFor(id);
+        final configAccessRevision = fixture.manager.configAccessRevisionFor(
+          id,
+        );
+        var generalFences = 0;
+        var generalRevisions = 0;
+        var globalRevisions = 0;
+        var configAccessFences = 0;
+        var configAccessRevisions = 0;
+        var activeTurnInvalidated = false;
+
+        // Un turno vivo se cuelga del fence general porque URL/auth/perfil sí
+        // invalidan su cliente. Un probe no relacionado no puede dispararlo.
+        fixture.manager.connectionWillChangeFor(id).addListener(() {
+          generalFences += 1;
+          activeTurnInvalidated = true;
+        });
+        connectionRevision.addListener(() => generalRevisions += 1);
+        fixture.manager.connectionsRevision.addListener(
+          () => globalRevisions += 1,
+        );
+        fixture.manager
+            .configAccessWillChangeFor(id)
+            .addListener(() => configAccessFences += 1);
+        configAccessRevision.addListener(() => configAccessRevisions += 1);
+
+        final saving = fixture.manager.saveCapabilities(
+          id,
+          const CapabilityMatrix(modelsRead: CapState.yes, checkedAtMs: 42),
+        );
+
+        expect(generalFences, 0);
+        expect(activeTurnInvalidated, isFalse);
+        expect(generalRevisions, 0);
+        expect(globalRevisions, 0);
+        expect(configAccessFences, 0);
+        expect(configAccessRevisions, 0);
+        await saving;
+
+        expect(generalFences, 0);
+        expect(activeTurnInvalidated, isFalse);
+        expect(generalRevisions, 0);
+        expect(globalRevisions, 0);
+        expect(configAccessFences, 0);
+        expect(configAccessRevisions, 0);
+        expect(fixture.manager.loadCapabilities(id).modelsRead, CapState.yes);
+      },
+    );
+
+    test(
+      'una transición config usa su fence aislado y omite matrices iguales',
+      () async {
+        final fixture = await managerWithCapabilities();
+        final connectionRevision = fixture.manager.connectionRevisionFor(id);
+        final configAccessRevision = fixture.manager.configAccessRevisionFor(
+          id,
+        );
+        var generalFences = 0;
+        var generalRevisions = 0;
+        var globalRevisions = 0;
+        var configAccessFences = 0;
+        var configAccessRevisions = 0;
+
+        fixture.manager
+            .connectionWillChangeFor(id)
+            .addListener(() => generalFences += 1);
+        connectionRevision.addListener(() => generalRevisions += 1);
+        fixture.manager.connectionsRevision.addListener(
+          () => globalRevisions += 1,
+        );
+        fixture.manager
+            .configAccessWillChangeFor(id)
+            .addListener(() => configAccessFences += 1);
+        configAccessRevision.addListener(() => configAccessRevisions += 1);
+
+        const configAccess = CapabilityMatrix(
+          configRead: CapState.yes,
+          configWrite: CapState.no,
+          checkedAtMs: 43,
+        );
+        final saving = fixture.manager.saveCapabilities(id, configAccess);
+
+        // El fence llega antes de persistir para cerrar el repositorio y su
+        // debounce, pero la revisión solo expone el nuevo permiso confirmado.
+        expect(configAccessFences, 1);
+        expect(configAccessRevision.value, 0);
+        expect(generalFences, 0);
+        expect(generalRevisions, 0);
+        expect(globalRevisions, 0);
+        await saving;
+
+        expect(configAccessRevision.value, 1);
+        expect(configAccessRevisions, 1);
+        expect(generalFences, 0);
+        expect(generalRevisions, 0);
+        expect(globalRevisions, 0);
+
+        await fixture.manager.saveCapabilities(
+          id,
+          const CapabilityMatrix(
+            configRead: CapState.yes,
+            configWrite: CapState.no,
+            modelsRead: CapState.yes,
+            checkedAtMs: 44,
+          ),
+        );
+        expect(configAccessFences, 1);
+        expect(configAccessRevisions, 1);
+
+        await fixture.manager.saveCapabilities(
+          id,
+          const CapabilityMatrix(
+            configRead: CapState.yes,
+            configWrite: CapState.no,
+            modelsRead: CapState.yes,
+            checkedAtMs: 44,
+          ),
+        );
+        expect(configAccessFences, 1);
+        expect(configAccessRevisions, 1);
+        expect(generalFences, 0);
+        expect(generalRevisions, 0);
+        expect(globalRevisions, 0);
+      },
+    );
+
+    test('cambios materiales publican el fence antes de persistir', () async {
+      final fixture = await managerWithCapabilities();
+      var fences = 0;
+      fixture.manager.connectionWillChangeFor(id).addListener(() {
+        fences += 1;
+      });
+
+      final metadata = fixture.manager.upsertConnection(
+        SavedConnection(
+          id: id,
+          label: 'Server editado',
+          host: 'hermes.example.test',
+          port: 443,
+          apiKey: '',
+          useHttps: true,
+        ),
+      );
+      expect(fences, 1);
+      await metadata;
+
+      final profile = fixture.manager.setActiveProfile(id, 'coding');
+      expect(fences, 2);
+      await profile;
+
+      final capabilities = fixture.manager.saveCapabilities(
+        id,
+        const CapabilityMatrix(configWrite: CapState.no),
+      );
+      expect(fences, 2);
+      await capabilities;
+
+      final apiKey = fixture.manager.updateApiKey(id, 'rotated-gateway-key');
+      expect(fences, 3);
+      await apiKey;
+
+      final dashboardSecret = fixture.manager.setDashboardSecrets(
+        id,
+        sessionToken: 'rotated-dashboard-token',
+      );
+      expect(fences, 4);
+      await dashboardSecret;
+
+      final revocation = fixture.manager.wipeAllApiKeys();
+      expect(fences, 5);
+      await revocation;
+
+      final deletion = fixture.manager.deleteConnection(id);
+      expect(fences, 6);
+      await deletion;
+    });
+    test('borrar conexión, revocar keys y cambiar perfil vacían las cachés de '
+        'render', () async {
+      final fixture = await managerWithCapabilities();
+      var clears = 0;
+      void clearer() => clears += 1;
+      PrivateRenderCaches.register(clearer);
+      addTearDown(() => PrivateRenderCaches.unregister(clearer));
+
+      await fixture.manager.setActiveProfile(id, 'coding');
+      expect(clears, 1);
+      // Mismo perfil: no hay cambio de autoridad.
+      await fixture.manager.setActiveProfile(id, 'coding');
+      expect(clears, 1);
+      await fixture.manager.wipeAllApiKeys();
+      expect(clears, 2);
+      await fixture.manager.deleteConnection(id);
+      expect(clears, 3);
+    });
+    test(
+      'deleteConnection dispone notifiers por id y un reemplazo empieza limpio',
+      () async {
+        final fixture = await managerWithCapabilities();
+        final profileRevision = fixture.manager.activeProfileRevisionFor(id);
+        final connectionRevision = fixture.manager.connectionRevisionFor(id);
+        final willChange = fixture.manager.connectionWillChangeFor(id);
+        final configAccessRevision = fixture.manager.configAccessRevisionFor(
+          id,
+        );
+        final configAccessWillChange = fixture.manager
+            .configAccessWillChangeFor(id);
+
+        await fixture.manager.deleteConnection(id);
+
+        expect(
+          () => profileRevision.addListener(() {}),
+          throwsA(isA<FlutterError>()),
+        );
+        expect(
+          () => connectionRevision.addListener(() {}),
+          throwsA(isA<FlutterError>()),
+        );
+        expect(
+          () => willChange.addListener(() {}),
+          throwsA(isA<FlutterError>()),
+        );
+        expect(
+          () => configAccessRevision.addListener(() {}),
+          throwsA(isA<FlutterError>()),
+        );
+        expect(
+          () => configAccessWillChange.addListener(() {}),
+          throwsA(isA<FlutterError>()),
+        );
+
+        final replacementProfile = fixture.manager.activeProfileRevisionFor(id);
+        final replacementConnection = fixture.manager.connectionRevisionFor(id);
+        final replacementWillChange = fixture.manager.connectionWillChangeFor(
+          id,
+        );
+        final replacementConfigAccess = fixture.manager.configAccessRevisionFor(
+          id,
+        );
+        final replacementConfigAccessWillChange = fixture.manager
+            .configAccessWillChangeFor(id);
+        expect(identical(replacementProfile, profileRevision), isFalse);
+        expect(identical(replacementConnection, connectionRevision), isFalse);
+        expect(identical(replacementWillChange, willChange), isFalse);
+        expect(
+          identical(replacementConfigAccess, configAccessRevision),
+          isFalse,
+        );
+        expect(
+          identical(replacementConfigAccessWillChange, configAccessWillChange),
+          isFalse,
+        );
+        expect(replacementProfile.value, 0);
+        expect(replacementConnection.value, 0);
+        expect(replacementConfigAccess.value, 0);
+      },
+    );
+    test('dispose libera todos los notifiers administrados', () async {
+      final fixture = await managerWithCapabilities();
+      final profileRevision = fixture.manager.activeProfileRevisionFor(id);
+      final connectionRevision = fixture.manager.connectionRevisionFor(id);
+      final willChange = fixture.manager.connectionWillChangeFor(id);
+      final configAccessRevision = fixture.manager.configAccessRevisionFor(id);
+      final configAccessWillChange = fixture.manager.configAccessWillChangeFor(
+        id,
+      );
+
+      fixture.manager.dispose();
+
+      for (final notifier in <Listenable>[
+        profileRevision,
+        connectionRevision,
+        willChange,
+        configAccessRevision,
+        configAccessWillChange,
+        fixture.manager.activeProfile,
+        fixture.manager.activeConnectionId,
+        fixture.manager.connectionsRevision,
+      ]) {
+        expect(() => notifier.addListener(() {}), throwsA(isA<FlutterError>()));
+      }
+      expect(
+        () => fixture.manager.activeProfileRevisionFor(id),
+        throwsStateError,
+      );
+      expect(() => fixture.manager.connectionRevisionFor(id), throwsStateError);
+      expect(
+        () => fixture.manager.connectionWillChangeFor(id),
+        throwsStateError,
+      );
+      expect(
+        () => fixture.manager.configAccessRevisionFor(id),
+        throwsStateError,
+      );
+      expect(
+        () => fixture.manager.configAccessWillChangeFor(id),
+        throwsStateError,
+      );
+    });
   });
 
   group('ConnectionManager instancia predeterminada', () {
@@ -1599,50 +2043,48 @@ void main() {
   });
 
   group('DashboardClient.deleteCronJob', () {
-    test(
-      'confirma global aunque el perfil responda éxito idempotente',
-      () async {
-        final calls = <Uri>[];
-        final client = DashboardClient(
-          host: 'hermes.local',
-          port: 9119,
-          manualToken: 'test-token',
-          httpClientOverride: MockClient((request) async {
-            calls.add(request.url);
-            expect(request.method, 'DELETE');
-            if (request.url.queryParameters['profile'] == 'wrong-profile') {
-              return http.Response('', 204);
-            }
-            return http.Response('', 204);
-          }),
-        );
-
-        await client.deleteCronJob('job-qa', profile: 'wrong-profile');
-
-        expect(calls, hasLength(2));
-        expect(calls.first.path, '/api/cron/jobs/job-qa');
-        expect(calls.first.queryParameters['profile'], 'wrong-profile');
-        expect(calls.last.path, '/api/cron/jobs/job-qa');
-        expect(calls.last.queryParameters, isEmpty);
-        client.close();
-      },
-    );
-
-    test('404 también global es éxito idempotente', () async {
-      var calls = 0;
+    test('named-profile deletion never also deletes default', () async {
+      final calls = <Uri>[];
       final client = DashboardClient(
         host: 'hermes.local',
         port: 9119,
         manualToken: 'test-token',
-        httpClientOverride: MockClient((_) async {
-          calls++;
+        httpClientOverride: MockClient((request) async {
+          calls.add(request.url);
+          expect(request.method, 'DELETE');
+          return http.Response('', 204);
+        }),
+      );
+
+      await client.deleteCronJob('job-qa', profile: 'work-profile');
+
+      expect(calls, hasLength(1));
+      expect(calls.single.path, '/api/cron/jobs/job-qa');
+      expect(calls.single.queryParameters['profile'], 'work-profile');
+      client.close();
+    });
+
+    test('unprofiled deletion targets only default route; 404 is not '
+        'success', () async {
+      final calls = <Uri>[];
+      final client = DashboardClient(
+        host: 'hermes.local',
+        port: 9119,
+        manualToken: 'test-token',
+        httpClientOverride: MockClient((request) async {
+          calls.add(request.url);
           return http.Response('already gone', 404);
         }),
       );
 
-      await client.deleteCronJob('job-gone', profile: 'old-profile');
+      await expectLater(
+        client.deleteCronJob('job-gone'),
+        throwsA(isA<CronJobNotFoundException>()),
+      );
 
-      expect(calls, 2);
+      expect(calls, hasLength(1));
+      expect(calls.single.path, '/api/cron/jobs/job-gone');
+      expect(calls.single.queryParameters, isEmpty);
       client.close();
     });
 
@@ -1717,8 +2159,6 @@ void main() {
 
     Future<ConnectionManager> createManager({
       Map<String, String> secureValues = const {},
-      required BridgeClientFactory bridgeClientFactory,
-      required BridgeProvisioner bridgeProvisioner,
       required DashboardClientFactory dashboardClientFactory,
     }) async {
       SharedPreferences.setMockInitialValues({});
@@ -1726,25 +2166,78 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       return ConnectionManager.create(
         prefs,
-        bridgeClientFactory: bridgeClientFactory,
-        bridgeProvisioner: bridgeProvisioner,
         dashboardClientFactory: dashboardClientFactory,
       );
     }
 
-    test('ID hostil no alcanza provisión, Bridge ni Dashboard', () async {
-      var bridgeClients = 0;
-      var provisions = 0;
+    DashboardClient dashboardWith(MockClient http) => DashboardClient(
+      host: 'hermes.local',
+      port: 9119,
+      manualToken: 'dashboard-token',
+      httpClientOverride: http,
+    );
+
+    test('a stored bridge token still deletes through the Dashboard with '
+        '?profile=', () async {
+      final dashboardCalls = <http.Request>[];
+      final manager = await createManager(
+        secureValues: {'bridge_token_cron-conn': 'stored-token'},
+        dashboardClientFactory: (connection) => dashboardWith(
+          MockClient((request) async {
+            dashboardCalls.add(request);
+            return http.Response('', 204);
+          }),
+        ),
+      );
+
+      await manager.deleteLinkedCronJob(
+        connection,
+        'job-1',
+        profile: 'work_bot',
+      );
+
+      final call = dashboardCalls.single;
+      expect(call.method, 'DELETE');
+      expect(call.url.path, '/api/cron/jobs/job-1');
+      expect(call.url.queryParameters, {'profile': 'work_bot'});
+    });
+
+    test('without a profile the Dashboard call has no profile query', () async {
+      final dashboardCalls = <http.Request>[];
+      final manager = await createManager(
+        dashboardClientFactory: (connection) => dashboardWith(
+          MockClient((request) async {
+            dashboardCalls.add(request);
+            return http.Response('', 204);
+          }),
+        ),
+      );
+
+      await manager.deleteLinkedCronJob(connection, 'job-dashboard');
+
+      expect(dashboardCalls.single.url.path, '/api/cron/jobs/job-dashboard');
+      expect(dashboardCalls.single.url.queryParameters, isEmpty);
+    });
+
+    test('a Dashboard failure is reported as is', () async {
+      final manager = await createManager(
+        secureValues: {'bridge_token_cron-conn': 'stored-token'},
+        dashboardClientFactory: (connection) => dashboardWith(
+          MockClient(
+            (_) async => throw const SocketException('dashboard offline'),
+          ),
+        ),
+      );
+
+      await expectLater(
+        manager.deleteLinkedCronJob(connection, 'job-1'),
+        throwsA(isA<SocketException>()),
+      );
+    });
+
+    test('a hostile id never reaches the Dashboard', () async {
       var dashboards = 0;
       final manager = await createManager(
-        bridgeClientFactory: ({required baseUrl, required token}) {
-          bridgeClients++;
-          return BridgeClient(baseUrl: baseUrl, token: token);
-        },
-        bridgeProvisioner: (baseUrl, gatewayKey) async {
-          provisions++;
-          return 'unexpected';
-        },
         dashboardClientFactory: (connection) {
           dashboards++;
           return DashboardClient.lazy(connection);
@@ -1755,62 +2248,44 @@ void main() {
         manager.deleteLinkedCronJob(connection, '../job'),
         throwsArgumentError,
       );
-
-      expect(bridgeClients, 0);
-      expect(provisions, 0);
       expect(dashboards, 0);
     });
 
-    test('sin token usa Dashboard sin intentar provisionar Bridge', () async {
-      var bridgeClients = 0;
-      var provisions = 0;
-      var dashboardCalls = 0;
-      final manager = await createManager(
-        bridgeClientFactory: ({required baseUrl, required token}) {
-          bridgeClients++;
-          return BridgeClient(baseUrl: baseUrl, token: token);
-        },
-        bridgeProvisioner: (baseUrl, gatewayKey) async {
-          provisions++;
-          return 'unexpected-token';
-        },
-        dashboardClientFactory: (connection) => DashboardClient(
-          host: 'hermes.local',
-          port: 9119,
-          manualToken: 'dashboard-token',
-          httpClientOverride: MockClient((request) async {
-            dashboardCalls++;
-            return http.Response('', 204);
-          }),
-        ),
-      );
+    test(
+      '404 from the Dashboard names the profile and is not success',
+      () async {
+        final manager = await createManager(
+          dashboardClientFactory: (connection) => dashboardWith(
+            MockClient(
+              (_) async =>
+                  http.Response(jsonEncode({'detail': 'Job not found'}), 404),
+            ),
+          ),
+        );
 
-      await manager.deleteLinkedCronJob(connection, 'job-dashboard');
-
-      expect(dashboardCalls, 1);
-      expect(provisions, 0);
-      expect(bridgeClients, 0);
-    });
+        await expectLater(
+          manager.deleteLinkedCronJob(
+            connection,
+            'a1b2c3d4e5f6',
+            profile: 'radar-bot',
+          ),
+          throwsA(
+            isA<CronJobNotFoundException>().having(
+              (e) => e.profile,
+              'profile',
+              'radar-bot',
+            ),
+          ),
+        );
+      },
+    );
 
     test(
-      'deleted=false del Dashboard no intenta provisionar ni fingir éxito',
+      'deleted=false from the Dashboard is not reported as success',
       () async {
-        var bridgeClients = 0;
-        var provisions = 0;
         final manager = await createManager(
-          bridgeClientFactory: ({required baseUrl, required token}) {
-            bridgeClients++;
-            return BridgeClient(baseUrl: baseUrl, token: token);
-          },
-          bridgeProvisioner: (baseUrl, gatewayKey) async {
-            provisions++;
-            return 'unexpected-token';
-          },
-          dashboardClientFactory: (connection) => DashboardClient(
-            host: 'hermes.local',
-            port: 9119,
-            manualToken: 'dashboard-token',
-            httpClientOverride: MockClient(
+          dashboardClientFactory: (connection) => dashboardWith(
+            MockClient(
               (_) async => http.Response(jsonEncode({'deleted': false}), 200),
             ),
           ),
@@ -1820,160 +2295,6 @@ void main() {
           manager.deleteLinkedCronJob(connection, 'demo-daily-summary'),
           throwsA(isA<CronDeleteRejectedException>()),
         );
-
-        expect(provisions, 0);
-        expect(bridgeClients, 0);
-      },
-    );
-
-    test(
-      'sin token provisiona una sola vez solo después de fallar Dashboard',
-      () async {
-        final order = <String>[];
-        final manager = await createManager(
-          bridgeClientFactory: ({required baseUrl, required token}) =>
-              BridgeClient(
-                baseUrl: baseUrl,
-                token: token,
-                httpClient: MockClient((request) async {
-                  if (request.url.path == '/bridge/health') {
-                    return http.Response(jsonEncode({'status': 'ok'}), 200);
-                  }
-                  if (request.url.path == '/bridge/capabilities') {
-                    return http.Response(
-                      jsonEncode({
-                        'operations': {'cron_delete': true},
-                      }),
-                      200,
-                    );
-                  }
-                  if (request.method == 'DELETE') {
-                    order.add('bridge_delete');
-                  }
-                  return http.Response(jsonEncode({'ok': true}), 200);
-                }),
-              ),
-          bridgeProvisioner: (baseUrl, gatewayKey) async {
-            order.add('provision');
-            return 'fresh-token';
-          },
-          dashboardClientFactory: (connection) => DashboardClient(
-            host: 'hermes.local',
-            port: 9119,
-            manualToken: 'dashboard-token',
-            httpClientOverride: MockClient((_) async {
-              order.add('dashboard');
-              throw const SocketException('dashboard offline');
-            }),
-          ),
-        );
-
-        await manager.deleteLinkedCronJob(connection, 'job-fallback');
-
-        expect(order, ['dashboard', 'provision', 'bridge_delete']);
-      },
-    );
-
-    test(
-      'cron_delete=false evita DELETE y reprovisión antes del fallback',
-      () async {
-        var bridgeDeletes = 0;
-        var provisions = 0;
-        final dashboardCalls = <Uri>[];
-        final manager = await createManager(
-          secureValues: {'bridge_token_cron-conn': 'stored-token'},
-          bridgeClientFactory: ({required baseUrl, required token}) =>
-              BridgeClient(
-                baseUrl: baseUrl,
-                token: token,
-                httpClient: MockClient((request) async {
-                  if (request.url.path == '/bridge/health') {
-                    return http.Response(jsonEncode({'status': 'ok'}), 200);
-                  }
-                  if (request.url.path == '/bridge/capabilities') {
-                    return http.Response(
-                      jsonEncode({
-                        'operations': {'cron_delete': false},
-                      }),
-                      200,
-                    );
-                  }
-                  if (request.method == 'DELETE') bridgeDeletes++;
-                  return http.Response(jsonEncode({'ok': true}), 200);
-                }),
-              ),
-          bridgeProvisioner: (baseUrl, gatewayKey) async {
-            provisions++;
-            return null;
-          },
-          dashboardClientFactory: (connection) => DashboardClient(
-            host: 'hermes.local',
-            port: 9119,
-            manualToken: 'dashboard-token',
-            httpClientOverride: MockClient((request) async {
-              dashboardCalls.add(request.url);
-              return http.Response('', 204);
-            }),
-          ),
-        );
-
-        await manager.deleteLinkedCronJob(
-          connection,
-          'job-1',
-          profile: 'work_bot',
-        );
-
-        expect(bridgeDeletes, 0);
-        expect(provisions, 0);
-        expect(dashboardCalls, hasLength(2));
-      },
-    );
-
-    test(
-      'cron_delete=true propaga perfil al Bridge y no usa Dashboard',
-      () async {
-        final bridgeCalls = <http.Request>[];
-        var dashboards = 0;
-        final manager = await createManager(
-          secureValues: {'bridge_token_cron-conn': 'stored-token'},
-          bridgeClientFactory: ({required baseUrl, required token}) =>
-              BridgeClient(
-                baseUrl: baseUrl,
-                token: token,
-                httpClient: MockClient((request) async {
-                  bridgeCalls.add(request);
-                  if (request.url.path == '/bridge/health') {
-                    return http.Response(jsonEncode({'status': 'ok'}), 200);
-                  }
-                  if (request.url.path == '/bridge/capabilities') {
-                    return http.Response(
-                      jsonEncode({
-                        'operations': {'cron_delete': true},
-                      }),
-                      200,
-                    );
-                  }
-                  return http.Response(jsonEncode({'ok': true}), 200);
-                }),
-              ),
-          bridgeProvisioner: (baseUrl, gatewayKey) async => null,
-          dashboardClientFactory: (connection) {
-            dashboards++;
-            return DashboardClient.lazy(connection);
-          },
-        );
-
-        await manager.deleteLinkedCronJob(
-          connection,
-          'job-1',
-          profile: 'work_bot',
-        );
-
-        final deletion = bridgeCalls.singleWhere(
-          (request) => request.method == 'DELETE',
-        );
-        expect(deletion.url.queryParameters, {'profile': 'work_bot'});
-        expect(dashboards, 0);
       },
     );
   });
@@ -2019,6 +2340,111 @@ void main() {
       },
     );
 
+    test('devuelve el action_id para seguir la actualización', () async {
+      final client = DashboardClient(
+        host: 'hermes.local',
+        port: 9119,
+        manualToken: 'test-token',
+        httpClientOverride: MockClient((_) async {
+          return http.Response(
+            '{"ok":true,"pid":42,"name":"hermes-update",'
+            '"action_id":"0123456789abcdef0123456789abcdef"}',
+            200,
+          );
+        }),
+      );
+
+      final result = await client.applyUpdate();
+
+      expect(result.actionId, '0123456789abcdef0123456789abcdef');
+      expect(result.alreadyRunning, isFalse);
+      client.close();
+    });
+
+    test('returns the server clock of the answer (Date header)', () async {
+      final client = DashboardClient(
+        host: 'hermes.local',
+        port: 9119,
+        manualToken: 'test-token',
+        httpClientOverride: MockClient((_) async {
+          return http.Response(
+            '{"ok":true,"action_id":"0123456789abcdef0123456789abcdef"}',
+            200,
+            headers: {'date': 'Fri, 25 Sep 2026 08:45:03 GMT'},
+          );
+        }),
+      );
+
+      final result = await client.applyUpdate();
+
+      expect(result.serverDate, DateTime.utc(2026, 9, 25, 8, 45, 3));
+      client.close();
+    });
+
+    test('marca una actualización que ya estaba en curso', () async {
+      final client = DashboardClient(
+        host: 'hermes.local',
+        port: 9119,
+        manualToken: 'test-token',
+        httpClientOverride: MockClient((_) async {
+          return http.Response(
+            '{"ok":true,"already_running":true,'
+            '"action_id":"0123456789abcdef0123456789abcdef"}',
+            200,
+          );
+        }),
+      );
+
+      final result = await client.applyUpdate();
+
+      expect(result.alreadyRunning, isTrue);
+      client.close();
+    });
+
+    test('un rechazo 200 con ok:false no se trata como lanzado', () async {
+      final client = DashboardClient(
+        host: 'hermes.local',
+        port: 9119,
+        manualToken: 'test-token',
+        httpClientOverride: MockClient((_) async {
+          return http.Response(
+            '{"ok":false,"error":"update_not_in_place",'
+            '"message":"Managed by Docker"}',
+            200,
+          );
+        }),
+      );
+
+      await expectLater(
+        client.applyUpdate(),
+        throwsA(
+          isA<DashboardUpdateRefused>().having(
+            (e) => e.message,
+            'message',
+            'Managed by Docker',
+          ),
+        ),
+      );
+      client.close();
+    });
+
+    test('lee el estado de la acción hermes-update', () async {
+      final client = DashboardClient(
+        host: 'hermes.local',
+        port: 9119,
+        manualToken: 'test-token',
+        httpClientOverride: MockClient((request) async {
+          expect(request.url.path, '/api/actions/hermes-update/status');
+          return http.Response('{"running":true,"exit_code":null}', 200);
+        }),
+      );
+
+      final status = await client.getUpdateActionStatus();
+
+      expect(status['running'], isTrue);
+      client.close();
+    });
+
     test(
       'un cierre de socket tras el POST tampoco se trata como rechazo',
       () async {
@@ -2040,6 +2466,8 @@ void main() {
   });
 
   group('DashboardClient password-login (cookie session)', () {
+    setUp(DashboardClient.resetSharedPasswordSessionsForTesting);
+
     test(
       'logs in via /auth/password-login and uses the session cookie',
       () async {
@@ -2195,6 +2623,464 @@ void main() {
         second.close();
       },
     );
+
+    test(
+      'bounds retries when concurrent clients keep rotating rejected cookies',
+      () async {
+        var loginCalls = 0;
+        var rotation = 0;
+        var firstWaveCalls = 0;
+        final allFirstWaveStarted = Completer<void>();
+        final callsByPath = <String, int>{};
+
+        MockClient backend() => MockClient((request) async {
+          if (request.url.path == '/auth/password-login') {
+            loginCalls++;
+            return http.Response(
+              '{"ok":true}',
+              200,
+              headers: {'set-cookie': 'hermes_session_at=AT0'},
+            );
+          }
+
+          final path = request.url.path;
+          final calls = callsByPath.update(
+            path,
+            (value) => value + 1,
+            ifAbsent: () => 1,
+          );
+          if (calls > 2) {
+            throw StateError('request exceeded its one-retry budget: $path');
+          }
+          if (calls == 1) {
+            firstWaveCalls++;
+            if (firstWaveCalls == 3) allFirstWaveStarted.complete();
+            await allFirstWaveStarted.future;
+          }
+          rotation++;
+          return http.Response(
+            '{"error":"stale_cookie"}',
+            401,
+            headers: {'set-cookie': 'hermes_session_at=AT$rotation'},
+          );
+        });
+
+        final clients = List<DashboardClient>.generate(
+          3,
+          (_) => DashboardClient(
+            host: 'adversarial-cookie-rotation.local',
+            basicUser: 'admin',
+            basicPass: 'secret',
+            httpClientOverride: backend(),
+          ),
+        );
+        addTearDown(() {
+          for (final client in clients) {
+            client.close();
+          }
+        });
+
+        final outcomes = await Future.wait([
+          for (var index = 0; index < clients.length; index++)
+            () async {
+              try {
+                await clients[index].apiGet('retry-budget/$index');
+                return null;
+              } catch (error) {
+                return error;
+              }
+            }(),
+        ]);
+
+        expect(
+          loginCalls,
+          1,
+          reason: 'the initial login remains single-flight',
+        );
+        expect(
+          outcomes,
+          everyElement(
+            isA<DashboardHttpException>()
+                .having((error) => error.statusCode, 'statusCode', 401)
+                .having((error) => error.toString(), 'message', 'HTTP 401'),
+          ),
+        );
+        expect(callsByPath.values, everyElement(2));
+      },
+    );
+
+    test(
+      'parallel downloads survive access-cookie rotation without re-login',
+      () async {
+        var loginCalls = 0;
+        var currentAccess = 'AT0';
+        var initialRequests = 0;
+        var retryRequests = 0;
+        final allInitialStarted = Completer<void>();
+        final firstRotated = Completer<void>();
+
+        final client = DashboardClient(
+          host: 'media-cookie-rotation.local',
+          basicUser: 'admin',
+          basicPass: 'secret',
+          httpClientOverride: MockClient((request) async {
+            if (request.url.path == '/auth/password-login') {
+              loginCalls++;
+              currentAccess = 'AT1';
+              return http.Response(
+                '{"ok":true}',
+                200,
+                headers: {'set-cookie': 'hermes_session_at=$currentAccess'},
+              );
+            }
+            expect(request.url.path, '/api/files/download');
+            final source = request.url.queryParameters['path']!;
+            final sentAccess = RegExp(
+              r'hermes_session_at=([^;]+)',
+            ).firstMatch(request.headers['cookie'] ?? '')?.group(1);
+
+            if (sentAccess == 'AT1') {
+              initialRequests++;
+              if (initialRequests == 3) allInitialStarted.complete();
+              await allInitialStarted.future;
+              if (source.endsWith('one.wav')) {
+                currentAccess = 'AT2';
+                firstRotated.complete();
+                return http.Response.bytes(
+                  utf8.encode('media:$source'),
+                  200,
+                  headers: {'set-cookie': 'hermes_session_at=$currentAccess'},
+                );
+              }
+              await firstRotated.future;
+              return http.Response('{"error":"stale_cookie"}', 401);
+            }
+
+            if (sentAccess == 'AT2') {
+              retryRequests++;
+              return http.Response.bytes(utf8.encode('media:$source'), 200);
+            }
+            return http.Response('{"error":"stale_cookie"}', 401);
+          }),
+        );
+        addTearDown(client.close);
+
+        const paths = [
+          '/workspace/one.wav',
+          '/workspace/two.wav',
+          '/workspace/three.wav',
+        ];
+        final responses = await Future.wait([
+          for (final path in paths)
+            client.apiDownload(
+              'files/download?path=${Uri.encodeQueryComponent(path)}',
+              maxBytes: 1024,
+            ),
+        ]);
+
+        expect(responses, hasLength(3));
+        expect(retryRequests, 2, reason: 'stale siblings each retry once');
+        expect(
+          loginCalls,
+          1,
+          reason: 'cookie rotation must not password-login',
+        );
+      },
+    );
+
+    test(
+      'shares one re-login across staggered parallel media requests and retries',
+      () async {
+        var loginCalls = 0;
+        var accessCookie = '';
+        var expired = false;
+
+        MockClient backend() => MockClient((request) async {
+          if (request.url.path == '/auth/password-login') {
+            loginCalls++;
+            if (loginCalls > 2) {
+              return http.Response(
+                '{"detail":"rate limited"}',
+                429,
+                headers: {'retry-after': '30'},
+              );
+            }
+            accessCookie = 'AT$loginCalls';
+            return http.Response(
+              '{"ok":true}',
+              200,
+              headers: {
+                'set-cookie':
+                    'hermes_session_at=$accessCookie; Path=/; HttpOnly, '
+                    'hermes_session_rt=RT$loginCalls; Path=/; HttpOnly, '
+                    'hermes_session_provider=basic; Path=/; HttpOnly',
+              },
+            );
+          }
+          if (request.url.path != '/api/files/download') {
+            return http.Response('not found', 404);
+          }
+
+          final source = request.url.queryParameters['path'] ?? '';
+          final cookie = request.headers['cookie'] ?? '';
+          if (expired && cookie.contains('hermes_session_at=AT1')) {
+            final delay = source.endsWith('.txt')
+                ? Duration.zero
+                : source.endsWith('.png')
+                ? const Duration(milliseconds: 20)
+                : const Duration(milliseconds: 40);
+            await Future<void>.delayed(delay);
+            return http.Response(
+              '{"error":"session_expired"}',
+              401,
+              headers: {
+                'set-cookie':
+                    'hermes_session_at=deleted; Max-Age=0, '
+                    'hermes_session_rt=deleted; Max-Age=0',
+              },
+            );
+          }
+          if (!cookie.contains('hermes_session_at=$accessCookie')) {
+            return http.Response('{"error":"unauthenticated"}', 401);
+          }
+          return http.Response.bytes(utf8.encode('media:$source'), 200);
+        });
+
+        DashboardClient mediaClient() => DashboardClient(
+          host: 'media-login-storm.local',
+          basicUser: 'admin',
+          basicPass: 'secret',
+          httpClientOverride: backend(),
+        );
+
+        final clients = List<DashboardClient>.generate(3, (_) => mediaClient());
+        addTearDown(() {
+          for (final client in clients) {
+            client.close();
+          }
+        });
+        const paths = [
+          '/workspace/qa_nota.txt',
+          '/workspace/qa_cuadrado.png',
+          '/workspace/qa_tono.wav',
+        ];
+
+        await Future.wait([
+          for (var index = 0; index < clients.length; index++)
+            clients[index].apiDownload(
+              'files/download?path=${Uri.encodeQueryComponent(paths[index])}',
+              maxBytes: 1024,
+            ),
+        ]);
+        expect(loginCalls, 1, reason: 'the valid session is shared');
+
+        expired = true;
+        final outcomes = await Future.wait([
+          for (var index = 0; index < clients.length; index++)
+            () async {
+              try {
+                await clients[index].apiDownload(
+                  'files/download?path=${Uri.encodeQueryComponent(paths[index])}',
+                  maxBytes: 1024,
+                );
+                return null;
+              } catch (error) {
+                return error;
+              }
+            }(),
+        ]);
+
+        expect(
+          loginCalls,
+          2,
+          reason: 'one expiry episode must perform only one shared re-login',
+        );
+        expect(outcomes.whereType<Object>(), isEmpty);
+
+        final retry = mediaClient();
+        addTearDown(retry.close);
+        await retry.apiDownload(
+          'files/download?path=${Uri.encodeQueryComponent(paths[1])}',
+          maxBytes: 1024,
+        );
+        expect(
+          loginCalls,
+          2,
+          reason: 'a recreated media client reuses cookies',
+        );
+      },
+    );
+
+    test(
+      'rate-limit cooldown blocks retries and succeeds after Retry-After',
+      () async {
+        var now = DateTime.utc(2026, 9, 22);
+        var loginCalls = 0;
+        var allowLogin = false;
+
+        MockClient backend() => MockClient((request) async {
+          expect(request.url.path, '/auth/password-login');
+          loginCalls++;
+          if (!allowLogin) {
+            return http.Response(
+              '{"detail":"rate limited"}',
+              429,
+              headers: {'retry-after': '10'},
+            );
+          }
+          return http.Response(
+            '{"ok":true}',
+            200,
+            headers: {'set-cookie': 'hermes_session_at=AT_AFTER_COOLDOWN'},
+          );
+        });
+
+        DashboardClient client() => DashboardClient(
+          host: 'media-rate-limit.local',
+          basicUser: 'admin',
+          basicPass: 'secret',
+          httpClientOverride: backend(),
+          nowOverride: () => now,
+        );
+
+        final first = client();
+        addTearDown(first.close);
+        await expectLater(
+          first.authHeadersForDiagnostics(),
+          throwsA(
+            isA<DashboardAuthException>().having(
+              (error) => error.code,
+              'code',
+              DashboardAuthFailureCode.rateLimited,
+            ),
+          ),
+        );
+
+        final immediateRetry = client();
+        addTearDown(immediateRetry.close);
+        await expectLater(
+          immediateRetry.authHeadersForDiagnostics(),
+          throwsA(isA<DashboardAuthException>()),
+        );
+        expect(
+          loginCalls,
+          1,
+          reason: 'cooldown retries do not hit the login API',
+        );
+
+        now = now.add(const Duration(seconds: 10));
+        allowLogin = true;
+        final afterCooldown = client();
+        addTearDown(afterCooldown.close);
+        final headers = await afterCooldown.authHeadersForDiagnostics();
+        expect(headers['Cookie'], contains('AT_AFTER_COOLDOWN'));
+        expect(loginCalls, 2);
+      },
+    );
+
+    test('repeated login failures enter exponential cooldown', () async {
+      var now = DateTime.utc(2026, 9, 22);
+      var loginCalls = 0;
+      MockClient backend() => MockClient((request) async {
+        loginCalls++;
+        return http.Response('{"detail":"unavailable"}', 503);
+      });
+      DashboardClient client() => DashboardClient(
+        host: 'media-login-failure.local',
+        basicUser: 'admin',
+        basicPass: 'secret',
+        httpClientOverride: backend(),
+        nowOverride: () => now,
+      );
+
+      final first = client();
+      final blocked = client();
+      final second = client();
+      addTearDown(first.close);
+      addTearDown(blocked.close);
+      addTearDown(second.close);
+      await expectLater(
+        first.authHeadersForDiagnostics(),
+        throwsA(isA<DashboardAuthException>()),
+      );
+      await expectLater(
+        blocked.authHeadersForDiagnostics(),
+        throwsA(isA<DashboardAuthException>()),
+      );
+      expect(
+        loginCalls,
+        1,
+        reason: 'the first cooldown blocks retries locally',
+      );
+
+      now = now.add(const Duration(seconds: 5));
+      await expectLater(
+        second.authHeadersForDiagnostics(),
+        throwsA(isA<DashboardAuthException>()),
+      );
+      expect(loginCalls, 2);
+
+      now = now.add(const Duration(seconds: 9));
+      final stillBlocked = client();
+      addTearDown(stillBlocked.close);
+      await expectLater(
+        stillBlocked.authHeadersForDiagnostics(),
+        throwsA(isA<DashboardAuthException>()),
+      );
+      expect(
+        loginCalls,
+        2,
+        reason: 'the second cooldown doubles to ten seconds',
+      );
+    });
+
+    test('reuses refresh-token rotation without password re-login', () async {
+      var loginCalls = 0;
+      var apiCalls = 0;
+      final client = DashboardClient(
+        host: 'media-refresh.local',
+        basicUser: 'admin',
+        basicPass: 'secret',
+        httpClientOverride: MockClient((request) async {
+          if (request.url.path == '/auth/password-login') {
+            loginCalls++;
+            return http.Response(
+              '{"ok":true}',
+              200,
+              headers: {
+                'set-cookie':
+                    'hermes_session_at=AT_EXPIRED, '
+                    'hermes_session_rt=RT_LIVE, '
+                    'hermes_session_provider=basic',
+              },
+            );
+          }
+          apiCalls++;
+          final cookie = request.headers['cookie'] ?? '';
+          if (apiCalls == 1) {
+            expect(cookie, contains('hermes_session_rt=RT_LIVE'));
+            return http.Response(
+              '{"model":"gpt","provider":"test"}',
+              200,
+              headers: {
+                'set-cookie':
+                    'hermes_session_at=AT_REFRESHED, '
+                    'hermes_session_rt=RT_ROTATED',
+              },
+            );
+          }
+          expect(cookie, contains('hermes_session_at=AT_REFRESHED'));
+          expect(cookie, contains('hermes_session_rt=RT_ROTATED'));
+          return http.Response('{"model":"gpt","provider":"test"}', 200);
+        }),
+      );
+      addTearDown(client.close);
+
+      await client.getModelInfo();
+      await client.getModelInfo();
+      expect(loginCalls, 1);
+      expect(apiCalls, 2);
+    });
 
     test('reauthenticates on 401 and ingests rotated cookies', () async {
       var loginCalls = 0;

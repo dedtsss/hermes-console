@@ -6,6 +6,8 @@ import 'package:hermes_android/core/services/connection_manager.dart';
 import 'package:hermes_android/core/services/desktop_gateway_capabilities.dart';
 import 'package:hermes_android/core/services/tui_gateway_client.dart';
 
+import 'support/rpc_frame_helpers.dart';
+
 class _TicketDashboardClient extends DashboardClient {
   _TicketDashboardClient()
     : super(host: '127.0.0.1', port: 1, manualToken: 'unused');
@@ -37,8 +39,19 @@ void main() {
     final requests = <Map<String, dynamic>>[];
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (isClientCapabilitiesFrame(frame)) {
+          socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+          continue;
+        }
         requests.add(frame);
         socket.add(
           jsonEncode({
@@ -52,12 +65,18 @@ void main() {
     final client = _clientFor(server);
     addTearDown(client.close);
 
-    final result = await client.interruptSubagent('child-opaque-a');
+    final result = await client.interruptSubagent(
+      'runtime-parent',
+      'child-opaque-a',
+    );
 
     expect(result.found, isTrue);
     expect(result.subagentId, 'child-opaque-a');
     expect(requests.single['method'], 'subagent.interrupt');
-    expect(requests.single['params'], {'subagent_id': 'child-opaque-a'});
+    expect(requests.single['params'], {
+      'session_id': 'runtime-parent',
+      'subagent_id': 'child-opaque-a',
+    });
     expect(
       client.capabilityState(DesktopGatewayCapability.subagentInterrupt),
       DesktopGatewayCapabilityState.supported,
@@ -71,6 +90,13 @@ void main() {
       addTearDown(server.close);
       server.listen((request) async {
         final socket = await WebSocketTransformer.upgrade(request);
+        socket.add(
+          jsonEncode({
+            'jsonrpc': '2.0',
+            'method': 'event',
+            'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+          }),
+        );
         await for (final raw in socket) {
           final frame = jsonDecode(raw as String) as Map<String, dynamic>;
           socket.add(
@@ -85,7 +111,10 @@ void main() {
       final client = _clientFor(server);
       addTearDown(client.close);
 
-      final result = await client.interruptSubagent('child-missing');
+      final result = await client.interruptSubagent(
+        'runtime-parent',
+        'child-missing',
+      );
 
       expect(result.found, isFalse);
       expect(result.subagentId, 'child-missing');
@@ -98,8 +127,19 @@ void main() {
     var rpcCount = 0;
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (isClientCapabilitiesFrame(frame)) {
+          socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+          continue;
+        }
         rpcCount += 1;
         socket.add(
           jsonEncode({
@@ -114,11 +154,11 @@ void main() {
     addTearDown(client.close);
 
     await expectLater(
-      client.interruptSubagent('requested-child'),
+      client.interruptSubagent('runtime-parent', 'requested-child'),
       throwsA(isA<TuiGatewayRpcError>()),
     );
     await expectLater(
-      client.interruptSubagent('requested-child'),
+      client.interruptSubagent('runtime-parent', 'requested-child'),
       throwsA(isA<TuiGatewayRpcError>()),
     );
 
@@ -135,8 +175,19 @@ void main() {
     var rpcCount = 0;
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+        if (isClientCapabilitiesFrame(frame)) {
+          socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+          continue;
+        }
         rpcCount += 1;
         socket.add(
           jsonEncode({
@@ -151,11 +202,11 @@ void main() {
     addTearDown(client.close);
 
     await expectLater(
-      client.interruptSubagent('child-old-server'),
+      client.interruptSubagent('runtime-parent', 'child-old-server'),
       throwsA(isA<TuiGatewayRpcError>()),
     );
     await expectLater(
-      client.interruptSubagent('child-old-server'),
+      client.interruptSubagent('runtime-parent', 'child-old-server'),
       throwsA(isA<TuiGatewayRpcError>()),
     );
 

@@ -7,9 +7,16 @@ import 'package:flutter/services.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../models/attachment_draft.dart';
+import '../services/artifact_viewer_kind.dart';
 import '../services/attachment_uploader.dart';
+import '../services/generated_media_service.dart';
+import '../theme/app_theme.dart';
+import 'artifact_viewer/artifact_viewer_screen.dart';
 import 'attachment_card.dart';
+import 'attachment_preview.dart';
 import 'hermes_app_bar.dart';
+import 'hermes_notice.dart';
+import 'console_loader.dart';
 
 @visibleForTesting
 const attachmentDocumentPreviewChannelName = 'hermes/document_preview';
@@ -36,10 +43,25 @@ class AttachmentHistoryCard extends StatefulWidget {
 
   @override
   State<AttachmentHistoryCard> createState() => _AttachmentHistoryCardState();
+
+  @visibleForTesting
+  static void clearVerifiedCacheForTesting() =>
+      _AttachmentHistoryCardState._verifiedFiles.clear();
 }
 
 class _AttachmentHistoryCardState extends State<AttachmentHistoryCard> {
+  /// Verified files, by reference marker. The transcript list is unkeyed, so
+  /// a new turn (or any row shift) remounts the bubble with a fresh State; a
+  /// fresh State that re-ran the fs + SHA-256 check would paint the bare file
+  /// card until the Future settled — the thumb "flicker" right after sending
+  /// an image. A remount reads the cached File and paints the thumb on its
+  /// first frame instead. Only successful verifications are cached (a null
+  /// result may become available later); bounded, oldest evicted first.
+  static final Map<String, File> _verifiedFiles = <String, File>{};
+  static const int _verifiedFilesLimit = 64;
+
   late Future<File?> _resolvedFile;
+  File? _syncFile;
 
   @override
   void initState() {
@@ -56,23 +78,64 @@ class _AttachmentHistoryCardState extends State<AttachmentHistoryCard> {
     }
   }
 
-  Future<File?> _resolve() =>
+  Future<File?> _resolve() {
+    final marker = widget.reference.toMarker();
+    var cached = widget.resolver == null ? _verifiedFiles[marker] : null;
+    if (cached != null && !cached.existsSync()) {
+      _verifiedFiles.remove(marker);
+      cached = null;
+    }
+    _syncFile = cached;
+    if (cached != null) return Future<File?>.value(cached);
+    return _verify().then((file) {
+      if (file != null && widget.resolver == null) _remember(marker, file);
+      return file;
+    });
+  }
+
+  /// The full path + size + SHA-256 check. Opening always re-runs it: the
+  /// cache only shortcuts what is painted, never what is handed to a viewer.
+  Future<File?> _verify() =>
       widget.resolver?.call(widget.reference) ??
       AttachmentUploader.resolveHistoryReference(widget.reference);
 
+  static void _remember(String marker, File file) {
+    _verifiedFiles.remove(marker);
+    _verifiedFiles[marker] = file;
+    while (_verifiedFiles.length > _verifiedFilesLimit) {
+      _verifiedFiles.remove(_verifiedFiles.keys.first);
+    }
+  }
+
   Future<void> _open() async {
-    final file = await _resolve();
+    final file = await _verify();
     if (!mounted) return;
     if (file == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      HermesNotice.of(context).showSnackBar(
         SnackBar(
           content: Text(Strings.of(context).chaAttachmentPreviewUnavailable),
         ),
+        kind: HermesNoticeKind.warning,
       );
       return;
     }
     if (widget.reference.type == AttachmentType.image) {
       await showImageViewer(context, file);
+      return;
+    }
+    if (artifactViewerRendersInline(
+      artifactViewerKindFor(
+        name: widget.name,
+        mimeType: widget.reference.mimeType,
+      ),
+    )) {
+      await openArtifactViewer(
+        context,
+        name: widget.name,
+        mimeType: widget.reference.mimeType,
+        file: file,
+        sizeBytes: widget.reference.sizeBytes,
+      );
       return;
     }
     await Navigator.of(context).push<void>(
@@ -87,13 +150,32 @@ class _AttachmentHistoryCardState extends State<AttachmentHistoryCard> {
     );
   }
 
+  bool get _playsInline => switch (attachmentPreviewKindFor(
+    widget.name,
+    widget.reference.mimeType,
+  )) {
+    AttachmentPreviewKind.video || AttachmentPreviewKind.audio => true,
+    _ => false,
+  };
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<File?>(
       future: _resolvedFile,
+      initialData: _syncFile,
       builder: (context, snapshot) {
         final file = snapshot.data;
         final available = file != null;
+        if (file != null && _playsInline) {
+          // Videos and audio play in place (poster frame, play, duration)
+          // instead of opening a byte dump.
+          return AttachmentPreview(
+            name: widget.name,
+            mimeType: widget.reference.mimeType,
+            sizeLabel: widget.sizeLabel,
+            file: file,
+          );
+        }
         final thumbnail =
             available && widget.reference.type == AttachmentType.image
             ? file
@@ -127,12 +209,18 @@ class AttachmentBytesPreviewScreen extends StatefulWidget {
   final String sizeLabel;
   final AttachmentHistoryReference reference;
   final File file;
+  final VoidCallback? onOpenExternal;
+  final VoidCallback? onShare;
+  final VoidCallback? onSave;
 
   const AttachmentBytesPreviewScreen({
     required this.name,
     required this.sizeLabel,
     required this.reference,
     required this.file,
+    this.onOpenExternal,
+    this.onShare,
+    this.onSave,
     super.key,
   });
 
@@ -172,48 +260,73 @@ class _AttachmentBytesPreviewScreenState
   Widget build(BuildContext context) {
     final strings = Strings.of(context);
     return Scaffold(
-      appBar: HermesAppBar(title: Text(widget.name)),
-      body: FutureBuilder<Uint8List>(
-        future: _bytes,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const CircularProgressIndicator(),
-                  const SizedBox(height: 16),
-                  Text(strings.chaAttachmentPreviewLoading),
-                ],
-              ),
+      appBar: HermesAppBar(
+        title: Text(widget.name),
+        actions: [
+          if (widget.onOpenExternal != null)
+            IconButton(
+              onPressed: widget.onOpenExternal,
+              tooltip: strings.genMediaOpenWith,
+              icon: const Icon(Icons.open_in_new_rounded),
+            ),
+          if (widget.onShare != null)
+            IconButton(
+              onPressed: widget.onShare,
+              tooltip: strings.commonShare,
+              icon: const Icon(Icons.share_outlined),
+            ),
+          if (widget.onSave != null)
+            IconButton(
+              onPressed: widget.onSave,
+              tooltip: strings.commonSave,
+              icon: const Icon(Icons.save_alt_rounded),
+            ),
+        ],
+      ),
+      body: SafeArea(
+        child: FutureBuilder<Uint8List>(
+          future: _bytes,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ConsoleLoader.large(
+                      label: strings.chaAttachmentPreviewLoading,
+                    ),
+                  ],
+                ),
+              );
+            }
+            final bytes = snapshot.data;
+            if (snapshot.hasError || bytes == null) {
+              return _PreviewUnavailable(
+                message: strings.chaAttachmentPreviewUnavailable,
+              );
+            }
+            return Column(
+              children: [
+                _AttachmentMetadataHeader(
+                  mimeType: widget.reference.mimeType,
+                  sizeLabel: widget.sizeLabel,
+                  digest: widget.reference.sha256Hex,
+                ),
+                Expanded(
+                  child: _isText
+                      ? _TextBytesPreview(bytes: bytes)
+                      : _isPdf(bytes)
+                      ? _PdfBytesPreview(
+                          reference: widget.reference,
+                          file: widget.file,
+                          fallbackBytes: bytes,
+                        )
+                      : _BinaryBytesPreview(bytes: bytes),
+                ),
+              ],
             );
-          }
-          final bytes = snapshot.data;
-          if (snapshot.hasError || bytes == null) {
-            return _PreviewUnavailable(
-              message: strings.chaAttachmentPreviewUnavailable,
-            );
-          }
-          return Column(
-            children: [
-              _AttachmentMetadataHeader(
-                mimeType: widget.reference.mimeType,
-                sizeLabel: widget.sizeLabel,
-                digest: widget.reference.sha256Hex,
-              ),
-              Expanded(
-                child: _isText
-                    ? _TextBytesPreview(bytes: bytes)
-                    : _isPdf(bytes)
-                    ? _PdfBytesPreview(
-                        reference: widget.reference,
-                        fallbackBytes: bytes,
-                      )
-                    : _BinaryBytesPreview(bytes: bytes),
-              ),
-            ],
-          );
-        },
+          },
+        ),
       ),
     );
   }
@@ -232,21 +345,26 @@ class _AttachmentMetadataHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
+    // Bug real: usaba Theme.of(context).colorScheme (Material 3 por defecto)
+    // en vez del theme extension `hermes` de la app; de ahí el contraste roto.
+    final colors = Theme.of(context).hermes;
     final details = [
       if (mimeType.isNotEmpty) mimeType,
       if (sizeLabel.isNotEmpty) sizeLabel,
       'SHA-256 ${digest.substring(0, 12)}…',
     ].join(' · ');
-    return Container(
+    // Metadatos en una línea, sin caja, coherente con el resto de superficies
+    // rediseñadas.
+    return SizedBox(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      color: colors.surfaceContainerHighest.withValues(alpha: 0.45),
-      child: Text(
-        details,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-        style: Theme.of(context).textTheme.bodySmall,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+        child: Text(
+          details,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 11.5, color: colors.textSecondary),
+        ),
       ),
     );
   }
@@ -259,14 +377,30 @@ class _TextBytesPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).hermes;
     final text = utf8.decode(bytes, allowMalformed: true);
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
-      child: Align(
-        alignment: Alignment.topLeft,
-        child: SelectableText(
-          text,
-          style: const TextStyle(fontFamily: 'monospace', height: 1.4),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: colors.surfaceVariant,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SelectionArea(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                height: 1.5,
+                fontSize: 12.5,
+                color: colors.textPrimary,
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -282,10 +416,12 @@ class _PdfPageResult {
 
 class _PdfBytesPreview extends StatefulWidget {
   final AttachmentHistoryReference reference;
+  final File file;
   final Uint8List fallbackBytes;
 
   const _PdfBytesPreview({
     required this.reference,
+    required this.file,
     required this.fallbackBytes,
   });
 
@@ -295,44 +431,42 @@ class _PdfBytesPreview extends StatefulWidget {
 
 class _PdfBytesPreviewState extends State<_PdfBytesPreview> {
   static const _channel = MethodChannel(attachmentDocumentPreviewChannelName);
+  static const _maxRenderedPages = 40;
 
-  int _page = 0;
-  int? _pageCount;
-  late Future<_PdfPageResult> _renderedPage = _renderPage(0);
+  final Map<int, Future<_PdfPageResult>> _pages = {};
 
-  Future<_PdfPageResult> _renderPage(int page) async {
-    final response = await _channel
-        .invokeMapMethod<String, dynamic>('renderPdfPage', {
-          'storageKey': widget.reference.storageKey,
-          'page': page,
-          'expectedSize': widget.reference.sizeBytes,
-          'expectedSha256': widget.reference.sha256Hex,
-        });
-    final png = response?['pngBytes'];
-    final count = (response?['pageCount'] as num?)?.toInt();
-    if (png is! Uint8List || png.isEmpty || count == null || count <= 0) {
-      throw const FormatException('invalid native PDF preview response');
-    }
-    return _PdfPageResult(pngBytes: png, pageCount: count);
-  }
-
-  void _showPage(int page) {
-    final count = _pageCount;
-    if (page < 0 || (count != null && page >= count)) return;
-    setState(() {
-      _page = page;
-      _renderedPage = _renderPage(page);
-    });
-  }
+  Future<_PdfPageResult> _renderPage(int page) =>
+      _pages.putIfAbsent(page, () async {
+        final locator = GeneratedMediaService.cacheLocator(widget.file);
+        final response = await _channel.invokeMapMethod<String, dynamic>(
+          'renderPdfPage',
+          {
+            'storageKey': widget.reference.storageKey,
+            'page': page,
+            'expectedSize': widget.reference.sizeBytes,
+            'expectedSha256': widget.reference.sha256Hex,
+            if (locator != null) ...{
+              'generatedConnectionKey': locator.connectionKey,
+              'generatedFileKey': locator.fileKey,
+            },
+          },
+        );
+        final png = response?['pngBytes'];
+        final count = (response?['pageCount'] as num?)?.toInt();
+        if (png is! Uint8List || png.isEmpty || count == null || count <= 0) {
+          throw const FormatException('invalid native PDF preview response');
+        }
+        return _PdfPageResult(pngBytes: png, pageCount: count);
+      });
 
   @override
   Widget build(BuildContext context) {
     final strings = Strings.of(context);
     return FutureBuilder<_PdfPageResult>(
-      future: _renderedPage,
+      future: _renderPage(0),
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
-          return const Center(child: CircularProgressIndicator());
+          return const Center(child: ConsoleLoader.medium());
         }
         if (snapshot.hasError || snapshot.data == null) {
           return _BinaryBytesPreview(
@@ -340,58 +474,84 @@ class _PdfBytesPreviewState extends State<_PdfBytesPreview> {
             warning: strings.chaAttachmentPreviewUnavailable,
           );
         }
-        final rendered = snapshot.data!;
-        _pageCount = rendered.pageCount;
-        return Column(
-          children: [
-            Expanded(
-              child: InteractiveViewer(
-                minScale: 0.8,
-                maxScale: 5,
-                child: Center(
-                  child: Image.memory(
-                    rendered.pngBytes,
-                    key: ValueKey('attachment-pdf-page-$_page'),
-                    fit: BoxFit.contain,
-                    gaplessPlayback: true,
-                  ),
-                ),
-              ),
-            ),
-            SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                child: Row(
-                  children: [
-                    IconButton(
-                      tooltip: strings.chaAttachmentPreviewPreviousPage,
-                      onPressed: _page > 0 ? () => _showPage(_page - 1) : null,
-                      icon: const Icon(Icons.chevron_left_rounded),
-                    ),
-                    Expanded(
-                      child: Text(
-                        strings.chaAttachmentPreviewPage(
-                          _page + 1,
-                          rendered.pageCount,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: strings.chaAttachmentPreviewNextPage,
-                      onPressed: _page + 1 < rendered.pageCount
-                          ? () => _showPage(_page + 1)
-                          : null,
-                      icon: const Icon(Icons.chevron_right_rounded),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
+        final firstPage = snapshot.data!;
+        final pageCount = firstPage.pageCount
+            .clamp(1, _maxRenderedPages)
+            .toInt();
+        return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+          itemCount: pageCount,
+          itemBuilder: (context, page) => _LazyPdfPage(
+            page: page,
+            pageCount: firstPage.pageCount,
+            rendered: page == 0
+                ? Future<_PdfPageResult>.value(firstPage)
+                : _renderPage(page),
+          ),
         );
       },
+    );
+  }
+}
+
+class _LazyPdfPage extends StatelessWidget {
+  final int page;
+  final int pageCount;
+  final Future<_PdfPageResult> rendered;
+
+  const _LazyPdfPage({
+    required this.page,
+    required this.pageCount,
+    required this.rendered,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = Strings.of(context);
+    final colors = Theme.of(context).hermes;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        children: [
+          AspectRatio(
+            aspectRatio: 0.72,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: colors.divider),
+              ),
+              child: FutureBuilder<_PdfPageResult>(
+                future: rendered,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState != ConnectionState.done) {
+                    return const Center(child: ConsoleLoader.medium());
+                  }
+                  final result = snapshot.data;
+                  if (snapshot.hasError || result == null) {
+                    return _PreviewUnavailable(
+                      message: strings.chaAttachmentPreviewUnavailable,
+                    );
+                  }
+                  return InteractiveViewer(
+                    minScale: 0.8,
+                    maxScale: 5,
+                    child: Center(
+                      child: Image.memory(
+                        result.pngBytes,
+                        key: ValueKey('attachment-pdf-page-$page'),
+                        fit: BoxFit.contain,
+                        gaplessPlayback: true,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(strings.chaAttachmentPreviewPage(page + 1, pageCount)),
+        ],
+      ),
     );
   }
 }
@@ -405,28 +565,50 @@ class _BinaryBytesPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final strings = Strings.of(context);
+    // Bug real: usaba Theme.of(context).colorScheme/.textTheme (Material 3
+    // por defecto) en vez del theme extension `hermes`.
+    final colors = Theme.of(context).hermes;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (warning != null) ...[
-            Text(
-              warning!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
+            Text(warning!, style: TextStyle(color: colors.error)),
             const SizedBox(height: 12),
           ],
           Text(
             strings.chaAttachmentPreviewBinaryTitle,
-            style: Theme.of(context).textTheme.titleMedium,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: colors.textPrimary,
+            ),
           ),
           const SizedBox(height: 6),
-          Text(strings.chaAttachmentPreviewBinaryBody),
+          Text(
+            strings.chaAttachmentPreviewBinaryBody,
+            style: TextStyle(color: colors.textSecondary),
+          ),
           const SizedBox(height: 16),
-          SelectableText(
-            _hexExcerpt(bytes),
-            style: const TextStyle(fontFamily: 'monospace', height: 1.45),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: colors.surfaceVariant,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: SelectionArea(
+              child: Text(
+                _hexExcerpt(bytes),
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  height: 1.45,
+                  fontSize: 12,
+                  color: colors.textSecondary,
+                ),
+              ),
+            ),
           ),
         ],
       ),

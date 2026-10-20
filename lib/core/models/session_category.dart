@@ -8,22 +8,27 @@ enum SessionCategory { chats, automation, all }
 abstract final class AutomationSessionSources {
   static const List<String> values = <String>[
     'cron',
+    'kanban',
+    'subagent',
     'tool',
-    'api_server',
     'acp',
     'hermes_flow',
     'vulcan_delegate',
     'webhook',
+    // `hermes -z` / `chat -q` one-shot runs (Desktop SIDEBAR_EXCLUDED_SOURCES).
+    'oneshot',
   ];
 
   static const Set<String> _set = <String>{
     'cron',
+    'kanban',
+    'subagent',
     'tool',
-    'api_server',
     'acp',
     'hermes_flow',
     'vulcan_delegate',
     'webhook',
+    'oneshot',
   };
 
   static bool contains(String source) => _set.contains(source.trim());

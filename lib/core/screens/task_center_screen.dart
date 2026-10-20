@@ -8,16 +8,16 @@
 // Todos los streams se cancelan en dispose() cerrando el ApiClient.
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../main.dart';
 import '../services/active_chat_service.dart';
-import '../services/bridge_client.dart';
 import '../services/connection_manager.dart';
 import '../services/run_registry.dart';
 import '../services/run_template_store.dart';
+import '../design/hermes_design.dart'
+    show HermesDialogAction, HermesDialogActionStyle, showHermesDialog;
 import '../theme/app_theme.dart';
 import '../services/notifications/notification_controller.dart';
 import '../utils/relative_time.dart';
@@ -29,6 +29,7 @@ import '../widgets/hermes_ui.dart';
 import '../widgets/read_only.dart';
 import '../widgets/run_template_composer.dart';
 import 'runs_screen.dart' show RunDetailScreen, runStatusColor, runStatusLabel;
+import '../feedback/feedback_policy.dart';
 
 // Máximo de streams SSE simultáneos para no saturar el gateway.
 const _kMaxLiveStreams = 5;
@@ -42,7 +43,7 @@ const _kStatusPriority = {
 };
 
 typedef TaskCenterRunStatusFetcher =
-    Future<Map<String, dynamic>> Function(String runId);
+    Future<Map<String, dynamic>> Function(String runId, String profile);
 
 @visibleForTesting
 Future<void> refreshTaskCenterRunStatuses(
@@ -51,7 +52,7 @@ Future<void> refreshTaskCenterRunStatuses(
 ) async {
   for (final record in registry.records.where((record) => !record.isTerminal)) {
     try {
-      final status = await fetchStatus(record.runId);
+      final status = await fetchStatus(record.runId, record.profile);
       await registry.update(
         record.runId,
         profile: record.profile,
@@ -99,7 +100,12 @@ Future<RunRecord> persistTaskCenterRunUpdate(
 
 class TaskCenterScreen extends StatefulWidget {
   final SavedConnection connection;
-  const TaskCenterScreen({required this.connection, super.key});
+  final String profile;
+  const TaskCenterScreen({
+    required this.connection,
+    this.profile = 'default',
+    super.key,
+  });
 
   @override
   State<TaskCenterScreen> createState() => _TaskCenterScreenState();
@@ -174,7 +180,10 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
     final registry = _registry;
     if (registry == null || _refreshing) return;
     setState(() => _refreshing = true);
-    await refreshTaskCenterRunStatuses(registry, _client.getRun);
+    await refreshTaskCenterRunStatuses(
+      registry,
+      (runId, profile) => _client.getRun(runId, profile: profile),
+    );
     if (!mounted) return;
     setState(() => _refreshing = false);
     // Abrir SSE para runs que siguen no terminales tras el refresh.
@@ -222,6 +231,7 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
 
     _client.streamRunEvents(
       runId,
+      profile: record.profile,
       onEvent: (event) => _onEvent(record, event),
       onDone: () => _onStreamClosed(record, pollAfter: true),
       onError: (_) => _onStreamClosed(record, pollAfter: false),
@@ -318,7 +328,10 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
     final registry = _registry;
     if (registry == null) return;
     try {
-      final status = await _client.getRun(record.runId);
+      final status = await _client.getRun(
+        record.runId,
+        profile: record.profile,
+      );
       await registry.update(
         record.runId,
         profile: record.profile,
@@ -355,19 +368,19 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
 
     final s = Strings.of(context);
     try {
-      // Instancia LOCAL: el agente no expone /v1/runs (daba HTTP 405). Ejecuta
-      // por el Mobile Bridge (igual que el chat local) y muestra el resultado.
-      // REMOTO: flujo /v1/runs + SSE en vivo, intacto.
-      if (widget.connection.kind == InstanceKind.localhost) {
-        await _launchLocalRun(prompt);
-        return;
-      }
-      final runId = await _client.startRun(input: prompt);
+      // Existing localhost and remote connections share the official Gateway
+      // run lifecycle. A failed route/auth never authorizes a companion fallback.
+      final runId = await _client.startRun(
+        input: prompt,
+        profile: widget.profile,
+      );
       final record = RunRecord(
         runId: runId,
         prompt: prompt,
         createdAt: DateTime.now().millisecondsSinceEpoch / 1000,
         lastStatus: 'queued',
+        connId: widget.connection.id,
+        profile: widget.profile,
       );
       await _registry?.add(record);
       if (!mounted) return;
@@ -376,75 +389,10 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
       _openDetail(record);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
+      AppFeedback.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(s.runsLaunchError(e.toString()))));
+      ).notify(FeedbackKind.error, s.runsLaunchError(e.toString()));
     }
-  }
-
-  /// Ejecución en instancia LOCAL vía Mobile Bridge (oneshot). No hay SSE en
-  /// vivo: el bridge devuelve la respuesta final, que registramos y mostramos.
-  Future<void> _launchLocalRun(String prompt) async {
-    final conn = widget.connection;
-    final s = Strings.of(context);
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(s.runsLocalRunning)));
-    }
-    final base = conn.derivedBridgeUrl;
-    final token = await BridgeClient.provision(base, conn.apiKey.trim());
-    if (token == null || token.isEmpty) {
-      throw Exception(s.runsLocalBridgeUnavailable);
-    }
-    final client = BridgeClient(baseUrl: base, token: token);
-    final response = (await client.chat(prompt)).trim();
-    final record = RunRecord(
-      runId: 'local-${DateTime.now().millisecondsSinceEpoch}',
-      prompt: prompt,
-      createdAt: DateTime.now().millisecondsSinceEpoch / 1000,
-      lastStatus: 'completed',
-      output: response,
-    );
-    await _registry?.add(record);
-    if (!mounted) return;
-    setState(() {});
-    await _showLocalResult(response);
-  }
-
-  /// Muestra el resultado de una ejecución local (sin detalle en vivo). Texto
-  /// plano (no SelectableText) para no reactivar el crash `_dependents.isEmpty`.
-  Future<void> _showLocalResult(String response) async {
-    if (!mounted) return;
-    final colors = Theme.of(context).hermes;
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(Strings.of(context).commonResult),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Text(
-              response.isEmpty ? Strings.of(context).commonNoOutput : response,
-              style: TextStyle(color: colors.textPrimary, height: 1.4),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: response));
-              Navigator.pop(ctx);
-            },
-            child: Text(Strings.of(context).commonCopy),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(Strings.of(context).commonClose),
-          ),
-        ],
-      ),
-    );
   }
 
   void _openDetail(RunRecord record) {
@@ -474,9 +422,9 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
     await _registry?.remove(record.runId, profile: record.profile);
     if (!mounted) return;
     setState(() {});
-    ScaffoldMessenger.of(
+    AppFeedback.of(
       context,
-    ).showSnackBar(SnackBar(content: Text(Strings.of(context).runsDeleted)));
+    ).notify(FeedbackKind.routine, Strings.of(context).runsDeleted);
   }
 
   /// Vacía toda la lista local de ejecuciones (con confirmación).
@@ -484,25 +432,23 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
     final registry = _registry;
     if (registry == null || registry.records.isEmpty) return;
     final s = Strings.of(context);
-    final colors = Theme.of(context).hermes;
     final count = registry.records.length;
-    final ok = await showDialog<bool>(
+    final ok = await showHermesDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: colors.surface,
-        title: Text(s.runsClearTitle),
-        content: Text(s.runsClearConfirm(count)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(s.commonCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(s.runsClear, style: TextStyle(color: colors.accent)),
-          ),
-        ],
-      ),
+      title: s.runsClearTitle,
+      message: s.runsClearConfirm(count),
+      actions: [
+        HermesDialogAction(
+          label: s.commonCancel,
+          value: false,
+          style: HermesDialogActionStyle.cancel,
+        ),
+        HermesDialogAction(
+          label: s.runsClear,
+          value: true,
+          style: HermesDialogActionStyle.destructive,
+        ),
+      ],
     );
     if (ok != true) return;
     _statusOverrides.clear();
@@ -510,9 +456,7 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
     await registry.clear();
     if (!mounted) return;
     setState(() {});
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(s.runsCleared)));
+    AppFeedback.of(context).notify(FeedbackKind.routine, s.runsCleared);
   }
 
   // ─── Build ───────────────────────────────────────────────────────────────────
@@ -527,7 +471,7 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
       appBar: HermesAppBar(
         centerTitle: false,
         title: Text(
-          'EJECUCIONES',
+          s.drawerTaskCenter.toUpperCase(),
           style: TextStyle(
             fontWeight: FontWeight.bold,
             fontSize: 15,
@@ -536,6 +480,14 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
           ),
         ),
         actions: [
+          // A new run starts from up here, not from a button over the list.
+          if (!widget.connection.readOnly)
+            IconButton(
+              key: const ValueKey('runs-create'),
+              icon: const Icon(Icons.add_rounded),
+              tooltip: s.runsNewRun,
+              onPressed: _newRun,
+            ),
           if (registry != null && registry.records.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep_outlined, size: 20),
@@ -559,13 +511,6 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
             ),
         ],
       ),
-      floatingActionButton: widget.connection.readOnly
-          ? null
-          : FloatingActionButton(
-              onPressed: _newRun,
-              tooltip: s.runsNewRun,
-              child: const Icon(Icons.add),
-            ),
       body: registry == null
           ? const Center(child: TuiLoader())
           : _buildWithActiveIds(registry, colors, s),
@@ -616,7 +561,7 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
             const SizedBox(height: 4),
             Text(
               s.runsEmptySub,
-              style: TextStyle(fontSize: 11, color: colors.textDisabled),
+              style: TextStyle(fontSize: 11, color: colors.textTertiary),
             ),
           ],
         ),
@@ -627,6 +572,7 @@ class _TaskCenterScreenState extends State<TaskCenterScreen> {
       color: colors.accent,
       onRefresh: _refreshStatuses,
       child: ListView.builder(
+        clipBehavior: hermesUnderHeader,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 80),
         itemCount: records.length,

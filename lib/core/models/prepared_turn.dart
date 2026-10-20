@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 import 'attachment_draft.dart';
+import 'bot_mention.dart';
 
 enum PreparedTurnState {
   prepared,
@@ -16,19 +17,149 @@ enum PreparedTurnState {
 
 enum PreparedTurnTransport { desktop, rest, bridgeLocal, unknown }
 
+/// Qué había en el transcript durable visible JUSTO antes de enviar el turno.
+/// Solo guarda identidades opacas (nunca texto) y decide un retry tras un
+/// fallo de transporte pre-ACK: la frontera calculada en el momento del retry
+/// puede haber adoptado ya la fila del propio turno y provocar doble envío.
+enum PreparedTurnRetryBoundaryKind {
+  /// Último user durable visible, por identidad exacta.
+  identity,
+
+  /// Transcript completo sin ningún user durable previo.
+  empty,
+
+  /// La sesión no existía en el servidor: este turno iba a crearla.
+  knownMissing,
+
+  /// No se pudo demostrar la frontera; el retry falla cerrado.
+  unknown,
+}
+
+class PreparedTurnRetryBoundary {
+  const PreparedTurnRetryBoundary._(
+    this.kind, {
+    this.messageId,
+    this.rowId,
+    this.createdSessionId,
+  });
+
+  const PreparedTurnRetryBoundary.empty()
+    : this._(PreparedTurnRetryBoundaryKind.empty);
+
+  const PreparedTurnRetryBoundary.knownMissing()
+    : this._(PreparedTurnRetryBoundaryKind.knownMissing);
+
+  const PreparedTurnRetryBoundary.unknown()
+    : this._(PreparedTurnRetryBoundaryKind.unknown);
+
+  /// Devuelve [PreparedTurnRetryBoundary.unknown] si no hay coordenada válida.
+  factory PreparedTurnRetryBoundary.identity({String? messageId, int? rowId}) {
+    final validMessageId =
+        messageId != null && messageId.isNotEmpty && messageId.length <= 180
+        ? messageId
+        : null;
+    final validRowId = rowId != null && rowId > 0 ? rowId : null;
+    if (validMessageId == null && validRowId == null) {
+      return const PreparedTurnRetryBoundary.unknown();
+    }
+    return PreparedTurnRetryBoundary._(
+      PreparedTurnRetryBoundaryKind.identity,
+      messageId: validMessageId,
+      rowId: validRowId,
+    );
+  }
+
+  final PreparedTurnRetryBoundaryKind kind;
+  final String? messageId;
+  final int? rowId;
+
+  /// Solo para [PreparedTurnRetryBoundaryKind.knownMissing]: clave durable que
+  /// devolvió `session.create` para ESTE turno, persistida en cuanto se conoce
+  /// (antes de `prompt.submit`). Un 404 solo demuestra «no entregado» si la
+  /// lectura se hizo contra exactamente esta clave; sin ella (process death
+  /// antes del bind, lote antiguo, lectura con el id provisional `mob-…`) el
+  /// retry falla cerrado.
+  final String? createdSessionId;
+
+  static String? _validSessionKey(String? value) =>
+      value != null &&
+          value.isNotEmpty &&
+          value.length <= 256 &&
+          value == value.trim()
+      ? value
+      : null;
+
+  /// Copia con la clave creada. Solo aplica a `knownMissing` y nunca
+  /// sobrescribe una clave ya fijada con otra distinta.
+  PreparedTurnRetryBoundary withCreatedSessionId(String sessionId) {
+    final key = _validSessionKey(sessionId);
+    if (kind != PreparedTurnRetryBoundaryKind.knownMissing || key == null) {
+      return this;
+    }
+    if (createdSessionId != null) return this;
+    return PreparedTurnRetryBoundary._(kind, createdSessionId: key);
+  }
+
+  Map<String, dynamic> toJson() => {
+    'kind': kind.name,
+    if (messageId != null) 'message_id': messageId,
+    if (rowId != null) 'row_id': rowId,
+    if (createdSessionId != null) 'created_session_id': createdSessionId,
+  };
+
+  /// Un valor malformado nunca invalida el lote entero: se degrada a
+  /// `unknown` (retry fail-closed) en vez de perder la outbox.
+  static PreparedTurnRetryBoundary? fromJson(Object? raw) {
+    if (raw == null) return null;
+    if (raw is! Map) return const PreparedTurnRetryBoundary.unknown();
+    final kind = PreparedTurnRetryBoundaryKind.values
+        .where((value) => value.name == raw['kind'])
+        .firstOrNull;
+    switch (kind) {
+      case PreparedTurnRetryBoundaryKind.identity:
+        final messageId = raw['message_id'];
+        final rowId = raw['row_id'];
+        return PreparedTurnRetryBoundary.identity(
+          messageId: messageId is String ? messageId : null,
+          rowId: rowId is int ? rowId : null,
+        );
+      case PreparedTurnRetryBoundaryKind.empty:
+        return const PreparedTurnRetryBoundary.empty();
+      case PreparedTurnRetryBoundaryKind.knownMissing:
+        final created = raw['created_session_id'];
+        final key = created is String ? _validSessionKey(created) : null;
+        return key == null
+            ? const PreparedTurnRetryBoundary.knownMissing()
+            : PreparedTurnRetryBoundary._(
+                PreparedTurnRetryBoundaryKind.knownMissing,
+                createdSessionId: key,
+              );
+      case PreparedTurnRetryBoundaryKind.unknown:
+      case null:
+        return const PreparedTurnRetryBoundary.unknown();
+    }
+  }
+}
+
 /// Lote local recuperable de un único envío. Todo el JSON se guarda cifrado;
 /// IDs, texto, nombres y rutas nunca deben copiarse a logs/diagnósticos.
 class PreparedTurn {
-  static const schemaVersion = 3;
+  static const schemaVersion = 5;
 
   final String connectionId;
   final String sessionId;
   final String clientTurnId;
   final int createdAtMs;
   final int updatedAtMs;
+
+  /// Orden de admisión monotónico de la cola durable. `null` solo existe para
+  /// migraciones legacy y bloquea el drain hasta cancelación/reconciliación.
+  final int? queueOrder;
   final String text;
   final String fullText;
   final String? desktopText;
+  final String mentionAnnotation;
+  final List<BotMention> mentions;
   final List<AttachmentDraft> attachments;
   final String model;
   final String profile;
@@ -37,15 +168,22 @@ class PreparedTurn {
   final bool restoresComposer;
   final bool queued;
 
+  /// Frontera durable capturada al enviar. `null` = lote anterior a 1.2.13
+  /// (sin frontera persistida).
+  final PreparedTurnRetryBoundary? retryBoundary;
+
   const PreparedTurn({
     required this.connectionId,
     required this.sessionId,
     required this.clientTurnId,
     required this.createdAtMs,
     required this.updatedAtMs,
+    this.queueOrder,
     required this.text,
     String? fullText,
     this.desktopText,
+    this.mentionAnnotation = '',
+    this.mentions = const [],
     required this.attachments,
     required this.model,
     required this.profile,
@@ -53,6 +191,7 @@ class PreparedTurn {
     this.state = PreparedTurnState.prepared,
     this.restoresComposer = true,
     this.queued = false,
+    this.retryBoundary,
   }) : fullText = fullText ?? text;
 
   String get storageId =>
@@ -65,6 +204,7 @@ class PreparedTurn {
       .where((item) => item.uploadState != AttachmentUploadState.removed)
       .toList(growable: false);
 
+  /// A matching composer retry must reuse every frozen payload field.
   /// Solo reutiliza la identidad al reintentar exactamente el mismo lote.
   /// Cambiar modelo, perfil o cualquier metadato del adjunto crea otro turno.
   bool matchesBatch({
@@ -92,7 +232,11 @@ class PreparedTurn {
   }
 
   PreparedTurn copyWith({
+    String? mentionAnnotation,
+    List<BotMention>? mentions,
     int? updatedAtMs,
+    int? queueOrder,
+    String? text,
     String? profile,
     List<AttachmentDraft>? attachments,
     String? fullText,
@@ -101,15 +245,19 @@ class PreparedTurn {
     PreparedTurnState? state,
     bool? restoresComposer,
     bool? queued,
+    PreparedTurnRetryBoundary? retryBoundary,
   }) => PreparedTurn(
     connectionId: connectionId,
     sessionId: sessionId,
     clientTurnId: clientTurnId,
     createdAtMs: createdAtMs,
     updatedAtMs: updatedAtMs ?? this.updatedAtMs,
-    text: text,
+    queueOrder: queueOrder ?? this.queueOrder,
+    text: text ?? this.text,
     fullText: fullText ?? this.fullText,
     desktopText: desktopText ?? this.desktopText,
+    mentionAnnotation: mentionAnnotation ?? this.mentionAnnotation,
+    mentions: mentions ?? this.mentions,
     attachments: attachments ?? this.attachments,
     model: model,
     profile: profile ?? this.profile,
@@ -117,6 +265,7 @@ class PreparedTurn {
     state: state ?? this.state,
     restoresComposer: restoresComposer ?? this.restoresComposer,
     queued: queued ?? this.queued,
+    retryBoundary: retryBoundary ?? this.retryBoundary,
   );
 
   Map<String, dynamic> toJson() => {
@@ -126,8 +275,12 @@ class PreparedTurn {
     'client_turn_id': clientTurnId,
     'created_at_ms': createdAtMs,
     'updated_at_ms': updatedAtMs,
+    if (queueOrder != null) 'queue_order': queueOrder,
     'text': text,
     'full_text': fullText,
+    if (mentionAnnotation.isNotEmpty) 'mention_annotation': mentionAnnotation,
+    if (mentions.isNotEmpty)
+      'mentions': mentions.map((bot) => bot.toJson()).toList(),
     if (desktopText != null) 'desktop_text': desktopText,
     'attachments': attachments.map((item) => item.toJson()).toList(),
     'model': model,
@@ -136,12 +289,15 @@ class PreparedTurn {
     'state': state.name,
     'restores_composer': restoresComposer,
     'queued': queued,
+    if (retryBoundary != null) 'retry_boundary': retryBoundary!.toJson(),
   };
 
   factory PreparedTurn.fromJson(Map<String, dynamic> json) {
     final persistedSchema = (json['schema_version'] as num?)?.toInt();
     if (persistedSchema != 1 &&
         persistedSchema != 2 &&
+        persistedSchema != 3 &&
+        persistedSchema != 4 &&
         persistedSchema != schemaVersion) {
       throw const FormatException('Unsupported prepared turn schema');
     }
@@ -155,6 +311,15 @@ class PreparedTurn {
     final updatedAtMs = (json['updated_at_ms'] as num?)?.toInt() ?? 0;
     if (createdAtMs <= 0 || updatedAtMs < createdAtMs) {
       throw const FormatException('Invalid prepared turn timestamps');
+    }
+    int? queueOrder;
+    if ((persistedSchema == 4 || persistedSchema == schemaVersion) &&
+        json.containsKey('queue_order')) {
+      final rawQueueOrder = json['queue_order'];
+      if (rawQueueOrder is! int || rawQueueOrder < 0) {
+        throw const FormatException('Invalid prepared turn queue order');
+      }
+      queueOrder = rawQueueOrder;
     }
     final text = (json['text'] ?? '').toString();
     final connectionId = requiredString('connection_id');
@@ -198,13 +363,20 @@ class PreparedTurn {
       clientTurnId: clientTurnId,
       createdAtMs: createdAtMs,
       updatedAtMs: updatedAtMs,
+      queueOrder: queueOrder,
       text: text,
-      fullText: persistedSchema == schemaVersion
+      fullText: persistedSchema != 1 && persistedSchema != 2
           ? (json['full_text'] ?? text).toString()
           : text,
-      desktopText: persistedSchema == schemaVersion
+      desktopText: persistedSchema != 1 && persistedSchema != 2
           ? json['desktop_text']?.toString()
           : null,
+      mentionAnnotation: json['mention_annotation'] as String? ?? '',
+      mentions: List.unmodifiable(
+        (json['mentions'] as List? ?? const []).map(
+          (raw) => BotMention.fromJson(Map<String, dynamic>.from(raw as Map)),
+        ),
+      ),
       attachments: attachments,
       model: (json['model'] ?? '').toString(),
       profile: (json['profile'] ?? '').toString(),
@@ -219,9 +391,10 @@ class PreparedTurn {
         PreparedTurnState.ambiguous,
       ),
       restoresComposer: json['restores_composer'] as bool? ?? true,
-      queued: persistedSchema == schemaVersion
+      queued: persistedSchema != 1 && persistedSchema != 2
           ? json['queued'] as bool? ?? false
           : false,
+      retryBoundary: PreparedTurnRetryBoundary.fromJson(json['retry_boundary']),
     );
   }
 }

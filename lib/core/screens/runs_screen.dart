@@ -19,29 +19,34 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../main.dart';
-import '../companion/models/companion_presence_level.dart';
 import '../services/notifications/background_listener.dart';
 import '../services/notifications/notification_service.dart';
 import '../services/approval_activity.dart';
 import '../services/approval_policy.dart';
-import '../services/bridge_client.dart';
 import '../services/capability_payload_sanitizer.dart';
 import '../services/command_risk.dart';
 import '../services/connection_manager.dart';
 import '../services/run_registry.dart';
-import '../services/run_template_store.dart';
+import '../design/hermes_design.dart' as d show HermesListRow;
+import '../design/hermes_design.dart'
+    show
+        HermesListGroup,
+        HermesSpace,
+        HermesStatusText,
+        HermesStatusTone,
+        HermesTextBlock,
+        HermesType;
 import '../theme/app_theme.dart';
 import '../utils/enum_labels.dart';
-import '../widgets/hermes_spark_mascot.dart';
 import '../utils/relative_time.dart';
-import '../widgets/accent_card.dart';
 import '../widgets/hermes_pill.dart';
 import '../widgets/hermes_premium_ui.dart';
 import '../widgets/hermes_ui.dart';
 import '../widgets/read_only.dart';
-import '../widgets/run_template_composer.dart';
 import 'lock_screen.dart';
 import '../widgets/hermes_app_bar.dart';
+import '../feedback/feedback_policy.dart';
+import '../design/modal.dart' show showHermesDialogRoute;
 
 @visibleForTesting
 bool runTerminalCancelsApproval(String eventType) =>
@@ -84,445 +89,18 @@ Color runStatusColor(String status, HermesThemeColors colors) =>
       'waiting_for_approval' => colors.warning,
       'completed' => colors.success,
       'failed' => colors.error,
-      'cancelled' || 'expired' => colors.textDisabled,
+      'cancelled' || 'expired' => colors.textTertiary,
       _ => colors.textSecondary,
     };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Pestaña de ejecuciones (embebida en Actividad)
-// ─────────────────────────────────────────────────────────────────────────────
-
-class RunsTab extends StatefulWidget {
-  final SavedConnection connection;
-  const RunsTab({required this.connection, super.key});
-
-  @override
-  State<RunsTab> createState() => _RunsTabState();
-}
-
-class _RunsTabState extends State<RunsTab> with AutomaticKeepAliveClientMixin {
-  late final ApiClient _client;
-  RunRegistry? _registry;
-  RunTemplateStore? _templateStore;
-  bool _refreshing = false;
-
-  @override
-  bool get wantKeepAlive => true;
-
-  @override
-  void initState() {
-    super.initState();
-    _client = ApiClient(
-      baseUrl: widget.connection.baseUrl,
-      apiKey: widget.connection.apiKey,
-    );
-    _init();
-  }
-
-  @override
-  void dispose() {
-    _client.close();
-    super.dispose();
-  }
-
-  Future<void> _init() async {
-    final prefs = await SharedPreferences.getInstance();
-    final registry = await RunRegistry.load(prefs, widget.connection.id);
-    final templateStore = await RunTemplateStore.load(prefs);
-    if (!mounted) return;
-    setState(() {
-      _registry = registry;
-      _templateStore = templateStore;
-    });
-    _refreshStatuses();
-  }
-
-  /// Refresca el estado de los runs no terminales contra el servidor.
-  Future<void> _refreshStatuses() async {
-    final registry = _registry;
-    if (registry == null || _refreshing) return;
-    setState(() => _refreshing = true);
-    for (final r in registry.records.where((r) => !r.isTerminal)) {
-      try {
-        final status = await _client.getRun(r.runId);
-        await registry.update(
-          r.runId,
-          profile: r.profile,
-          lastStatus: status['status'] as String?,
-          output: status['output'] as String?,
-          error: status['error'] as String?,
-        );
-      } catch (e) {
-        if (e.toString().contains('404')) {
-          // El gateway ya no conserva este run (se barre tras completar o
-          // al reiniciar): estado final desconocido.
-          await registry.update(
-            r.runId,
-            profile: r.profile,
-            lastStatus: 'expired',
-          );
-        }
-      }
-    }
-    if (mounted) setState(() => _refreshing = false);
-  }
-
-  Future<void> _newRun() async {
-    if (widget.connection.readOnly) {
-      showReadOnlyNotice(context);
-      return;
-    }
-    final s = Strings.of(context);
-    final store = _templateStore;
-    if (store == null) return;
-    // Composer con plantillas (predefinidas + propias) en vez del campo en
-    // blanco. Devuelve el prompt a lanzar, o null si se cancela.
-    final prompt = await showRunComposer(context, store);
-    if (prompt == null || prompt.isEmpty || !mounted) return;
-
-    try {
-      await _launch(prompt);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(s.runsLaunchError(e.toString()))));
-    }
-  }
-
-  /// Relanza una ejecución previa con el mismo prompt (un toque, sin reescribir).
-  Future<void> _repeatRun(RunRecord record) async {
-    if (widget.connection.readOnly) {
-      showReadOnlyNotice(context);
-      return;
-    }
-    final s = Strings.of(context);
-    try {
-      await _launch(record.prompt);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(s.runsLaunchError(e.toString()))));
-    }
-  }
-
-  /// Lanza una ejecución. REMOTO: `/v1/runs` + detalle en vivo (SSE), como
-  /// siempre. LOCAL: el agente NO expone `/v1/runs` (daba 405); ejecutamos por el
-  /// Mobile Bridge (`/bridge/chat`), igual que el chat local, y mostramos el
-  /// resultado. El camino remoto queda intacto.
-  Future<void> _launch(String prompt) async {
-    if (widget.connection.kind == InstanceKind.localhost) {
-      await _launchLocalRun(prompt);
-      return;
-    }
-    final runId = await _client.startRun(input: prompt);
-    final record = RunRecord(
-      runId: runId,
-      prompt: prompt,
-      createdAt: DateTime.now().millisecondsSinceEpoch / 1000,
-      lastStatus: 'queued',
-    );
-    await _registry?.add(record);
-    if (!mounted) return;
-    setState(() {});
-    _openDetail(record);
-  }
-
-  /// Ejecución en instancia LOCAL vía Mobile Bridge (oneshot `hermes -z`). No hay
-  /// SSE en vivo: el bridge devuelve la respuesta final, que registramos y
-  /// mostramos. Reutiliza el MISMO mecanismo que el chat local (ya probado).
-  Future<void> _launchLocalRun(String prompt) async {
-    final conn = widget.connection;
-    final s = Strings.of(context);
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(s.runsLocalRunning)));
-    }
-    final base = conn.derivedBridgeUrl;
-    final token = await BridgeClient.provision(base, conn.apiKey.trim());
-    if (token == null || token.isEmpty) {
-      throw Exception(s.runsLocalBridgeUnavailable);
-    }
-    final client = BridgeClient(baseUrl: base, token: token);
-    final response = (await client.chat(prompt)).trim();
-    final record = RunRecord(
-      runId: 'local-${DateTime.now().millisecondsSinceEpoch}',
-      prompt: prompt,
-      createdAt: DateTime.now().millisecondsSinceEpoch / 1000,
-      lastStatus: 'completed',
-      output: response,
-    );
-    await _registry?.add(record);
-    if (!mounted) return;
-    setState(() {});
-    await _showLocalResult(response);
-  }
-
-  /// Muestra el resultado de una ejecución local (sin detalle en vivo). Texto
-  /// plano (no SelectableText) para no reactivar el crash `_dependents.isEmpty`.
-  Future<void> _showLocalResult(String response) async {
-    if (!mounted) return;
-    final colors = Theme.of(context).hermes;
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(Strings.of(context).commonResult),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Text(
-              response.isEmpty ? Strings.of(context).commonNoOutput : response,
-              style: TextStyle(color: colors.textPrimary, height: 1.4),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: response));
-              Navigator.pop(ctx);
-            },
-            child: Text(Strings.of(context).commonCopy),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(Strings.of(context).commonClose),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _openDetail(RunRecord record) {
-    Navigator.push(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) =>
-            RunDetailScreen(connection: widget.connection, record: record),
-      ),
-    ).then((_) {
-      if (mounted) {
-        setState(() {});
-        _refreshStatuses();
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    final s = Strings.of(context);
-    final colors = Theme.of(context).hermes;
-    final registry = _registry;
-    if (registry == null) {
-      return const Center(child: TuiLoader());
-    }
-    final records = registry.records;
-
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      floatingActionButton: FloatingActionButton(
-        onPressed: _newRun,
-        tooltip: s.runsNewRun,
-        child: const Icon(Icons.add),
-      ),
-      body: _buildList(colors, records, s),
-    );
-  }
-
-  Widget _buildList(
-    HermesThemeColors colors,
-    List<RunRecord> records,
-    Strings s,
-  ) {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  s.runsListNote,
-                  style: TextStyle(fontSize: 10, color: colors.textDisabled),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.refresh, size: 18),
-                tooltip: s.runsRefreshStates,
-                onPressed: _refreshing ? null : _refreshStatuses,
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: records.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Builder(
-                        builder: (context) {
-                          final companion = context
-                              .findAncestorStateOfType<HermesAppState>()
-                              ?.companion;
-                          if (companion == null) {
-                            return const SizedBox.shrink();
-                          }
-                          return AnimatedBuilder(
-                            animation: companion,
-                            builder: (context, _) {
-                              if (!companion.isInitialized ||
-                                  !companion.enabled ||
-                                  !companion
-                                      .presenceLevel
-                                      .showsStatusPresence) {
-                                return const SizedBox.shrink();
-                              }
-                              return const Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  HermesSparkMascot(
-                                    mood: HermesSparkMood.idle,
-                                    size: 48,
-                                  ),
-                                  SizedBox(height: 12),
-                                ],
-                              );
-                            },
-                          );
-                        },
-                      ),
-                      Text(
-                        s.runsEmpty,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: colors.textSecondary,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        s.runsEmptySub,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: colors.textDisabled,
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              : RefreshIndicator(
-                  color: colors.accent,
-                  onRefresh: _refreshStatuses,
-                  child: ListView.builder(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 80),
-                    itemCount: records.length,
-                    itemBuilder: (_, i) => _RunTile(
-                      record: records[i],
-                      onTap: _openDetail,
-                      onRepeat: () => _repeatRun(records[i]),
-                    ),
-                  ),
-                ),
-        ),
-      ],
-    );
-  }
-}
-
-class _RunTile extends StatelessWidget {
-  final RunRecord record;
-  final void Function(RunRecord) onTap;
-  final VoidCallback? onRepeat;
-
-  const _RunTile({required this.record, required this.onTap, this.onRepeat});
-
-  @override
-  Widget build(BuildContext context) {
-    final s = Strings.of(context);
-    final colors = Theme.of(context).hermes;
-    final live = !record.isTerminal;
-    final waiting = record.lastStatus == 'waiting_for_approval';
-    return AccentCard(
-      margin: const EdgeInsets.only(bottom: 6),
-      accent: waiting
-          ? colors.warning
-          : live
-          ? colors.accent.withValues(alpha: 0.7)
-          : null,
-      background: colors.surface,
-      borderColor: colors.divider,
-      borderRadius: const BorderRadius.all(Radius.circular(10)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: () => onTap(record),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            children: [
-              HermesIconTile(
-                waiting
-                    ? Icons.pan_tool_outlined
-                    : record.lastStatus == 'failed'
-                    ? Icons.error_outline
-                    : Icons.rocket_launch_outlined,
-                size: 34,
-                active: live,
-              ),
-              const SizedBox(width: 11),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      record.prompt,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                        color: colors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      relativeTime(record.createdAt),
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        color: colors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 10),
-              HermesPill(
-                color: runStatusColor(record.lastStatus, colors),
-                label: runStatusLabel(record.lastStatus, s),
-              ),
-              if (onRepeat != null)
-                IconButton(
-                  icon: const Icon(Icons.replay_rounded, size: 18),
-                  color: colors.textSecondary,
-                  tooltip: s.runsRepeat,
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(
-                    minWidth: 34,
-                    minHeight: 34,
-                  ),
-                  padding: EdgeInsets.zero,
-                  onPressed: onRepeat,
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+/// Inline status tone of a run (spec 080: no boxed pills).
+HermesStatusTone runStatusTone(String status) => switch (status) {
+  'queued' || 'running' || 'stopping' => HermesStatusTone.active,
+  'waiting_for_approval' => HermesStatusTone.warn,
+  'completed' => HermesStatusTone.ok,
+  'failed' => HermesStatusTone.error,
+  _ => HermesStatusTone.neutral,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Detalle de ejecución — SSE en vivo + aprobaciones
@@ -629,7 +207,10 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
 
   Future<void> _pollStatus() async {
     try {
-      final status = await _client.getRun(widget.record.runId);
+      final status = await _client.getRun(
+        widget.record.runId,
+        profile: widget.record.profile,
+      );
       if (!mounted) return;
       setState(() {
         _status = (status['status'] as String?) ?? _status;
@@ -668,6 +249,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
   void _listen() {
     _client.streamRunEvents(
       widget.record.runId,
+      profile: widget.record.profile,
       onEvent: (event) {
         if (!mounted) return;
         final type = (event['event'] ?? '').toString();
@@ -910,6 +492,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
         widget.record.runId,
         scope.wire,
         requestId: requestId,
+        profile: widget.record.profile,
       );
       await _notifications?.cancelApproval(
         connId: widget.connection.id,
@@ -941,14 +524,14 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
         command: command,
         sessionId: widget.record.sessionId,
       );
-      ScaffoldMessenger.of(
+      AppFeedback.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(s.runsAutoApproved(reason))));
+      ).notify(FeedbackKind.routine, s.runsAutoApproved(reason));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(s.runsAutoApproveError(e.toString()))),
-      );
+      AppFeedback.of(
+        context,
+      ).notify(FeedbackKind.error, s.runsAutoApproveError(e.toString()));
       _pollStatus();
     } finally {
       if (mounted) setState(() => _resolvingApproval = false);
@@ -1003,6 +586,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
             widget.record.runId,
             choice,
             requestId: requestId,
+            profile: widget.record.profile,
           );
           return true;
         },
@@ -1065,12 +649,12 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
         _ => s.runsApprovalSent,
       };
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      AppFeedback.of(context).notify(FeedbackKind.routine, msg);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
+      AppFeedback.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(s.runsResolveError(e.toString()))));
+      ).notify(FeedbackKind.error, s.runsResolveError(e.toString()));
       _pollStatus();
     } finally {
       if (mounted) setState(() => _resolvingApproval = false);
@@ -1081,7 +665,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
     final colors = Theme.of(context).hermes;
     final command = (_pendingApproval?['command'] ?? '').toString();
     final risk = assessCommandRisk(command);
-    final ok = await showDialog<bool>(
+    final ok = await showHermesDialogRoute<bool>(
       context: context,
       builder: (ctx) {
         final ls = Strings.of(ctx);
@@ -1150,24 +734,25 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
       return;
     }
     try {
-      await _client.stopRun(widget.record.runId);
+      await _client.stopRun(
+        widget.record.runId,
+        profile: widget.record.profile,
+      );
       if (!mounted) return;
       setState(() => _status = 'stopping');
       _persist();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
+      AppFeedback.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(s.runsStopError(e.toString()))));
+      ).notify(FeedbackKind.error, s.runsStopError(e.toString()));
     }
   }
 
   void _copyOutput() {
     final s = Strings.of(context);
     Clipboard.setData(ClipboardData(text: _output));
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(s.runsReplyCopied)));
+    AppFeedback.of(context).notify(FeedbackKind.routine, s.runsReplyCopied);
   }
 
   bool get _isLive => const {
@@ -1186,12 +771,8 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
         centerTitle: false,
         title: Text(
           s.runsDetailTitle,
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 15,
-            letterSpacing: 1.5,
-            color: colors.accentHover,
-          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
         actions: [
           if (_isLive)
@@ -1208,62 +789,62 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 24),
+        clipBehavior: hermesUnderHeader,
+        key: const ValueKey('run-detail'),
+        padding: const EdgeInsets.fromLTRB(
+          HermesSpace.pageH,
+          HermesSpace.pageTop,
+          HermesSpace.pageH,
+          HermesSpace.pageBottom,
+        ),
         children: [
-          // Cabecera de estado
-          AccentCard(
-            accent: runStatusColor(_status, colors),
-            background: colors.surface,
-            borderColor: colors.divider,
-            padding: const EdgeInsets.all(13),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        widget.record.prompt,
-                        style: TextStyle(
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w600,
-                          color: colors.textPrimary,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    HermesPill(
-                      color: runStatusColor(_status, colors),
-                      label: runStatusLabel(_status, s),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  widget.record.sessionId != null
-                      ? s.runsInstanceSessionInfo(
-                          widget.connection.label,
-                          widget.record.sessionId!,
-                        )
-                      : s.runsInstanceInfo(widget.connection.label),
-                  style: TextStyle(fontSize: 10, color: colors.textSecondary),
-                ),
-                const SizedBox(height: 3),
-                InkWell(
-                  onLongPress: () {
-                    Clipboard.setData(ClipboardData(text: widget.record.runId));
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(SnackBar(content: Text(s.runsRunIdCopied)));
-                  },
-                  child: Text(
-                    '${widget.record.runId} · '
-                    '${relativeTime(widget.record.createdAt)}',
-                    style: TextStyle(fontSize: 10, color: colors.textDisabled),
-                  ),
-                ),
-              ],
+          // Cabecera action-first (spec 080): título, estado inline, contexto.
+          Padding(
+            padding: const EdgeInsets.only(left: 2, top: 4),
+            child: Text(
+              widget.record.prompt,
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+              style: HermesType.display.copyWith(
+                fontSize: 19,
+                color: colors.textPrimary,
+              ),
             ),
+          ),
+          const SizedBox(height: HermesSpace.x1),
+          HermesStatusText(
+            key: const ValueKey('run-detail-status'),
+            label: runStatusLabel(_status, s),
+            tone: runStatusTone(_status),
+            meta: relativeTime(widget.record.createdAt),
+          ),
+          const SizedBox(height: HermesSpace.x3),
+          HermesListGroup(
+            dividerIndent: HermesSpace.rowH,
+            children: [
+              d.HermesListRow(
+                title: widget.connection.label,
+                subtitle: widget.record.sessionId,
+                showChevron: false,
+              ),
+              d.HermesListRow(
+                key: const ValueKey('run-detail-id'),
+                title: widget.record.runId,
+                muted: true,
+                trailing: Icon(
+                  Icons.copy_rounded,
+                  size: 18,
+                  color: colors.textSecondary,
+                ),
+                semanticLabel: s.commonCopy,
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: widget.record.runId));
+                  AppFeedback.of(
+                    context,
+                  ).notify(FeedbackKind.routine, s.runsRunIdCopied);
+                },
+              ),
+            ],
           ),
 
           if (_status == 'expired') ...[
@@ -1325,16 +906,11 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
               ),
             ),
             const SizedBox(height: 4),
-            HermesCard(
-              padding: const EdgeInsets.all(12),
-              child: Text(
-                _output.trim(),
-                style: TextStyle(
-                  fontSize: 12.5,
-                  height: 1.5,
-                  color: colors.textPrimary.withValues(alpha: 0.9),
-                ),
-              ),
+            HermesTextBlock(
+              key: const ValueKey('run-detail-reply'),
+              text: _output.trim(),
+              collapsedLines: 12,
+              openTitle: s.runsReplySection,
             ),
           ],
 
@@ -1353,7 +929,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
               'tokens: ${_usage!['total_tokens'] ?? '—'} '
               '(in ${_usage!['input_tokens'] ?? '—'} / '
               'out ${_usage!['output_tokens'] ?? '—'})',
-              style: TextStyle(fontSize: 10.5, color: colors.textDisabled),
+              style: TextStyle(fontSize: 10.5, color: colors.textTertiary),
             ),
           ],
 
@@ -1404,7 +980,7 @@ class _EventLine extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 10.5,
-                      color: colors.textDisabled,
+                      color: colors.textTertiary,
                     ),
                   ),
               ],
@@ -1463,9 +1039,9 @@ class _RunApprovalDecisionBlockState extends State<RunApprovalDecisionBlock> {
 
   void _copyCommand(BuildContext context, String command) {
     Clipboard.setData(ClipboardData(text: command));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(Strings.of(context).runsCommandCopied)),
-    );
+    AppFeedback.of(
+      context,
+    ).notify(FeedbackKind.routine, Strings.of(context).runsCommandCopied);
   }
 
   @override
@@ -1577,21 +1153,30 @@ class _RunApprovalDecisionBlockState extends State<RunApprovalDecisionBlock> {
           label: Text(s.runsDeny),
         ),
         if (!widget.readOnly) ...[
-          TextButton.icon(
-            onPressed: widget.busy ? null : () => widget.onChoice('session'),
-            icon: const Icon(Icons.repeat_rounded, size: 17),
-            label: Text(s.runsApproveSession),
+          Tooltip(
+            message: s.apx1215ScopeSessionHint,
+            child: TextButton.icon(
+              onPressed: widget.busy ? null : () => widget.onChoice('session'),
+              icon: const Icon(Icons.repeat_rounded, size: 17),
+              label: Text(s.runsApproveSession),
+            ),
           ),
           if (showAlways)
-            TextButton.icon(
-              onPressed: widget.busy ? null : widget.onAlways,
-              icon: const Icon(Icons.all_inclusive_rounded, size: 17),
-              label: Text(s.runsAllowAlways),
+            Tooltip(
+              message: s.apx1215ScopeAlwaysHint,
+              child: TextButton.icon(
+                onPressed: widget.busy ? null : widget.onAlways,
+                icon: const Icon(Icons.all_inclusive_rounded, size: 17),
+                label: Text(s.runsAllowAlways),
+              ),
             ),
-          FilledButton.icon(
-            onPressed: widget.busy ? null : () => widget.onChoice('once'),
-            icon: const Icon(Icons.check_rounded, size: 18),
-            label: Text(s.runsApproveOnce),
+          Tooltip(
+            message: s.apx1215ScopeOnceHint,
+            child: FilledButton.icon(
+              onPressed: widget.busy ? null : () => widget.onChoice('once'),
+              icon: const Icon(Icons.check_rounded, size: 18),
+              label: Text(s.runsApproveOnce),
+            ),
           ),
         ],
       ],

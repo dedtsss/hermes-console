@@ -6,9 +6,9 @@ Flutter (notificación ID 256) mantiene `remoteMessaging`, Voz, Read Aloud y el
 fallback `dataSync` de API ≤34. `HermesExternalDataSyncService` (notificación
 ID 257) mantiene únicamente SSH/SFTP `dataSync` en API ≥35.
 
-**Revisado**: 2026-09-01 para el candidato fuente `1.2.9`. Los tipos
+**Revisado**: 2026-09-03 para el candidato fuente `1.2.10`. Los tipos
 coinciden con el manifest versionado, pero el AAB firmado, su manifest fusionado
-y la demostración física todavía están pendientes. Copiar o adaptar en Play
+y la demostración grabada todavía están pendientes. Copiar o adaptar en Play
 Console → Contenido de la aplicación → Permisos de servicios en primer plano
 solo después de cerrar esos gates. Google exige declarar cada tipo, describir el
 efecto de un aplazamiento/interrupción y aportar un vídeo que muestre cómo lo
@@ -195,7 +195,10 @@ usar un vídeo antiguo que solo muestre `dataSync`.
   `FOREGROUND_SERVICE_REMOTE_MESSAGING`, `FOREGROUND_SERVICE_MICROPHONE` y
   `FOREGROUND_SERVICE_MEDIA_PLAYBACK`. El servicio Flutter declara
   `dataSync|remoteMessaging|microphone|mediaPlayback`; el servicio nativo
-  separado declara solo `dataSync`.
+  separado declara solo `dataSync`. Se comprueba sobre el AAB elegido con
+  `bundletool dump manifest` y `tool/release/check_manifest_policy.py`: los dos
+  servicios y sus tipos, y los cinco permisos, tienen que ser exactamente los
+  de `tool/release/full_release_policy.json`.
 - `RECORD_AUDIO` se concede antes de crear el FGS `microphone`; la conversación
   se inicia desde una Activity visible, nunca desde background o
   `BOOT_COMPLETED`.

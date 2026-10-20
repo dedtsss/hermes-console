@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">Hermes Console RU</string>
     <string name="voice_notification_title">Голос Hermes</string>
@@ -14,4 +14,25 @@
     <string name="external_data_sync_channel">Безопасные передачи</string>
     <string name="external_data_sync_active">Активна безопасная передача или терминал</string>
     <string name="external_data_sync_stop">Остановить</string>
+    <string name="rich_channel_conversations">Боты и комнаты</string>
+    <string name="rich_channel_conversations_desc">Сообщения, упоминания и итоги раундов ваших ботов</string>
+    <string name="rich_channel_live">Текущая активность</string>
+    <string name="rich_channel_live_desc">Ход работы бота или комнаты</string>
+    <string name="rich_channel_approvals">Запросы одобрения</string>
+    <string name="rich_brand">Hermes</string>
+    <string name="rich_you">Вы</string>
+    <string name="rich_thinking">Размышляет…</string>
+    <string name="rich_done">Готово</string>
+    <string name="rich_sending">Отправка…</string>
+    <string name="rich_unlock_to_answer">Разблокируйте Hermes, чтобы ответить</string>
+    <string name="rich_reply_failed">Не удалось отправить · откройте для повтора</string>
+    <string name="rich_action_failed">Не удалось отправить · откройте Hermes</string>
+    <plurals name="rich_quiet_more">
+        <item quantity="one">ещё %d</item>
+        <item quantity="other">ещё %d</item>
+    </plurals>
+    <plurals name="rich_auto_summary">
+        <item quantity="one">Автозадач: %d</item>
+        <item quantity="other">Автозадач: %d</item>
+    </plurals>
 </resources>

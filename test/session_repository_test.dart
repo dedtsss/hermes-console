@@ -758,6 +758,38 @@ void main() {
     },
   );
 
+  test('a search hit keeps its FTS snippet apart from a marker-free '
+      'preview (Desktop stripFtsMarkers)', () async {
+    final dashboardHttp = MockClient((request) async {
+      return http.Response(
+        jsonEncode({
+          'results': [
+            {'session_id': 'hit', 'snippet': 'QA >>>9484<<< ping'},
+            {'session_id': 'id-hit', 'snippet': 'Session ID: id-hit'},
+          ],
+        }),
+        200,
+      );
+    });
+    final gatewayHttp = MockClient((_) async => http.Response('{}', 500));
+    final dashboard = _dashboard(dashboardHttp);
+    final gateway = _gateway(gatewayHttp);
+    final repository = SessionRepository(dashboard, gateway);
+    addTearDown(() {
+      repository.close();
+      dashboard.close();
+      gateway.close();
+    });
+
+    final result = await repository.search('9484');
+    final hit = result.sessions.singleWhere((s) => s.id == 'hit');
+    expect(hit.preview, 'QA 9484 ping');
+    expect(hit.searchSnippet, 'QA >>>9484<<< ping');
+    final idHit = result.sessions.singleWhere((s) => s.id == 'id-hit');
+    expect(idHit.preview, 'Session ID: id-hit');
+    expect(idHit.searchSnippet, isNull);
+  });
+
   test(
     'búsqueda conserva sources/exclude_sources y descarta scope tardío',
     () async {
@@ -883,8 +915,57 @@ void main() {
     expect(automation.source, SessionLibrarySource.gateway);
     expect(
       automation.sessions.map((session) => session.source),
-      AutomationSessionSources.values,
+      unorderedEquals(AutomationSessionSources.values),
     );
+  });
+
+  test('only the gateway fallback hands over its complete listing', () async {
+    var dashboardUp = false;
+    final dashboardHttp = MockClient((_) async {
+      if (!dashboardUp) return http.Response('{}', 404);
+      return http.Response(
+        jsonEncode({
+          'sessions': [_row(0)],
+          'total': 1,
+        }),
+        200,
+      );
+    });
+    final gatewayHttp = MockClient(
+      (_) async => http.Response(
+        jsonEncode({
+          'data': [_row(0), _row(1, source: 'cron')],
+        }),
+        200,
+      ),
+    );
+    final dashboard = _dashboard(dashboardHttp);
+    final gateway = _gateway(gatewayHttp);
+    final repository = SessionRepository(dashboard, gateway);
+    addTearDown(() {
+      repository.close();
+      dashboard.close();
+      gateway.close();
+    });
+
+    // Filtered for the screen, but the raw default listing travels apart:
+    // every row the server listed, what a delete tombstone is checked
+    // against.
+    final fallback = await repository.refresh(
+      const SessionLibraryQuery(sources: ['mobile']),
+    );
+    expect(fallback.source, SessionLibrarySource.gateway);
+    expect(fallback.sessions.map((s) => s.id), ['session-0']);
+    expect(fallback.completeGatewayListing?.map((s) => s.id), [
+      'session-0',
+      'session-1',
+    ]);
+
+    // A Dashboard page is never presented as complete.
+    dashboardUp = true;
+    final page = await repository.refresh(const SessionLibraryQuery());
+    expect(page.source, SessionLibrarySource.dashboard);
+    expect(page.completeGatewayListing, isNull);
   });
 
   test('Gateway legacy vuelve a cargar al cambiar de categoría', () async {
@@ -985,6 +1066,373 @@ void main() {
     expect(pinRequest?.url.toString(), contains('/api/sessions/root%2Fbranch'));
     expect(jsonDecode(pinRequest!.body), {'pinned': true, 'profile': 'coding'});
   });
+
+  test('session state PATCH carries the profile and reports the server '
+      'refusal status', () async {
+    final requests = <http.Request>[];
+    final dashboardHttp = MockClient((request) async {
+      requests.add(request);
+      if (requests.length == 2) return http.Response('{"detail":"x"}', 400);
+      return http.Response(
+        jsonEncode({'ok': true, 'title': 'T', 'hidden': true}),
+        200,
+      );
+    });
+    final gatewayHttp = MockClient((_) async => http.Response('{}', 500));
+    final dashboard = _dashboard(dashboardHttp);
+    final gateway = _gateway(gatewayHttp);
+    final repository = SessionRepository(dashboard, gateway);
+    addTearDown(() {
+      repository.close();
+      dashboard.close();
+      gateway.close();
+    });
+
+    final answer = await repository.patchSessionState('tip/branch', {
+      'hidden': true,
+    }, 'coding');
+    expect(answer['hidden'], isTrue);
+    expect(requests.single.method, 'PATCH');
+    expect(
+      requests.single.url.toString(),
+      contains('/api/sessions/tip%2Fbranch'),
+    );
+    expect(jsonDecode(requests.single.body), {
+      'hidden': true,
+      'profile': 'coding',
+    });
+
+    Object? failure;
+    try {
+      await repository.patchSessionState('s', {'unread': true}, null);
+    } catch (error) {
+      failure = error;
+    }
+    expect(dashboardHttpStatusOf(failure!), 400);
+    expect(jsonDecode(requests.last.body), {'unread': true});
+  });
+
+  test(
+    'Gateway limitado conserva filas observadas en refresh del mismo scope',
+    () async {
+      final dashboardHttp = MockClient((_) async => http.Response('{}', 404));
+      var gatewayRequests = 0;
+      final gatewayHttp = MockClient((_) async {
+        gatewayRequests += 1;
+        return http.Response(
+          jsonEncode({
+            'data': gatewayRequests == 1
+                ? [
+                    _lineageRow(
+                      id: 'new-chat',
+                      root: 'new-chat-root',
+                      lastActive: 200,
+                    ),
+                    _lineageRow(
+                      id: 'older-chat',
+                      root: 'older-chat-root',
+                      lastActive: 100,
+                    ),
+                  ]
+                : [
+                    _lineageRow(
+                      id: 'older-chat',
+                      root: 'older-chat-root',
+                      lastActive: 100,
+                    ),
+                  ],
+          }),
+          200,
+        );
+      });
+      final dashboard = _dashboard(dashboardHttp);
+      final gateway = _gateway(gatewayHttp);
+      final repository = SessionRepository(dashboard, gateway);
+      addTearDown(() {
+        repository.close();
+        dashboard.close();
+        gateway.close();
+      });
+
+      await repository.refresh(const SessionLibraryQuery());
+      final refreshed = await repository.refresh(const SessionLibraryQuery());
+
+      expect(refreshed.source, SessionLibrarySource.gateway);
+      expect(refreshed.exhaustive, isFalse);
+      expect(refreshed.sessions.map((row) => row.id), [
+        'new-chat',
+        'older-chat',
+      ]);
+    },
+  );
+
+  test(
+    'Gateway limitado intercala filas retenidas por actividad reciente',
+    () async {
+      final dashboardHttp = MockClient((_) async => http.Response('{}', 404));
+      var gatewayRequests = 0;
+      final gatewayHttp = MockClient((_) async {
+        gatewayRequests += 1;
+        return http.Response(
+          jsonEncode({
+            'data': gatewayRequests == 1
+                ? [
+                    _lineageRow(
+                      id: 'older-chat',
+                      root: 'older-chat-root',
+                      lastActive: 100,
+                    ),
+                  ]
+                : [
+                    _lineageRow(
+                      id: 'new-chat',
+                      root: 'new-chat-root',
+                      lastActive: 200,
+                    ),
+                  ],
+          }),
+          200,
+        );
+      });
+      final dashboard = _dashboard(dashboardHttp);
+      final gateway = _gateway(gatewayHttp);
+      final repository = SessionRepository(dashboard, gateway);
+      addTearDown(() {
+        repository.close();
+        dashboard.close();
+        gateway.close();
+      });
+
+      await repository.refresh(const SessionLibraryQuery());
+      final refreshed = await repository.refresh(const SessionLibraryQuery());
+
+      expect(refreshed.sessions.map((row) => row.id), [
+        'new-chat',
+        'older-chat',
+      ]);
+    },
+  );
+
+  test(
+    'Gateway limitado expulsa una fila devuelta fuera del filtro activo',
+    () async {
+      final dashboardHttp = MockClient((_) async => http.Response('{}', 404));
+      var gatewayRequests = 0;
+      final gatewayHttp = MockClient((_) async {
+        gatewayRequests += 1;
+        final row = _lineageRow(
+          id: 'chat-filtered',
+          root: 'chat-filtered-root',
+          lastActive: 200,
+          archived: gatewayRequests > 1,
+        );
+        return http.Response(
+          jsonEncode({
+            'data': [row],
+          }),
+          200,
+        );
+      });
+      final dashboard = _dashboard(dashboardHttp);
+      final gateway = _gateway(gatewayHttp);
+      final repository = SessionRepository(dashboard, gateway);
+      addTearDown(() {
+        repository.close();
+        dashboard.close();
+        gateway.close();
+      });
+
+      final first = await repository.refresh(const SessionLibraryQuery());
+      expect(first.sessions.single.id, 'chat-filtered');
+
+      final refreshed = await repository.refresh(const SessionLibraryQuery());
+
+      expect(refreshed.sessions, isEmpty);
+    },
+  );
+
+  test(
+    'borrado confirmado expulsa la fila antes de un refresh Gateway limitado',
+    () async {
+      final dashboard = _dashboard(
+        MockClient((_) async => http.Response('{}', 404)),
+      );
+      var includeRow = true;
+      final gateway = _gateway(
+        MockClient((_) async {
+          final data = includeRow
+              ? [
+                  {
+                    ..._lineageRow(
+                      id: 'api-chat',
+                      root: 'api-chat',
+                      lastActive: 200,
+                    ),
+                    'source': 'api_server',
+                  },
+                ]
+              : const <Map<String, Object?>>[];
+          return http.Response(jsonEncode({'data': data}), 200);
+        }),
+      );
+      final repository = SessionRepository(dashboard, gateway);
+      addTearDown(() {
+        repository.close();
+        dashboard.close();
+        gateway.close();
+      });
+
+      final first = await repository.refresh(const SessionLibraryQuery());
+      expect(first.sessions.map((row) => row.id), ['api-chat']);
+
+      repository.evictSessions(first.sessions);
+      includeRow = false;
+      final refreshed = await repository.refresh(const SessionLibraryQuery());
+
+      expect(refreshed.sessions, isEmpty);
+    },
+  );
+
+  test(
+    'borrado invalida un refresh Gateway anterior todavía en vuelo',
+    () async {
+      final dashboard = _dashboard(
+        MockClient((_) async => http.Response('{}', 404)),
+      );
+      final delayed = Completer<http.Response>();
+      final requestStarted = Completer<void>();
+      var gatewayRequests = 0;
+      final row = {
+        ..._lineageRow(id: 'racing-chat', root: 'racing-root', lastActive: 200),
+        'source': 'api_server',
+      };
+      final gateway = _gateway(
+        MockClient((_) async {
+          gatewayRequests += 1;
+          if (gatewayRequests == 1) {
+            return http.Response(
+              jsonEncode({
+                'data': [row],
+              }),
+              200,
+            );
+          }
+          if (!requestStarted.isCompleted) requestStarted.complete();
+          return delayed.future;
+        }),
+      );
+      final repository = SessionRepository(dashboard, gateway);
+      addTearDown(() {
+        repository.close();
+        dashboard.close();
+        gateway.close();
+      });
+
+      final first = await repository.refresh(const SessionLibraryQuery());
+      final racingRefresh = repository.refresh(const SessionLibraryQuery());
+      await requestStarted.future;
+
+      repository.evictSessions(first.sessions);
+      delayed.complete(
+        http.Response(
+          jsonEncode({
+            'data': [row],
+          }),
+          200,
+        ),
+      );
+      await racingRefresh;
+
+      expect(repository.snapshot.sessions, isEmpty);
+    },
+  );
+
+  test(
+    'borrado invalida una búsqueda remota anterior todavía en vuelo',
+    () async {
+      final delayed = Completer<http.Response>();
+      final requestStarted = Completer<void>();
+      final dashboard = _dashboard(
+        MockClient((request) async {
+          if (!requestStarted.isCompleted) requestStarted.complete();
+          return delayed.future;
+        }),
+      );
+      final gateway = _gateway(
+        MockClient((_) async => http.Response('{}', 404)),
+      );
+      final repository = SessionRepository(dashboard, gateway);
+      addTearDown(() {
+        repository.close();
+        dashboard.close();
+        gateway.close();
+      });
+      final deleted = Session.fromJson({
+        'id': 'search-chat',
+        'lineage_root': 'search-root',
+        'title': 'Search chat',
+        'source': 'api_server',
+      });
+
+      final racingSearch = repository.search('Search chat');
+      await requestStarted.future;
+      repository.evictSessions([deleted]);
+      delayed.complete(
+        http.Response(
+          jsonEncode({
+            'results': [
+              {
+                'session_id': 'search-chat',
+                'lineage_root': 'search-root',
+                'title': 'Search chat',
+                'source': 'api_server',
+              },
+            ],
+          }),
+          200,
+        ),
+      );
+
+      expect((await racingSearch).sessions, isEmpty);
+    },
+  );
+
+  test(
+    'Dashboard fallback reads the requested named-profile Gateway inventory',
+    () async {
+      final dashboard = _dashboard(
+        MockClient((_) async => http.Response('{}', 404)),
+      );
+      late Uri gatewayRequest;
+      final gateway = _gateway(
+        MockClient((request) async {
+          gatewayRequest = request.url;
+          return http.Response(
+            jsonEncode({
+              'data': [_row(1)],
+            }),
+            200,
+          );
+        }),
+      );
+      final repository = SessionRepository(dashboard, gateway);
+      addTearDown(() {
+        repository.close();
+        dashboard.close();
+        gateway.close();
+      });
+
+      final gatewayRows = await gateway.getSessions(profile: 'team_alpha');
+      final snapshot = await repository.refresh(
+        const SessionLibraryQuery(profile: 'team_alpha'),
+      );
+
+      expect(gatewayRows.single.profile, 'team_alpha');
+      expect(snapshot.source, SessionLibrarySource.gateway);
+      expect(snapshot.sessions.single.profile, 'team_alpha');
+      expect(gatewayRequest.path, '/p/team_alpha/api/sessions');
+    },
+  );
 
   test(
     'Dashboard 404 degrada a Gateway limitado; 403 nunca cambia de host',

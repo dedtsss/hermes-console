@@ -5,7 +5,6 @@ import '../theme/app_theme.dart';
 /// Infraestructura que una función puede necesitar antes de estar disponible.
 enum FeatureDependencyKind {
   dashboard,
-  bridge,
   gateway,
   permission,
   serverVersion,
@@ -55,7 +54,6 @@ class _FeatureDependencyNoticeState extends State<FeatureDependencyNotice> {
 
   IconData get _icon => switch (widget.kind) {
     FeatureDependencyKind.dashboard => Icons.space_dashboard_outlined,
-    FeatureDependencyKind.bridge => Icons.cable_outlined,
     FeatureDependencyKind.gateway => Icons.hub_outlined,
     FeatureDependencyKind.permission => Icons.admin_panel_settings_outlined,
     FeatureDependencyKind.serverVersion => Icons.system_update_alt,
@@ -78,7 +76,9 @@ class _FeatureDependencyNoticeState extends State<FeatureDependencyNotice> {
       return const SizedBox.shrink();
     }
     final colors = Theme.of(context).hermes;
-    final scheme = Theme.of(context).colorScheme;
+    // Bug real: mezclaba Theme.of(context).colorScheme.secondaryContainer
+    // (Material 3 por defecto) con `hermes.surface` en vez de usar solo
+    // colores del theme extension de la app.
     return Semantics(
       container: true,
       liveRegion: true,
@@ -86,7 +86,7 @@ class _FeatureDependencyNoticeState extends State<FeatureDependencyNotice> {
       child: Material(
         key: ValueKey('dependency-notice-${widget.noticeId}'),
         color: Color.alphaBlend(
-          scheme.secondaryContainer.withValues(alpha: 0.2),
+          colors.accent.withValues(alpha: 0.08),
           colors.surface,
         ),
         surfaceTintColor: Colors.transparent,

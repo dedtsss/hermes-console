@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_android/core/models/compaction_progress.dart';
 import 'package:hermes_android/core/models/desktop_context_breakdown.dart';
 import 'package:hermes_android/core/models/desktop_session_snapshot.dart';
 import 'package:hermes_android/core/models/session.dart';
@@ -147,7 +149,7 @@ void main() {
     expect(compactSessionContextTokens(1500000), '1.5M');
   });
 
-  testWidgets('el notifier reconstruye solo el trigger y conserva Semantics', (
+  testWidgets('una ventana conocida muestra y anuncia la ocupación', (
     tester,
   ) async {
     final metrics = ValueNotifier(
@@ -177,9 +179,10 @@ void main() {
 
     expect(find.text('31%'), findsOneWidget);
     expect(hostBuilds, 1);
-    final semantics = tester.getSemantics(
+    var semantics = tester.getSemantics(
       find.byKey(const ValueKey('desktop-context-usage-status')),
     );
+    expect(semantics.getSemanticsData().label, 'Open context usage, 31% used');
     expect(semantics.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
 
     metrics.value = const SessionContextMetrics(
@@ -192,18 +195,90 @@ void main() {
     expect(find.text('52%'), findsOneWidget);
     expect(find.text('31%'), findsNothing);
     expect(hostBuilds, 1);
-
-    metrics.value = const SessionContextMetrics(cumulativeTotal: 99000);
-    await tester.pump();
-
-    expect(find.text('99k tok'), findsOneWidget);
-    expect(find.text('52%'), findsNothing);
-    expect(hostBuilds, 1);
+    semantics = tester.getSemantics(
+      find.byKey(const ValueKey('desktop-context-usage-status')),
+    );
+    expect(semantics.getSemanticsData().label, 'Open context usage, 52% used');
 
     await tester.tap(
       find.byKey(const ValueKey('desktop-context-usage-status')),
     );
     expect(taps, 1);
+  });
+
+  testWidgets('sin porcentaje muestra los tokens acumulados disponibles', (
+    tester,
+  ) async {
+    final metrics = ValueNotifier(
+      const SessionContextMetrics(cumulativeTotal: 99000),
+    );
+    addTearDown(metrics.dispose);
+
+    await tester.pumpWidget(
+      _TestApp(
+        child: SessionContextTrigger(metrics: metrics, onPressed: () {}),
+      ),
+    );
+
+    expect(find.text('99k tok'), findsOneWidget);
+    expect(find.text('—'), findsNothing);
+    final semantics = tester.getSemantics(
+      find.byKey(const ValueKey('desktop-context-usage-status')),
+    );
+    expect(semantics.getSemanticsData().label, 'Open context usage, 99k tok');
+  });
+
+  testWidgets('sin porcentaje ni acumulado muestra solo el marcador', (
+    tester,
+  ) async {
+    final metrics = ValueNotifier(SessionContextMetrics.unknown);
+    addTearDown(metrics.dispose);
+
+    await tester.pumpWidget(
+      _TestApp(
+        child: SessionContextTrigger(metrics: metrics, onPressed: () {}),
+      ),
+    );
+
+    expect(find.text('—'), findsOneWidget);
+    final semantics = tester.getSemantics(
+      find.byKey(const ValueKey('desktop-context-usage-status')),
+    );
+    expect(
+      semantics.getSemanticsData().label,
+      'Open context usage, Hermes has not published this session\'s context window yet.',
+    );
+  });
+
+  testWidgets('el panel etiqueta los tokens acumulados en inglés y español', (
+    tester,
+  ) async {
+    final metrics = ValueNotifier(
+      const SessionContextMetrics(cumulativeTotal: 99000),
+    );
+    addTearDown(metrics.dispose);
+
+    for (final (locale, label) in [
+      (const Locale('en'), 'Session total tokens'),
+      (const Locale('es'), 'Tokens acumulados de la sesión'),
+    ]) {
+      await tester.pumpWidget(
+        _TestApp(
+          locale: locale,
+          child: SessionContextSheetBody(
+            key: ValueKey(locale.languageCode),
+            metrics: metrics,
+            loadBreakdown: () async => null,
+            onMetricsSnapshot: (value) => metrics.value = value,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text(label), findsOneWidget);
+      expect(find.text('99k'), findsOneWidget);
+      expect(find.text('99k tok'), findsNothing);
+    }
   });
 
   testWidgets('el panel flotante carga una vez y cabe a 320 dp al 200 %', (
@@ -230,16 +305,16 @@ void main() {
     await tester.pumpWidget(
       _TestApp(
         textScale: 2,
-        child: SessionContextFloatingPanel(
-          width: 296,
-          maxHeight: 440,
-          metrics: metrics,
-          loadBreakdown: () {
-            calls += 1;
-            return result.future;
-          },
-          onMetricsSnapshot: (value) => metrics.value = value,
-          onClose: () {},
+        child: SingleChildScrollView(
+          child: SessionContextSheetBody(
+            metrics: metrics,
+            loadBreakdown: () {
+              calls += 1;
+              return result.future;
+            },
+            onMetricsSnapshot: (value) => metrics.value = value,
+            onCompact: () {},
+          ),
         ),
       ),
     );
@@ -297,70 +372,140 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('el trigger abre una tarjeta anclada y el cierre la retira', (
-    tester,
-  ) async {
-    tester.view.devicePixelRatio = 1;
-    tester.view.physicalSize = const Size(393, 800);
-    addTearDown(() {
-      tester.view.resetDevicePixelRatio();
-      tester.view.resetPhysicalSize();
-    });
-
-    final metrics = ValueNotifier(
-      const SessionContextMetrics(
-        contextUsed: 2900,
-        contextMax: 10000,
-        percent: 29,
-      ),
-    );
-    addTearDown(metrics.dispose);
-    var calls = 0;
-
-    await tester.pumpWidget(
+  group('context sheet body', () {
+    Future<void> pumpBody(
+      WidgetTester tester, {
+      required ValueNotifier<SessionContextMetrics> metrics,
+      VoidCallback? onCompact,
+      ValueListenable<CompactionProgress?>? compaction,
+      Future<DesktopContextBreakdown?> Function()? load,
+    }) => tester.pumpWidget(
       _TestApp(
-        child: Align(
-          alignment: Alignment.topRight,
-          child: SessionContextPopoverButton(
+        locale: const Locale('es'),
+        child: SingleChildScrollView(
+          child: SessionContextSheetBody(
             metrics: metrics,
-            loadBreakdown: () async {
-              calls += 1;
-              return const DesktopContextBreakdown(
-                contextUsed: 2900,
-                contextMax: 10000,
-                contextPercent: 29,
-              );
-            },
+            loadBreakdown: load ?? () async => null,
             onMetricsSnapshot: (value) => metrics.value = value,
+            onCompact: onCompact,
+            compaction: compaction,
+            clock: () => DateTime(2026, 10, 6, 12, 0, 3),
           ),
         ),
       ),
     );
 
-    final trigger = find.byKey(const ValueKey('desktop-context-usage-status'));
-    expect(find.text('29%'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('desktop-context-usage-popover')),
-      findsNothing,
-    );
+    testWidgets('big ring, tokens of the window and Compactar', (tester) async {
+      final colors = AppTheme.fromId('amber').hermes;
+      final metrics = ValueNotifier(
+        const SessionContextMetrics(
+          contextUsed: 89600,
+          contextMax: 200000,
+          percent: 80,
+        ),
+      );
+      addTearDown(metrics.dispose);
+      var compacts = 0;
+      var loads = 0;
+      await pumpBody(
+        tester,
+        metrics: metrics,
+        onCompact: () => compacts++,
+        load: () async {
+          loads++;
+          return null;
+        },
+      );
+      await tester.pump();
 
-    await tester.tap(trigger);
-    await tester.pumpAndSettle();
+      expect(find.text('80%'), findsOneWidget);
+      expect(find.text('89.6k de 200k tokens'), findsOneWidget);
+      final ring = tester.widget<SessionContextRing>(
+        find.byKey(const ValueKey('context-sheet-ring')),
+      );
+      expect(ring.color, colors.warning);
+      // Honest notice: this server publishes no breakdown.
+      expect(
+        find.text(
+          Strings.of(
+            tester.element(find.byType(SessionContextSheetBody)),
+          ).chaContextUsageUnavailable,
+        ),
+        findsOneWidget,
+      );
 
-    final popover = find.byKey(const ValueKey('desktop-context-usage-popover'));
-    expect(popover, findsOneWidget);
-    expect(calls, 1);
-    expect(
-      tester.getTopLeft(popover).dy,
-      greaterThanOrEqualTo(tester.getBottomLeft(trigger).dy),
-    );
-    expect(tester.getTopRight(popover).dx, lessThanOrEqualTo(393));
+      await tester.tap(find.byKey(const ValueKey('context-compress-now')));
+      expect(compacts, 1);
+      expect(loads, 1);
+    });
 
-    await tester.tap(find.byIcon(Icons.close_rounded));
-    await tester.pumpAndSettle();
-    expect(popover, findsNothing);
-    expect(calls, 1);
-    expect(tester.takeException(), isNull);
+    testWidgets('no compact action without a callback', (tester) async {
+      final metrics = ValueNotifier(SessionContextMetrics.unknown);
+      addTearDown(metrics.dispose);
+      await pumpBody(tester, metrics: metrics);
+      expect(find.byKey(const ValueKey('context-compress-now')), findsNothing);
+    });
+
+    testWidgets('while compacting the button waits and the row says so', (
+      tester,
+    ) async {
+      final metrics = ValueNotifier(
+        const SessionContextMetrics(
+          contextUsed: 45,
+          contextMax: 100,
+          percent: 45,
+        ),
+      );
+      addTearDown(metrics.dispose);
+      final progress = ValueNotifier<CompactionProgress?>(null);
+      addTearDown(progress.dispose);
+      var compacts = 0;
+      await pumpBody(
+        tester,
+        metrics: metrics,
+        onCompact: () => compacts++,
+        compaction: progress,
+      );
+      expect(
+        find.byKey(const ValueKey('context-panel-compaction')),
+        findsNothing,
+      );
+
+      progress.value = CompactionProgress(
+        startedAt: DateTime(2026, 10, 6, 12),
+        manual: true,
+        messagesBefore: 340,
+      );
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('context-panel-compaction')),
+        findsOneWidget,
+      );
+      expect(find.text('Compactando…'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('context-compress-now')));
+      expect(compacts, 0);
+    });
+
+    testWidgets('red ring from 90 %', (tester) async {
+      final colors = AppTheme.fromId('amber').hermes;
+      final metrics = ValueNotifier(
+        const SessionContextMetrics(
+          contextUsed: 92,
+          contextMax: 100,
+          percent: 92,
+        ),
+      );
+      addTearDown(metrics.dispose);
+      await pumpBody(tester, metrics: metrics);
+      expect(
+        tester
+            .widget<SessionContextRing>(
+              find.byKey(const ValueKey('context-sheet-ring')),
+            )
+            .color,
+        colors.error,
+      );
+    });
   });
 
   testWidgets('usa tokens semánticos en temas dark, OLED y light', (
@@ -375,7 +520,7 @@ void main() {
     );
     addTearDown(metrics.dispose);
 
-    for (final themeId in ['amber', 'amber-oled', 'claude-light']) {
+    for (final themeId in ['amber', 'amber-light', 'claude-light']) {
       await tester.pumpWidget(
         _TestApp(
           theme: AppTheme.fromId(themeId),
@@ -389,16 +534,22 @@ void main() {
 }
 
 class _TestApp extends StatelessWidget {
-  const _TestApp({required this.child, this.textScale = 1, this.theme});
+  const _TestApp({
+    required this.child,
+    this.textScale = 1,
+    this.theme,
+    this.locale = const Locale('en'),
+  });
 
   final Widget child;
   final double textScale;
   final ThemeData? theme;
+  final Locale locale;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      locale: const Locale('en'),
+      locale: locale,
       localizationsDelegates: Strings.localizationsDelegates,
       supportedLocales: Strings.supportedLocales,
       theme: theme ?? AppTheme.fromId('amber'),

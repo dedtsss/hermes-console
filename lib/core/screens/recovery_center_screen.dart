@@ -7,9 +7,14 @@ import '../../main.dart';
 import '../models/desktop_control_center.dart';
 import '../services/desktop_control_gateway.dart';
 import '../theme/app_theme.dart';
+import '../widgets/hermes_app_bar.dart';
 import '../widgets/hermes_premium_ui.dart';
 import '../widgets/hermes_ui.dart';
 import 'lock_screen.dart';
+import '../widgets/console_loader.dart';
+import '../feedback/feedback_policy.dart';
+import '../feedback/screen_help.dart';
+import '../design/modal.dart' show showHermesDialogRoute;
 
 /// Mobile projection of Hermes Desktop's native rollback timeline.
 ///
@@ -114,9 +119,9 @@ class _RecoveryCenterScreenState extends State<RecoveryCenterScreen> {
     if (restored != true || !mounted) return;
     await _load();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(Strings.of(context).recoveryCenterRestored)),
-    );
+    AppFeedback.of(
+      context,
+    ).notify(FeedbackKind.routine, Strings.of(context).recoveryCenterRestored);
   }
 
   @override
@@ -125,9 +130,13 @@ class _RecoveryCenterScreenState extends State<RecoveryCenterScreen> {
     final strings = Strings.of(context);
     final timeline = _timeline;
     return Scaffold(
-      appBar: AppBar(
+      appBar: HermesAppBar(
         title: Text(strings.recoveryCenterTitle),
         actions: [
+          ScreenHelpButton(
+            title: strings.recoveryCenterTitle,
+            paragraphs: [strings.recoveryCenterIntro],
+          ),
           IconButton(
             tooltip: strings.recoveryCenterRefreshTooltip,
             onPressed: !_hasRuntime || _loading ? null : _load,
@@ -143,7 +152,7 @@ class _RecoveryCenterScreenState extends State<RecoveryCenterScreen> {
                 body: strings.recoveryCenterNoActiveBody,
               )
             : _loading && timeline == null
-            ? const Center(child: CircularProgressIndicator())
+            ? const Center(child: ConsoleLoader.large())
             : _failure != null && timeline == null
             ? _RecoveryFailure(
                 message: _recoveryFailureText(_failure!, strings),
@@ -152,17 +161,10 @@ class _RecoveryCenterScreenState extends State<RecoveryCenterScreen> {
             : RefreshIndicator(
                 onRefresh: _load,
                 child: ListView(
+                  clipBehavior: hermesUnderHeader,
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
                   children: [
-                    Text(
-                      strings.recoveryCenterIntro,
-                      style: TextStyle(
-                        color: colors.textSecondary,
-                        fontSize: 12.5,
-                        height: 1.35,
-                      ),
-                    ),
                     if (widget.readOnly)
                       Padding(
                         padding: const EdgeInsets.only(top: 12),
@@ -362,7 +364,7 @@ class _RecoveryCheckpointSheetState extends State<_RecoveryCheckpointSheet> {
   }
 
   Future<bool?> _confirmExactCheckpoint() async {
-    return showDialog<bool>(
+    return showHermesDialogRoute<bool>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) =>
@@ -424,7 +426,7 @@ class _RecoveryCheckpointSheetState extends State<_RecoveryCheckpointSheet> {
         const Divider(height: 1),
         Expanded(
           child: _loading && diff == null
-              ? const Center(child: CircularProgressIndicator())
+              ? const Center(child: ConsoleLoader.large())
               : _failure != null && diff == null
               ? _RecoveryFailure(
                   message: _recoveryDetailFailureText(_failure!, strings),
@@ -454,15 +456,17 @@ class _RecoveryCheckpointSheetState extends State<_RecoveryCheckpointSheet> {
                     HermesPanel(
                       child: Padding(
                         padding: const EdgeInsets.all(14),
-                        child: SelectableText(
-                          diff == null || diff.diff.isEmpty
-                              ? strings.recoveryCenterNoDiff
-                              : _safeRemoteText(diff.diff, strings),
-                          style: TextStyle(
-                            color: colors.textPrimary,
-                            fontFamily: 'monospace',
-                            fontSize: 11.5,
-                            height: 1.45,
+                        child: SelectionArea(
+                          child: Text(
+                            diff == null || diff.diff.isEmpty
+                                ? strings.recoveryCenterNoDiff
+                                : _safeRemoteText(diff.diff, strings),
+                            style: TextStyle(
+                              color: colors.textPrimary,
+                              fontFamily: 'monospace',
+                              fontSize: 11.5,
+                              height: 1.45,
+                            ),
                           ),
                         ),
                       ),

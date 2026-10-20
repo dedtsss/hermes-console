@@ -12,6 +12,8 @@ import 'package:hermes_android/core/services/voice/voice_settings.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../support/in_memory_compression_restore_storage.dart';
+
 /// Spec 048 / US1 — corte selectivo en el controlador
 /// (contracts/narration-fence.md): un re-render que solo toca texto por
 /// delante del lote sonando no debe cortar la locución ni repetirla. Tras la QA
@@ -107,7 +109,9 @@ class _FenceVoice extends VoiceService {
   Future<void> releaseTtsForListening() async {}
 
   @override
-  Future<void> disposeSttForVoiceExit() async {}
+  Future<void> disposeSttForVoiceExit({
+    bool keepRecognizerWarm = false,
+  }) async {}
 
   @override
   Future<void> disposeTtsForVoiceExit() async {}
@@ -212,7 +216,9 @@ Future<_Harness> _harness() async {
   final prefs = await SharedPreferences.getInstance();
   final voice = _FenceVoice(prefs);
   final gateway = _FenceGateway();
-  final service = ActiveChatService();
+  final service = ActiveChatService(
+    compressionRestoreStore: testCompressionRestoreStore(),
+  );
   final chat = service.attach(
     connection: SavedConnection(
       id: 'voice-fence',

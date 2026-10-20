@@ -1,84 +1,251 @@
 # Release and distribution
 
-Hermes Console has three Android flavors built from the same source:
+> RU fork: this document and `tool/release/release_contract.json` describe the
+> upstream release policy. Upstream certificate, source actor and Play anchors
+> are not authority for `io.github.dedtsss.hermesconsole`. Preserve the existing
+> RU signer/alias and follow [STABLE_UPSTREAM_SYNC.md](STABLE_UPSTREAM_SYNC.md)
+> for fork CI and the separate owner-approved release boundary.
 
-| Distribution | Flavor | Artifact | Purpose |
+Hermes Console has three Android flavors built from one reviewed source commit.
+A flavor name is a security boundary, not a rename operation.
+
+| Lane | Flavor | Accepted artifact | Visibility |
 |---|---|---|---|
-| Google Play | `play` | AAB | Store distribution |
-| Direct | `full` | APK | GitHub Releases and Obtainium |
-| Physical QA | `qa` | profile APK | Internal testing only |
+| Google Play | `play` | signed release AAB | owner-private only |
+| GitHub Releases / Obtainium | `full` | three signed split release APKs | public only in the approved publication |
+| Emulator QA | `qa` | profile/debug APK | internal only; never public or release evidence |
 
-The `qa` flavor uses a separate application ID and must never be attached to a
-public release. Debug and profile artifacts are not release artifacts.
+The reviewed executable policy is `tool/release/release_contract.json`. The
+source lock is `pubspec.lock` with SHA-256
+`e3f8811963c2c1ab5eb7f62fd8ea86c5a3661bc98214017a720680019d6042c8`.
+Changing a lock, signer, authorized source actor or inspection-tool digest
+requires a normal source review; release scripts never rewrite those values.
+The reviewed contract anchors both channel signer certificates, all public and
+Play inspection-tool digests, and the GitHub CLI verifier digest.
 
-## Reproducible commands
+## Public-repository CI is verification-only
+
+GitHub Actions artifacts are public-repository downloads for readers of this
+repository. They must never carry a signed APK, AAB, keystore, mapping, private
+comparison result, or pre-publication candidate. Cross-job artifact transfer is
+therefore prohibited for release candidates.
+
+`.github/workflows/build-apk.yml` is CI verification only. It checks the exact
+tag/commit, authorized forge actor, lock, checked-in SBOMs, licenses, scanners,
+analysis and tests. It has read-only repository permissions, receives no signing
+secret, builds no signed candidate, creates no attestation, and invokes no
+artifact upload/download action. Successful CI is not a build, staging,
+publication or Play upload result.
+
+Sensitive building, comparison and staging stay on one owner-controlled machine
+and an owner-controlled local/private filesystem. No helper in this repository
+uploads or publishes anything. A separate publication operation is permitted
+only after explicit owner approval for the exact channel and exact bytes.
+
+`.github/workflows/e2e-real-gateway.yml` is verification only as well: it
+builds a throwaway Hermes from the public commit in `tool/e2e/hermes_pin`,
+runs it against Hermes' own scripted loopback model in a temporary home and
+runs `test/e2e_real_gateway` (`tool/e2e/run_local.sh`). It reads no secret,
+builds no APK and uploads no artifact; it only prints budget lines to the job
+summary.
+
+## Reviewed source and signer continuity
+
+The source identity gate requires GitHub verification and binds both the forge
+`authorLogin` and `committerLogin` to the reviewed `xP3ta` allowlist. A valid
+signature from an unlisted actor is rejected.
+
+Direct APK signing continuity is anchored to the prior public release rather
+than to caller input alone:
+
+- baseline tag: `v1.2.9`;
+- baseline asset: `app-arm64-v8a-full-release.apk`;
+- asset SHA-256: `f5187dbc57caa881ca3f21453335df320e271d7358e81e6095e6d9af50a9f734`;
+- certificate SHA-256: `86edaa150fabd33d8184f5b958400cabadacb49632f7ec50ecbe49608058d159`.
+
+The direct inspector requires the supplied expectation to equal that reviewed
+record and then independently measures every candidate with `apksigner`.
+Changing both a key and a runtime argument cannot bypass the baseline.
+
+## Manifest policy
+
+`tool/release/full_release_policy.json` is the exact set of permissions (with
+`maxSdkVersion`), foreground services (with types) and `<queries><package>`
+entries that a release may contain, plus the permissions it must never contain.
+The `play` and `full` flavors share one source manifest, so it describes both.
+Since 1.2.15 it forbids `com.termux.permission.RUN_COMMAND`,
+`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` and `QUERY_ALL_PACKAGES` and allows no
+package query at all. It is enforced in three places:
+
+- `tool/release/inspect_public_apk.py` measures every signed APK with `aapt`,
+  `apkanalyzer` and `apksigner` and requires the manifest to equal the policy.
+  Split APKs carry Flutter's per-ABI version code (`abi offset * 1000 + build
+  number`: 1000 armeabi-v7a, 2000 arm64-v8a, 4000 x86_64). `apkanalyzer` prints
+  foreground-service types of a compiled manifest as a hex mask, which the
+  inspector decodes with the framework's flag values.
+- `tool/release/check_manifest_policy.py` applies the same comparison to any
+  manifest text: a Gradle merged manifest, `bundletool dump manifest` of the AAB,
+  or `apkanalyzer manifest print` of an APK. `tool/qa/release_rehearsal.sh
+  manifest` runs it on both merged flavors before anything is signed.
+- `test/release_policy_truth_test.py` ties the policy to the source manifest, to
+  the dependencies that contribute the rest, to `docs/PLAY_PERMISSIONS.md` and to
+  the pinned build commands.
+
+## Private local double build
+
+On GNU/Linux x86-64, export explicit SDK/JDK discovery before invoking the gate:
 
 ```bash
-flutter pub get
-flutter analyze --fatal-infos
-flutter test
+export ANDROID_HOME=/absolute/path/to/android-sdk
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export JAVA_HOME=/absolute/path/to/jdk
+export PATH=/absolute/path/to/flutter/bin:$PATH
 
-# Google Play bundle
-flutter build appbundle --release --flavor play \
-  --dart-define=HERMES_FLAVOR=play
-
-# Direct APKs for GitHub Releases and Obtainium
-flutter build apk --release --flavor full --split-per-abi \
-  --dart-define=HERMES_FLAVOR=full
+bash tool/release/double_build.sh \
+  direct-public /absolute/path/to/clean/source COMMIT \
+  /absolute/private/key.properties \
+  /absolute/private/direct-output \
+  86edaa150fabd33d8184f5b958400cabadacb49632f7ec50ecbe49608058d159
 ```
 
-These commands build the complete current product; no hidden release flag is
-required to remove an unsupported feature. Voice mode, dictation and read-aloud
-are included in both public flavors.
+The script verifies required commands, preserves Android/JDK discovery through
+its clean environment, and gives each replica an isolated `HOME`, `PUB_CACHE`
+and `GRADLE_USER_HOME`. It builds into a mode-0700 temporary sibling of the
+requested output and atomically renames that sibling only after both builds and
+the comparison pass. Before promotion, the same build step writes the canonical
+`double-build-manifest.json`: exact source/input identities, build command,
+expected signer input, resolved build-tool paths and pre-build hashes (required
+unchanged after both replicas), both replicas' artifact names/sizes/hashes, and
+the comparison-report hash. Public/Play binding helpers consume that manifest
+and reject artifacts not recorded as replica A. The manifest and generated
+source binding remain maintainer-only and are excluded from the public evidence
+archive. Any failure removes the temporary stage and leaves no output directory
+or signed residue.
 
-## Signing
+This manifest is a deterministic local causal record from the orchestrated
+build, not cryptographic provenance. A principal that can replace the build
+script, tools, artifacts and manifest on the owner machine remains outside this
+control; external trust and attestation are separate gates.
 
-Release builds fail closed unless `key.properties` points to a valid signing
-keystore. The keystore and all passwords must stay outside Git. The repository
-ignores both files; never attach them to an issue, workflow log or release.
+Dependency inputs are not all cryptographically pinned: the Gradle distribution
+has no `distributionSha256Sum`, Gradle/Maven verification metadata and locks are
+absent, and Android packages are not content-pinned as a complete dependency
+set. Equal APK output is only an observed two-build byte identity, not a general reproducible-build claim.
+Play comparison similarly reports observed byte, ZIP-entry and
+functional-payload relationships without claiming rebuildability by unrelated
+builders.
 
-For GitHub Actions, configure these repository secrets before creating a tag:
+## Play inspection and private staging
 
-- `KEYSTORE_BASE64`
-- `STORE_PASSWORD`
-- `KEY_PASSWORD`
-- `KEY_ALIAS`
+Play AABs never enter the public directory or GitHub Actions. Build and compare
+them in the local private lane, then run:
 
-The public release workflow builds only `fullRelease` split APKs for GitHub and
-Obtainium. It never builds, stores or publishes the Play AAB. The `playRelease`
-AAB is produced only through the separately authorised private release process
-and is handed directly to the owner for Google Play Console.
+```bash
+bash tool/release/stage_play_private.sh \
+  /absolute/path/to/clean/source \
+  /absolute/private/double-build-output \
+  EXPECTED_UPLOAD_CERTIFICATE_SHA256 \
+  /absolute/private/play-candidate
+```
 
-## Automated release evidence
+The signer argument is not authority: it must equal the `play-private`
+certificate SHA-256 anchored in `release_contract.json`. The current reviewed
+contract requires the Play upload key to match the existing direct-release
+certificate identity; a private signed AAB must confirm that identity before
+release. Changing either lane requires a source-policy review.
 
-Direct-release CI must archive, beside the GitHub/Obtainium APKs:
+`stage_play_private.sh` resolves `apkanalyzer` only below
+`ANDROID_SDK_ROOT` and `jarsigner`/`keytool` only below `JAVA_HOME`. Paths and
+SHA-256 digests are independently pinned in the reviewed source policy; caller
+selected executable variables are ignored. The current policy anchors Android
+command-line tools 12.0 and Debian OpenJDK 21 tool bytes on `linux-x86_64`.
+The staging helper accepts the double-build output directory, not caller-chosen
+AAB paths. It validates the fixed manifest, replicas, source, comparison and
+captured build-tool hashes before selecting replica A. Package, version,
+artifact hash and upload-certificate hash are measured for both AABs. A changed
+artifact, manifest, source or fake tool fails before it can assert metadata.
 
-- deterministic source SBOMs and per-artifact inventories;
-- `SHA256SUMS` covering every direct APK and the evidence files;
-- `apksigner --print-certs` reports for the direct APKs;
-- the exact source commit and source timestamp embedded by the SBOM generator.
+The destination basename must contain `private`, no path component may contain
+`public`, and promotion is atomic. The resulting AAB, double-build manifest and
+four other evidence files remain local/private. The helper performs no Play or
+external upload.
 
-These files prove what CI built; they do not replace physical installation,
-Google Play inspection, dependency-license review or owner approval. No hash or
-certificate is documented as final until it is produced from the signed release
-job for the selected commit.
+## SBOM and native-license evidence
 
-## Release gate
+`tool/sbom/packaged-license-catalog.json` is the reviewed path-to-component
+catalog for packaged Flutter/native binaries. Entries are anchored by closed,
+ABI-specific path patterns, SPDX expressions and repository evidence paths.
+Unknown or overlapping paths remain `NOASSERTION` and force `REVIEW_REQUIRED`;
+there is no blanket native-binary allow or suppression. Standard `libapp.so`,
+Flutter engine and reviewed sherpa/ONNX/whisper native paths can reach
+`COMPLETE` through this explicit evidence.
 
-Before tagging a version:
+The catalog and generator are part of the SBOM input fingerprint. All five
+checked-in `sbom/*.json` outputs must be regenerated when either changes. CI
+regenerates them and rejects any diff.
 
-1. Confirm the working tree is clean and the version is intentional.
-2. Run static analysis and the complete test suite.
-3. Generate and review the SBOM and third-party notices.
-4. Build the final artifact for the intended channel from a fresh clone; never
-   substitute a `full` APK for Play or a `play` AAB for GitHub/Obtainium.
-5. Scan the clone and Git history for secrets.
-6. Verify package ID, version, signing certificate and SHA-256 digest.
-7. Install the exact APK on a physical Android device and test chat, images,
-   QR pairing, voice, background behavior and cleanup.
-8. Publish only the signed release files; never publish QA/debug/profile builds,
-   mappings, keystores or diagnostic bundles.
+Evidence tar validation caps compressed size before opening, iterates at most
+128 headers in streaming mode, and caps individual and total uncompressed
+content before retaining allowed evidence bytes. Duplicate, linked, traversal,
+extra and malformed members fail closed.
 
-Google Play publication additionally requires the current privacy policy, Data
-Safety answers, foreground-service declarations and store listing to match the
-actual final manifest and runtime behavior.
+## Eventual public allowlist
+
+After all private gates and explicit owner publication approval, the final
+public release may contain exactly these six basenames:
+
+- `SHA256SUMS`
+- `app-arm64-v8a-full-release.apk`
+- `app-armeabi-v7a-full-release.apk`
+- `app-x86_64-full-release.apk`
+- `hermes-console-release-evidence.tar.gz`
+- `provenance.intoto.jsonl`
+
+No AAB, QA/debug/profile APK, mapping, log, keystore or diagnostic bundle is
+allowed. `tool/release/validate_public_assets.sh` rejects missing files, extras,
+links, directories, checksum drift, signer drift and stale evidence. For the final
+gate it copies the allowlisted files into a private snapshot, runs every
+cryptographic, structural and APK-evidence check against that one snapshot,
+then revalidates and byte-compares the source directory before success.
+
+The final validation command takes only release identity and a runtime manifest
+for the reviewed public inspection toolchain; policy, expectations, signer,
+executable hashes, Android companion runtime trees and the JDK binary/library
+trees are always loaded from the reviewed source. Inspection runs with the
+anchored JDK selected through a scrubbed environment:
+
+```bash
+python3 tool/release/record_trusted_toolchain.py \
+  --root /absolute/path/to/reviewed/android-sdk \
+  --jdk-root /absolute/path/to/reviewed/jdk \
+  --output /absolute/private/trusted-public-toolchain.json
+bash tool/release/validate_public_assets.sh \
+  /absolute/private/release-public \
+  v1.2.10 EXACT_RELEASE_COMMIT \
+  /absolute/private/trusted-public-toolchain.json
+```
+
+`provenance.intoto.jsonl` is the keyless GitHub/Sigstore bundle for the exact
+four subjects (three APKs plus evidence archive). Because obtaining that bundle
+is external attestation, it belongs to the later owner-authorized publication
+operation, not pre-publication CI or this hardening patch. It must be verified
+cryptographically with `gh attestation verify` before the structural
+`verify_slsa_bundle.py` check. A structurally valid unsigned envelope is not
+provenance. The final validator performs both checks on the same bundle and
+fails closed unless the reviewed GitHub CLI 2.98.0 binary digest is present.
+It constrains repository, signer workflow, certificate identity, OIDC issuer,
+tag ref, source commit, SLSA predicate, hosted runner and all four subject
+digests. It validates only and never publishes or uploads.
+
+## Operator gate
+
+1. Select one exact reviewed tag/commit and require a clean tree.
+2. Pass verification-only CI and local security/policy tests.
+3. Build twice in the intended local/private channel with the intended key.
+4. Require package, version, ABI/flavor, signer, hash, source binding, SBOM and
+   license review to pass; keep all candidate bytes private.
+5. Install and smoke-test the exact selected channel artifact.
+6. Obtain explicit owner approval for the exact channel and bytes.
+7. Only in that approved publication operation, produce/verify provenance and
+   publish the exact six-file direct allowlist, or upload only the private AAB to
+   Play. Never substitute `full`, `play` or `qa` artifacts across lanes.

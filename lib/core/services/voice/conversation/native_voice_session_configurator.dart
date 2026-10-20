@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../connection_manager.dart';
@@ -15,6 +16,39 @@ enum HermesServerDictationConfigurationResult {
   configured,
   unavailable,
   superseded,
+}
+
+/// Positive transcription-probe verdicts per Dashboard identity, so a
+/// dictation tap does not pay an extra round trip before the microphone
+/// opens. Only a confirmed endpoint is remembered, for [maxAge]; a negative or
+/// inconclusive answer is always probed again. Any change that withdraws the
+/// choice (engine or consent) drops the entry at the next tap.
+class HermesDictationProbeCache {
+  HermesDictationProbeCache._();
+
+  static const Duration maxAge = Duration(minutes: 10);
+  static final Map<String, DateTime> _confirmedAt = {};
+  static DateTime Function() _now = DateTime.now;
+
+  static bool isConfirmed(String identity) {
+    final at = _confirmedAt[identity];
+    if (at == null) return false;
+    if (_now().difference(at) < maxAge) return true;
+    _confirmedAt.remove(identity);
+    return false;
+  }
+
+  static void confirm(String identity) => _confirmedAt[identity] = _now();
+
+  static void forget(String identity) => _confirmedAt.remove(identity);
+
+  static void clear() => _confirmedAt.clear();
+
+  @visibleForTesting
+  static void resetForTesting({DateTime Function()? now}) {
+    _confirmedAt.clear();
+    _now = now ?? DateTime.now;
+  }
 }
 
 /// Vincula el Dictado del chat al STT oficial de la instancia Hermes activa.
@@ -42,6 +76,7 @@ configureHermesServerDictation({
   }
 
   if (voice.settings.sttEngine != SttEngineKind.hermesServer) {
+    HermesDictationProbeCache.clear();
     return unavailableOrSuperseded();
   }
   final createDashboard =
@@ -55,14 +90,19 @@ configureHermesServerDictation({
     );
     if (NativeVoiceConsentStore(preferences).read(identity) !=
         NativeVoiceConsent.accepted) {
+      HermesDictationProbeCache.forget(identity);
       return unavailableOrSuperseded();
     }
-    final available = await probeHermesTranscription(
-      statusOf: (endpoint) =>
-          dashboard.probeAudioEndpoint(endpoint, profile: profile),
-    );
-    if (!available) {
-      return unavailableOrSuperseded();
+    if (!HermesDictationProbeCache.isConfirmed(identity)) {
+      final available = await probeHermesTranscription(
+        statusOf: (endpoint) =>
+            dashboard.probeAudioEndpoint(endpoint, profile: profile),
+      );
+      if (!available) {
+        HermesDictationProbeCache.forget(identity);
+        return unavailableOrSuperseded();
+      }
+      HermesDictationProbeCache.confirm(identity);
     }
     // Motor y consentimiento pueden cambiar mientras responde el probe. No
     // transfieras el cliente con una elección ya retirada.
@@ -105,14 +145,26 @@ Future<bool> configureAcceptedNativeVoiceSession({
   required SavedConnection connection,
   required SharedPreferences preferences,
   required String profile,
+  Object? owner,
+  NativeVoicePreparation? preparation,
+  bool Function()? isStillCurrent,
   DashboardClient? dashboardClient,
   NativeVoiceDashboardFactory? dashboardFactory,
   HermesPcmStreamSinkFactory? sinkFactory,
 }) async {
   assert(dashboardClient == null || dashboardFactory == null);
+  assert(preparation == null || owner != null);
   final createDashboard =
       dashboardFactory ?? (connection) => DashboardClient.lazy(connection);
   final dashboard = dashboardClient ?? createDashboard(connection);
+  final configurationOwner = owner ?? Object();
+  final reservation =
+      preparation ??
+      voice.beginNativeVoicePreparation(owner: configurationOwner);
+  if (reservation == null) {
+    dashboard.close();
+    return false;
+  }
   var transferredToVoice = false;
   try {
     final identity = nativeVoicePreferenceIdentity(
@@ -121,12 +173,10 @@ Future<bool> configureAcceptedNativeVoiceSession({
     );
     if (NativeVoiceModeStore(preferences).read(identity) !=
         NativeVoiceMode.server) {
-      voice.disableNativeVoice();
       return false;
     }
     if (NativeVoiceConsentStore(preferences).read(identity) !=
         NativeVoiceConsent.accepted) {
-      voice.disableNativeVoice();
       return false;
     }
 
@@ -142,7 +192,6 @@ Future<bool> configureAcceptedNativeVoiceSession({
       }
     }
     if (!capability.ok) {
-      voice.disableNativeVoice();
       return false;
     }
 
@@ -159,6 +208,17 @@ Future<bool> configureAcceptedNativeVoiceSession({
       // sigue siendo el fallback autoritativo si esta lectura falla.
     }
 
+    // La elección puede revocarse mientras responden el probe o las lecturas de
+    // configuración. La comprobación inicial no autoriza instalar callbacks
+    // después de esos awaits.
+    if (NativeVoiceModeStore(preferences).read(identity) !=
+            NativeVoiceMode.server ||
+        NativeVoiceConsentStore(preferences).read(identity) !=
+            NativeVoiceConsent.accepted ||
+        !(isStillCurrent?.call() ?? true)) {
+      return false;
+    }
+
     final speechStream = HermesSpeechStreamClient(
       dashboardBaseUrl: connection.effectiveDashboardUrl,
       auth: dashboard.webSocketAuth,
@@ -166,7 +226,9 @@ Future<bool> configureAcceptedNativeVoiceSession({
       ttsConfigurationSignature: ttsConfigurationSignature,
       sinkFactory: sinkFactory ?? MethodChannelHermesPcmStreamSink.new,
     );
-    transferredToVoice = voice.enableNativeVoice(
+    transferredToVoice = voice.enablePreparedNativeVoice(
+      owner: configurationOwner,
+      preparation: reservation,
       speak: (text) => dashboard.synthesizeSpeech(text, profile: profile),
       transcribe: (dataUrl, mimeType) => dashboard.transcribeAudio(
         dataUrl,
@@ -174,10 +236,15 @@ Future<bool> configureAcceptedNativeVoiceSession({
         profile: profile,
       ),
       speechStream: speechStream.open,
+      ttsLease: (lease, active) =>
+          dashboard.setTtsLease(lease, active: active, profile: profile),
       onDispose: dashboard.close,
     );
     return transferredToVoice;
   } finally {
-    if (!transferredToVoice) dashboard.close();
+    if (!transferredToVoice) {
+      voice.cancelNativeVoicePreparation(reservation);
+      dashboard.close();
+    }
   }
 }

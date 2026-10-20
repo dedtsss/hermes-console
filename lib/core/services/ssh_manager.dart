@@ -3,9 +3,13 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dartssh2/dartssh2.dart';
+import 'package:flutter/widgets.dart' show Locale;
+
+import '../../l10n/app_localizations.dart';
 
 import 'connection_manager.dart';
 import 'secure_storage.dart';
+import 'voice/voice_lang.dart';
 
 /// Método de autenticación SSH elegido por instancia.
 enum SshAuthMethod {
@@ -56,12 +60,31 @@ class SshHostKeyPrompt {
   });
 }
 
+/// Typed SSH failure. Services return or throw codes; the UI localizes them
+/// with `localizedSshFailure` (lib/core/utils/ssh_error.dart).
+enum SshFailure {
+  notConfigured,
+  missingHost,
+  missingUser,
+  emptyKey,
+  noKeyFound,
+  wrongPassphrase,
+  unrecognizedKey,
+  invalidKey,
+  authRejected,
+  handshakeFailed,
+  refused,
+  timeout,
+  hostLookup,
+  unknown,
+}
+
 /// Error de configuración (no de red) al preparar una conexión SSH.
 class SshConfigException implements Exception {
-  final String message;
-  const SshConfigException(this.message);
+  final SshFailure failure;
+  const SshConfigException(this.failure);
   @override
-  String toString() => message;
+  String toString() => 'SshConfigException(${failure.name})';
 }
 
 /// Resuelve credenciales, deriva el host del gateway, gestiona el TOFU de host
@@ -78,6 +101,10 @@ class SshManager {
 
   static const int defaultPort = 22;
 
+  /// Strings in the app language, for services that have no BuildContext.
+  Strings get appStrings =>
+      lookupStrings(Locale(effectiveVoiceLang(_connections.prefs)));
+
   SavedConnection? _conn(String id) {
     for (final c in _connections.getConnections()) {
       if (c.id == id) return c;
@@ -89,7 +116,8 @@ class SshManager {
   String? derivedHostFor(String connectionId) => _conn(connectionId)?.host;
 
   /// true si la instancia es solo lectura (SFTP no debe escribir).
-  bool isReadOnly(String connectionId) => _conn(connectionId)?.readOnly ?? false;
+  bool isReadOnly(String connectionId) =>
+      _conn(connectionId)?.readOnly ?? false;
 
   /// Carga la config SSH guardada, o null si la instancia no tiene SSH.
   Future<SshConfig?> loadConfig(String connectionId) async {
@@ -101,7 +129,7 @@ class SshManager {
         : (derivedHostFor(connectionId) ?? '');
     final port =
         int.tryParse((await _secure.readSsh(connectionId, 'port')) ?? '') ??
-            defaultPort;
+        defaultPort;
     final method = SshAuthMethod.fromId(
       await _secure.readSsh(connectionId, 'method'),
     );
@@ -129,9 +157,11 @@ class SshManager {
     if (privateKeyPem != null) {
       await _secure.writeSsh(connectionId, 'privkey', privateKeyPem);
     }
-    // Passphrase siempre se escribe (vacío = clave sin passphrase) para que al
-    // editar no quede una vieja colgando.
-    await _secure.writeSsh(connectionId, 'passphrase', passphrase ?? '');
+    // An omitted secret preserves the stored one. Replacing a key without a
+    // passphrase explicitly clears the old key's passphrase.
+    if (privateKeyPem != null || passphrase != null) {
+      await _secure.writeSsh(connectionId, 'passphrase', passphrase ?? '');
+    }
   }
 
   Future<void> clear(String connectionId) => _secure.deleteSsh(connectionId);
@@ -157,7 +187,9 @@ class SshManager {
     try {
       final s = utf8.decode(raw);
       if (s.startsWith('SHA256:') || s.startsWith('MD5:')) return s;
-    } catch (_) {/* cae al hash de los bytes crudos */}
+    } catch (_) {
+      /* cae al hash de los bytes crudos */
+    }
     return 'SHA256:${base64.encode(sha256.convert(raw).bytes).replaceAll('=', '')}';
   }
 
@@ -168,29 +200,29 @@ class SshManager {
     try {
       return SSHKeyPair.isEncryptedPem(pem.trim());
     } catch (e) {
-      debugPrint('[ssh-manager] excepción silenciada (se asume false): $e');
+      debugPrint('[ssh-manager] invalid key (${e.runtimeType})');
       return false;
     }
   }
 
-  /// Devuelve null si la clave parsea bien; si no, un mensaje legible. No toca
+  /// Devuelve null si la clave parsea bien; si no, el motivo tipado. No toca
   /// la red — solo intenta decodificar el PEM con la passphrase dada.
-  static String? validateKey(String pem, String? passphrase) {
+  static SshFailure? validateKey(String pem, String? passphrase) {
     final text = pem.trim();
-    if (text.isEmpty) return 'Paste or import a private key.';
+    if (text.isEmpty) return SshFailure.emptyKey;
     try {
       final pairs = SSHKeyPair.fromPem(
         text,
         (passphrase == null || passphrase.isEmpty) ? null : passphrase,
       );
-      if (pairs.isEmpty) return 'No key found in the text.';
+      if (pairs.isEmpty) return SshFailure.noKeyFound;
       return null;
     } on SSHKeyDecryptError {
-      return 'Incorrect passphrase for this key.';
+      return SshFailure.wrongPassphrase;
     } on SSHKeyDecodeError {
-      return 'Unrecognized key format (use PEM OpenSSH or RSA).';
-    } catch (e) {
-      return 'Invalid key: $e';
+      return SshFailure.unrecognizedKey;
+    } catch (_) {
+      return SshFailure.invalidKey;
     }
   }
 
@@ -206,13 +238,13 @@ class SshManager {
   }) async {
     final cfg = await loadConfig(connectionId);
     if (cfg == null) {
-      throw const SshConfigException('No SSH credentials configured.');
+      throw const SshConfigException(SshFailure.notConfigured);
     }
     if (cfg.host.isEmpty) {
-      throw const SshConfigException('Server host is missing.');
+      throw const SshConfigException(SshFailure.missingHost);
     }
     if (cfg.username.isEmpty) {
-      throw const SshConfigException('Username is missing.');
+      throw const SshConfigException(SshFailure.missingUser);
     }
 
     List<SSHKeyPair>? identities;
@@ -261,25 +293,23 @@ class SshManager {
     );
   }
 
-  /// Traduce excepciones de dartssh2/socket a mensajes en español para la UI.
-  static String describeError(Object e) {
-    if (e is SshConfigException) return e.message;
-    if (e is SSHAuthFailError) {
-      return 'Authentication rejected: check username, key or password.';
-    }
-    if (e is SSHKeyDecryptError) return 'Incorrect passphrase for the key.';
-    if (e is SSHKeyDecodeError) return 'Invalid private key.';
-    if (e is SSHHandshakeError) {
-      return 'SSH handshake failed (is this an SSH server?).';
-    }
+  /// Clasifica excepciones de dartssh2/socket en un [SshFailure] tipado; la UI
+  /// lo traduce al idioma de la app.
+  static SshFailure classifyError(Object e) {
+    if (e is SshConfigException) return e.failure;
+    if (e is SSHAuthFailError) return SshFailure.authRejected;
+    if (e is SSHKeyDecryptError) return SshFailure.wrongPassphrase;
+    if (e is SSHKeyDecodeError) return SshFailure.invalidKey;
+    if (e is SSHHandshakeError) return SshFailure.handshakeFailed;
     final s = e.toString().toLowerCase();
-    if (s.contains('refused')) return 'Conexión rechazada (¿está SSH activo?).';
+    if (s.contains('refused')) return SshFailure.refused;
     if (s.contains('timed out') || s.contains('timeout')) {
-      return 'Tiempo de espera agotado (host/puerto inalcanzable).';
+      return SshFailure.timeout;
     }
     if (s.contains('failed host lookup') || s.contains('no address')) {
-      return 'No se pudo resolver el host.';
+      return SshFailure.hostLookup;
     }
-    return 'Error de conexión: $e';
+    debugPrint('[ssh-manager] unclassified failure (${e.runtimeType})');
+    return SshFailure.unknown;
   }
 }

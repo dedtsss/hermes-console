@@ -8,6 +8,8 @@ import '../models/interactive_prompt.dart';
 import '../services/interactive_prompt_reducer.dart';
 import '../theme/app_theme.dart';
 import '../theme/component_profile.dart';
+import '../utils/plain_preview.dart';
+import 'compact_markdown.dart';
 import 'hermes_premium_ui.dart';
 
 /// Inline tactile surface for Hermes Desktop 0.19 blocking requests.
@@ -46,11 +48,19 @@ class _StagedAnswer {
   _StagedAnswer({this.choices = const [], this.draft = ''});
 }
 
+// The backend tags the agent's preferred option in the label itself.
+final RegExp _recommendedSuffix = RegExp(
+  r'\s*\((recommended|recomendado)\)\s*$',
+  caseSensitive: false,
+);
+
 class _InteractivePromptCardState extends State<InteractivePromptCard> {
   final TextEditingController _controller = TextEditingController();
   final Map<String, _StagedAnswer> _batchAnswers = {};
   final Map<String, TextEditingController> _batchControllers = {};
+  final List<String> _singleSelected = [];
   bool _obscure = true;
+  bool _batchSubmissionStarted = false;
 
   InteractivePromptRequest get _request => widget.entry.request!;
 
@@ -107,8 +117,15 @@ class _InteractivePromptCardState extends State<InteractivePromptCard> {
   @override
   void didUpdateWidget(covariant InteractivePromptCard oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (_batchSubmissionStarted &&
+        oldWidget.busy &&
+        !widget.busy &&
+        widget.entry.status == InteractivePromptStatus.pending) {
+      _batchSubmissionStarted = false;
+    }
     final request = widget.entry.request;
     final oldRequest = oldWidget.entry.request;
+    if (oldRequest?.key != request?.key) _singleSelected.clear();
     if (request is! ClarifyPromptRequest || !request.isBatch) return;
     if (oldRequest is! ClarifyPromptRequest ||
         !oldRequest.isBatch ||
@@ -142,14 +159,42 @@ class _InteractivePromptCardState extends State<InteractivePromptCard> {
 
   void _submit([String? explicitValue]) {
     if (widget.busy) return;
+    if (explicitValue == null && _isSingleMultiSelect) {
+      _submitSingleMultiSelect();
+      return;
+    }
     final value = explicitValue ?? _controller.text;
     if (!_isTerminalRead && value.trim().isEmpty) return;
     _controller.clear();
     widget.onSubmit(value);
   }
 
+  /// A single `multi_select` clarify: Desktop answers with the JSON list of
+  /// picked choices plus any typed extra (`clarify-tool.tsx`), which Hermes
+  /// reads back through `_parse_multi_select_response`.
+  bool get _isSingleMultiSelect {
+    final request = _request;
+    return request is ClarifyPromptRequest &&
+        !request.isBatch &&
+        request.multiSelect;
+  }
+
+  void _toggleSingleChoice(String choice) => setState(() {
+    _singleSelected.contains(choice)
+        ? _singleSelected.remove(choice)
+        : _singleSelected.add(choice);
+  });
+
+  void _submitSingleMultiSelect() {
+    final draft = _controller.text.trim();
+    final answer = [..._singleSelected, if (draft.isNotEmpty) draft];
+    if (answer.isEmpty) return;
+    _controller.clear();
+    widget.onSubmit(jsonEncode(answer));
+  }
+
   Future<void> _submitBatch() async {
-    if (widget.busy || !_isBatchClarify) return;
+    if (widget.busy || _batchSubmissionStarted || !_isBatchClarify) return;
     final request = _request as ClarifyPromptRequest;
     final answers = <String, String>{};
     for (final question in request.questions) {
@@ -159,11 +204,13 @@ class _InteractivePromptCardState extends State<InteractivePromptCard> {
       if (answer == null || answer.isEmpty) return;
       answers[question.qid] = answer;
     }
+    setState(() => _batchSubmissionStarted = true);
     try {
       await widget.onSubmitBatch?.call(answers);
     } catch (_) {
       // Errors are reported and guarded by the host screen; this card only
       // ensures the async gap does not surface as an unawaited exception.
+      if (mounted) setState(() => _batchSubmissionStarted = false);
     }
   }
 
@@ -186,7 +233,7 @@ class _InteractivePromptCardState extends State<InteractivePromptCard> {
       if (staged == null) return false;
       if (_batchAnswer(question, staged) == null) return false;
     }
-    return true;
+    return !_batchSubmissionStarted;
   }
 
   int get _batchAnsweredCount {
@@ -252,35 +299,91 @@ class _InteractivePromptCardState extends State<InteractivePromptCard> {
       InteractivePromptKind.secret => Icons.key_outlined,
       InteractivePromptKind.terminalRead => Icons.terminal_rounded,
     };
+    final summary = _isBatchClarify
+        ? strings.interactiveBatchProgress(
+            _batchAnsweredCount,
+            (request as ClarifyPromptRequest).questions.length,
+          )
+        : null;
 
-    return HermesInlineActivity(
-      title: title,
-      leading: Icon(icon, size: 20, color: colors.warning),
-      status: widget.busy
-          ? Semantics(
-              label: strings.chaStatusWaiting,
-              liveRegion: true,
-              child: SizedBox.square(
-                dimension: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: colors.warning,
-                ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compactBatchActions =
+            _isBatchClarify &&
+            MediaQuery.textScalerOf(context).scale(1) > 1 &&
+            constraints.maxHeight.isFinite &&
+            constraints.maxHeight < 600;
+        return DecoratedBox(
+          // Floating card on all four corners, off the screen edges — not a
+          // bottom-sheet flush to the bottom (that read as a modal takeover
+          // for something that's just a paused, resumable question).
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 28,
+                offset: const Offset(0, 12),
               ),
-            )
-          : null,
-      detail: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: _isBatchClarify
-            ? _batchBody(context)
-            : _requestBody(context, request, colors),
-      ),
-      actions: _isBatchClarify
-          ? _batchActions(strings)
-          : _legacyActions(strings),
-      semanticLabel: title,
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+            ],
+          ),
+          child: Material(
+            color: colors.surface,
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+              side: BorderSide(color: colors.divider),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(6, 8, 6, 6),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 36,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 4),
+                    decoration: BoxDecoration(
+                      color: colors.divider,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  HermesInlineActivity(
+                    title: title,
+                    summary: summary,
+                    leading: Icon(icon, size: 20, color: colors.warning),
+                    status: widget.busy
+                        ? Semantics(
+                            label: strings.chaStatusWaiting,
+                            liveRegion: true,
+                            child: SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: colors.warning,
+                              ),
+                            ),
+                          )
+                        : null,
+                    detail: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: _isBatchClarify
+                          ? _batchBody(context, constraints)
+                          : _requestBody(context, request, colors, constraints),
+                    ),
+                    actions: _isBatchClarify
+                        ? _batchActions(strings, compact: compactBatchActions)
+                        : _legacyActions(strings),
+                    semanticLabel: title,
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -288,40 +391,60 @@ class _InteractivePromptCardState extends State<InteractivePromptCard> {
     BuildContext context,
     InteractivePromptRequest request,
     HermesThemeColors colors,
+    BoxConstraints constraints,
   ) {
     final strings = Strings.of(context);
     switch (request) {
-      case ClarifyPromptRequest(:final question, :final choices):
+      case ClarifyPromptRequest(
+        :final question,
+        :final choices,
+        :final multiSelect,
+      ):
+        // rt1215: a long question or many choices scroll inside a bounded
+        // box (as the batch body does); the answer field stays reachable.
         return [
-          Text(
-            question,
-            style: TextStyle(color: colors.textPrimary, fontSize: 13),
-          ),
-          if (choices.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 7,
-              runSpacing: 7,
-              children: [
-                for (final choice in choices)
-                  OutlinedButton(
-                    onPressed: widget.busy ? null : () => _submit(choice),
-                    child: Text(choice),
-                  ),
-              ],
+          ConstrainedBox(
+            key: const ValueKey('interactive-prompt-scroll'),
+            constraints: BoxConstraints(
+              maxHeight: _scrollCap(context, constraints),
             ),
-          ],
-          const SizedBox(height: 10),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _questionText(question, colors),
+                  if (choices.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    for (final choice in choices) ...[
+                      _choiceRow(
+                        context,
+                        label: choice,
+                        selected:
+                            multiSelect && _singleSelected.contains(choice),
+                        multiSelect: multiSelect,
+                        trailingChevron: !multiSelect,
+                        onTap: widget.busy
+                            ? null
+                            : multiSelect
+                            ? () => _toggleSingleChoice(choice)
+                            : () => _submit(choice),
+                      ),
+                      const SizedBox(height: 6),
+                    ],
+                  ],
+                ],
+              ),
+            ),
+          ),
+          if (choices.isEmpty) const SizedBox(height: 10),
           _input(strings.interactiveAnswerHint, sensitive: false),
         ];
       case SudoPromptRequest():
         return [_input(strings.interactivePasswordHint, sensitive: true)];
       case SecretPromptRequest(:final envVar, :final prompt):
         return [
-          Text(
-            prompt,
-            style: TextStyle(color: colors.textPrimary, fontSize: 13),
-          ),
+          _questionText(prompt, colors),
           const SizedBox(height: 4),
           Text(
             envVar,
@@ -348,40 +471,61 @@ class _InteractivePromptCardState extends State<InteractivePromptCard> {
     }
   }
 
-  List<Widget> _batchBody(BuildContext context) {
+  // rt1215: an agent question written in Markdown renders as Markdown.
+  Widget _questionText(String text, HermesThemeColors colors) =>
+      looksLikeMarkdown(text)
+      ? CompactMarkdown(
+          data: text,
+          tone: CompactMarkdownTone.body,
+          fontSize: 14.5,
+        )
+      : Text(
+          text,
+          style: TextStyle(
+            color: colors.textPrimary,
+            fontSize: 14.5,
+            height: 1.3,
+            fontWeight: FontWeight.w600,
+          ),
+        );
+
+  /// Height left for a scrolling question body once the header, the answer
+  /// field and the actions have their room (at most half the screen).
+  double _scrollCap(BuildContext context, BoxConstraints constraints) {
+    final reserved = MediaQuery.textScalerOf(context).scale(240.0);
+    final screen = MediaQuery.sizeOf(context).height;
+    final host = constraints.maxHeight.isFinite ? constraints.maxHeight : screen;
+    final room = (host < screen ? host : screen) - reserved;
+    final half = screen * 0.5;
+    return (room < half ? room : half).clamp(96.0, double.infinity);
+  }
+
+  List<Widget> _batchBody(BuildContext context, BoxConstraints constraints) {
     final request = _request as ClarifyPromptRequest;
-    final colors = Theme.of(context).hermes;
     final strings = Strings.of(context);
-    final total = request.questions.length;
-    final answered = _batchAnsweredCount;
+    // Header, progress and the action row need room around the question list;
+    // under a keyboard or a small host the list scrolls instead of overflowing.
+    const reservedChrome = 190.0;
+    final screenCap = MediaQuery.sizeOf(context).height * 0.5;
+    final hostCap = constraints.maxHeight.isFinite
+        ? (constraints.maxHeight - reservedChrome).clamp(96.0, double.infinity)
+        : double.infinity;
+    final maxHeight = screenCap < hostCap ? screenCap : hostCap;
     return [
-      Text(
-        strings.interactiveBatchProgress(answered, total),
-        style: TextStyle(color: colors.textSecondary, fontSize: 12),
-      ),
-      const SizedBox(height: 10),
-      LayoutBuilder(
-        builder: (context, constraints) {
-          final maxHeight =
-              constraints.maxHeight.isFinite && constraints.maxHeight > 0
-              ? constraints.maxHeight
-              : 320.0;
-          return ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: maxHeight),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final question in request.questions) ...[
-                    _batchQuestion(context, question, strings),
-                    const SizedBox(height: 12),
-                  ],
-                ],
-              ),
-            ),
-          );
-        },
+      ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < request.questions.length; i++) ...[
+                if (i > 0) const SizedBox(height: 14),
+                _batchQuestion(context, request.questions[i], strings),
+              ],
+            ],
+          ),
+        ),
       ),
     ];
   }
@@ -395,72 +539,209 @@ class _InteractivePromptCardState extends State<InteractivePromptCard> {
     final locked =
         (_request as ClarifyPromptRequest).lockedAnswers[question.qid] != null;
     final staged = _batchAnswers[question.qid]!;
-    final hasChoices = question.choices.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Text(
-                question.question,
-                style: TextStyle(color: colors.textPrimary, fontSize: 13),
-              ),
-            ),
+            Expanded(child: _questionText(question.question, colors)),
             if (locked)
-              Icon(Icons.lock_outline, size: 14, color: colors.textSecondary),
+              Padding(
+                padding: const EdgeInsets.only(left: 8, top: 2),
+                child: Icon(
+                  Icons.lock_outline,
+                  size: 14,
+                  color: colors.textSecondary,
+                ),
+              ),
           ],
         ),
-        if (hasChoices) ...[
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 7,
-            runSpacing: 7,
+        const SizedBox(height: 8),
+        for (final choice in question.choices) ...[
+          _choiceRow(
+            context,
+            label: choice,
+            selected: staged.choices.contains(choice),
+            multiSelect: question.multiSelect,
+            onTap: widget.busy || locked
+                ? null
+                : () => _toggleChoice(question, choice),
+          ),
+          const SizedBox(height: 6),
+        ],
+        _answerField(
+          controller: _batchControllers[question.qid],
+          hint: strings.interactiveBatchOtherHint,
+          enabled: !widget.busy && !locked,
+          textInputAction: TextInputAction.next,
+          onChanged: (value) => _setDraft(question, value),
+          highlighted: staged.draft.trim().isNotEmpty,
+        ),
+      ],
+    );
+  }
+
+  Widget _choiceRow(
+    BuildContext context, {
+    required String label,
+    required bool selected,
+    required bool multiSelect,
+    required VoidCallback? onTap,
+    bool trailingChevron = false,
+  }) {
+    final colors = Theme.of(context).hermes;
+    final strings = Strings.of(context);
+    final bare = label.replaceFirst(_recommendedSuffix, '');
+    final recommended = bare != label;
+    final enabled = onTap != null;
+    final indicator = multiSelect
+        ? (selected
+              ? Icons.check_box_rounded
+              : Icons.check_box_outline_blank_rounded)
+        : (selected
+              ? Icons.radio_button_checked_rounded
+              : Icons.radio_button_off_rounded);
+    final foreground = enabled ? colors.textPrimary : colors.textDisabled;
+    return Semantics(
+      selected: selected,
+      checked: multiSelect ? selected : null,
+      child: SizedBox(
+        width: double.infinity,
+        child: OutlinedButton(
+          onPressed: onTap,
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(componentMinimumTapTarget),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            alignment: Alignment.centerLeft,
+            backgroundColor: selected
+                ? colors.accent.withAlpha(34)
+                : colors.surfaceVariant,
+            foregroundColor: foreground,
+            side: BorderSide(color: selected ? colors.accent : colors.divider),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          child: Row(
             children: [
-              for (final choice in question.choices)
-                Semantics(
-                  selected: staged.choices.contains(choice),
-                  checked: staged.choices.contains(choice),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(
-                      minHeight: componentMinimumTapTarget,
-                    ),
-                    child: OutlinedButton(
-                      onPressed: widget.busy || locked
-                          ? null
-                          : () => _toggleChoice(question, choice),
-                      style: OutlinedButton.styleFrom(
-                        backgroundColor: staged.choices.contains(choice)
-                            ? colors.accent.withAlpha(30)
-                            : null,
-                      ),
-                      child: Text(choice),
+              Icon(
+                indicator,
+                size: 20,
+                color: selected ? colors.accent : colors.textSecondary,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  bare,
+                  style: TextStyle(
+                    color: foreground,
+                    fontSize: 14,
+                    height: 1.3,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  ),
+                ),
+              ),
+              if (recommended)
+                Container(
+                  margin: const EdgeInsets.only(left: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colors.accent.withAlpha(30),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    strings.interactiveRecommended,
+                    style: TextStyle(
+                      color: colors.accent,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.2,
                     ),
                   ),
                 ),
+              if (trailingChevron)
+                Icon(
+                  Icons.chevron_right_rounded,
+                  size: 20,
+                  color: colors.textSecondary,
+                ),
             ],
           ),
-        ],
-        const SizedBox(height: 8),
-        ConstrainedBox(
-          constraints: const BoxConstraints(
-            minHeight: componentMinimumTapTarget,
+        ),
+      ),
+    );
+  }
+
+  Widget _answerField({
+    required TextEditingController? controller,
+    required String hint,
+    required bool enabled,
+    required TextInputAction textInputAction,
+    ValueChanged<String>? onChanged,
+    ValueChanged<String>? onSubmitted,
+    bool sensitive = false,
+    bool highlighted = false,
+    Widget? suffixIcon,
+  }) {
+    final colors = Theme.of(context).hermes;
+    final borderColor = highlighted ? colors.accent : colors.divider;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: componentMinimumTapTarget),
+      child: TextField(
+        controller: controller,
+        enabled: enabled,
+        obscureText: sensitive && _obscure,
+        autocorrect: false,
+        enableSuggestions: !sensitive,
+        textInputAction: textInputAction,
+        onChanged: onChanged,
+        onSubmitted: onSubmitted,
+        style: TextStyle(color: colors.textPrimary, fontSize: 14),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: TextStyle(color: colors.textSecondary, fontSize: 14),
+          isDense: true,
+          filled: true,
+          fillColor: highlighted
+              ? colors.accent.withAlpha(34)
+              : colors.surfaceVariant,
+          prefixIcon: Icon(
+            sensitive ? Icons.lock_outline_rounded : Icons.edit_outlined,
+            size: 18,
+            color: colors.textSecondary,
           ),
-          child: TextField(
-            controller: _batchControllers[question.qid],
-            enabled: !widget.busy && !locked,
-            autocorrect: false,
-            enableSuggestions: false,
-            textInputAction: TextInputAction.next,
-            onChanged: (value) => _setDraft(question, value),
-            decoration: InputDecoration(
-              hintText: strings.interactiveBatchOtherHint,
-              isDense: true,
-            ),
+          prefixIconConstraints: const BoxConstraints(
+            minWidth: 40,
+            minHeight: 20,
+          ),
+          suffixIcon: suffixIcon,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 12,
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: borderColor),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: borderColor),
+          ),
+          disabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: colors.divider),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: colors.accent, width: 1.4),
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -482,42 +763,79 @@ class _InteractivePromptCardState extends State<InteractivePromptCard> {
     ),
   ];
 
-  List<Widget> _batchActions(Strings strings) => [
-    TextButton.icon(
-      onPressed: widget.busy ? null : widget.onCancel,
-      icon: const Icon(Icons.stop_circle_outlined, size: 18),
-      label: Text(strings.interactiveCancel),
-    ),
-    FilledButton.icon(
-      onPressed: widget.busy || !_batchComplete ? null : _submitBatch,
-      icon: const Icon(Icons.send_rounded, size: 17),
-      label: Text(strings.interactiveBatchConfirm),
-    ),
+  List<Widget> _batchActions(Strings strings, {required bool compact}) => [
+    if (compact)
+      Semantics(
+        label: strings.interactiveCancel,
+        button: true,
+        enabled: !widget.busy,
+        excludeSemantics: true,
+        child: TextButton(
+          key: const ValueKey('interactive-batch-cancel'),
+          onPressed: widget.busy ? null : widget.onCancel,
+          child: const Icon(Icons.stop_circle_outlined, size: 18),
+        ),
+      )
+    else
+      TextButton.icon(
+        key: const ValueKey('interactive-batch-cancel'),
+        onPressed: widget.busy ? null : widget.onCancel,
+        icon: const Icon(Icons.stop_circle_outlined, size: 18),
+        label: Text(strings.interactiveCancel),
+      ),
+    if (compact)
+      Semantics(
+        label: strings.interactiveBatchConfirm,
+        button: true,
+        enabled: !widget.busy && _batchComplete,
+        excludeSemantics: true,
+        child: FilledButton(
+          key: const ValueKey('interactive-batch-confirm'),
+          onPressed: widget.busy || !_batchComplete ? null : _submitBatch,
+          child: const Icon(Icons.send_rounded, size: 17),
+        ),
+      )
+    else
+      FilledButton.icon(
+        key: const ValueKey('interactive-batch-confirm'),
+        onPressed: widget.busy || !_batchComplete ? null : _submitBatch,
+        icon: const Icon(Icons.send_rounded, size: 17),
+        label: Text(strings.interactiveBatchConfirm),
+      ),
   ];
 
-  Widget _input(String hint, {required bool sensitive}) => TextField(
+  Widget _input(String hint, {required bool sensitive}) => _answerField(
     controller: _controller,
+    hint: hint,
     enabled: !widget.busy,
-    obscureText: sensitive && _obscure,
-    autocorrect: false,
-    enableSuggestions: !sensitive,
     textInputAction: TextInputAction.send,
     onSubmitted: (_) => _submit(),
-    decoration: InputDecoration(
-      hintText: hint,
-      isDense: true,
-      suffixIcon: sensitive
-          ? IconButton(
+    sensitive: sensitive,
+    suffixIcon: sensitive
+        ? Semantics(
+            label: _obscure
+                ? Strings.of(context).a11yShowAnswer
+                : Strings.of(context).a11yHideAnswer,
+            button: true,
+            enabled: !widget.busy,
+            onTap: widget.busy
+                ? null
+                : () => setState(() => _obscure = !_obscure),
+            excludeSemantics: true,
+            child: IconButton(
               onPressed: widget.busy
                   ? null
                   : () => setState(() => _obscure = !_obscure),
+              tooltip: _obscure
+                  ? Strings.of(context).a11yShowAnswer
+                  : Strings.of(context).a11yHideAnswer,
               icon: Icon(
                 _obscure
                     ? Icons.visibility_outlined
                     : Icons.visibility_off_outlined,
               ),
-            )
-          : null,
-    ),
+            ),
+          )
+        : null,
   );
 }

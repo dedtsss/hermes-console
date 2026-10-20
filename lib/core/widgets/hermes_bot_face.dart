@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models/bot_visual_identity.dart';
+import '../theme/theme_contrast.dart';
 
 const hermesClassicFaceShapes = ClassicFaceIdentity.shapes;
 const hermesClassicFaceColors = ClassicFaceIdentity.colors;
@@ -18,17 +19,20 @@ final class HermesBlobatarFaceVisual extends HermesBotFaceVisual {
   final String seed;
   final String seedPart;
   final String? pinnedKind;
+  final String? colorHex;
 
   const HermesBlobatarFaceVisual._({
     required this.shapeWire,
     required this.seed,
     required this.seedPart,
     required this.pinnedKind,
+    required this.colorHex,
   });
 
   static HermesBlobatarFaceVisual? tryParse({
     required String shapeWire,
     required String profileName,
+    String? colorHex,
   }) {
     final parsed = BlobatarShapeWire.tryParse(shapeWire);
     if (parsed == null) return null;
@@ -42,6 +46,9 @@ final class HermesBlobatarFaceVisual extends HermesBotFaceVisual {
       seed: parsed.seed.isEmpty ? effectiveName : parsed.seed,
       seedPart: parsed.seed,
       pinnedKind: parsed.kind,
+      colorHex: ClassicFaceIdentity.colors.contains(colorHex?.toLowerCase())
+          ? colorHex!.toLowerCase()
+          : null,
     );
   }
 
@@ -58,6 +65,12 @@ final class HermesBlobatarFaceVisual extends HermesBotFaceVisual {
   }
 
   String get resolvedKind => _BlobatarLayout.create(seed, pinnedKind).shape;
+
+  /// Head colour of this face: the bot's identity colour wherever its name
+  /// or accents appear next to the face.
+  Color get headColor => _colorFromHex(
+    colorHex ?? _BlobatarLayout.create(seed, pinnedKind).headHex,
+  );
 }
 
 final class HermesClassicFaceVisual extends HermesBotFaceVisual {
@@ -90,7 +103,21 @@ final class HermesClassicFaceVisual extends HermesBotFaceVisual {
 ///
 /// This is intentionally independent from the persisted visual identity: a
 /// bot can change activity while keeping the exact same Blobatar silhouette.
-enum HermesBotFaceMotionState { idle, listening, thinking, speaking }
+enum HermesBotFaceMotionState {
+  idle,
+  listening,
+  thinking,
+  speaking,
+
+  /// Busy on a task: eyes scan a line left→right and drop, like reading or
+  /// typing, with a small key-press bob.
+  working,
+}
+
+/// Surface of a Blobatar face. [flat] is the Blobatar reference; [matte]
+/// (Bots home, Dots style) adds a soft, cached radial volume over the head
+/// and slightly larger eyes. Classic faces ignore it.
+enum HermesBotFaceFinish { flat, matte }
 
 class HermesBotFace extends StatefulWidget {
   final HermesBotFaceVisual visual;
@@ -99,6 +126,33 @@ class HermesBotFace extends StatefulWidget {
   final bool animate;
   final HermesBotFaceMotionState motionState;
 
+  /// Optional shared clock (0..1 over [clockDuration]). When set, the face
+  /// creates no ticker of its own: a living roster face drives face motion,
+  /// ring and nudge from ONE controller (spec 070 § Motion).
+  final Animation<double>? clock;
+
+  /// Amplitude multiplier for glance, bob, breath and tilt (blink is not
+  /// scaled). 1 keeps the Blobatar reference motion; living roster faces
+  /// use more so motion reads at 44-60 dp.
+  final double motionGain;
+
+  /// Amplitude multiplier for eye glances/scans only; defaults to
+  /// [motionGain]. Eyes carry most of a small face's life, so living faces
+  /// move them more than the body.
+  final double? eyeGain;
+
+  /// Idle living faces: when set and [animate] is false the face holds a
+  /// still, alive pose (catchlight kept) and closes its eyes once while this
+  /// animation runs 0→1. It is a one-shot blink, never a running clock.
+  final Animation<double>? blink;
+
+  /// Surface finish (flat reference or the Dots matte volume).
+  final HermesBotFaceFinish finish;
+
+  /// Period of the face clock; external clocks must use the same period so
+  /// the seeded breath/blink/saccade periods stay continuous.
+  static const clockDuration = Duration(days: 1);
+
   const HermesBotFace({
     super.key,
     required this.visual,
@@ -106,6 +160,11 @@ class HermesBotFace extends StatefulWidget {
     this.semanticLabel,
     this.animate = false,
     this.motionState = HermesBotFaceMotionState.idle,
+    this.clock,
+    this.motionGain = 1,
+    this.eyeGain,
+    this.blink,
+    this.finish = HermesBotFaceFinish.flat,
   }) : assert(size > 0);
 
   @override
@@ -117,7 +176,7 @@ class _HermesBotFaceState extends State<HermesBotFace>
   // A long shared clock keeps all independently seeded periods smooth while
   // still bounding controller values. Resetting once a day is outside any
   // realistic preview session.
-  static const _clockDuration = Duration(days: 1);
+  static const _clockDuration = HermesBotFace.clockDuration;
 
   static const _stoppedClock = AlwaysStoppedAnimation<double>(0);
 
@@ -137,14 +196,19 @@ class _HermesBotFaceState extends State<HermesBotFace>
   }
 
   void _syncMotion() {
-    final reduceMotion =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final enabled =
         widget.animate &&
         widget.visual is HermesBlobatarFaceVisual &&
         !reduceMotion &&
         TickerMode.valuesOf(context).enabled;
     _motionEnabled = enabled;
+    if (widget.clock != null) {
+      // Driven externally: never hold an idle controller of our own.
+      _clock?.dispose();
+      _clock = null;
+      return;
+    }
     if (enabled) {
       final clock = _clock ??= AnimationController(
         vsync: this,
@@ -174,10 +238,14 @@ class _HermesBotFaceState extends State<HermesBotFace>
           key: const ValueKey('hermes-controlled-bot-face'),
           painter: _HermesBotFacePainter(
             widget.visual,
-            clock: _clock ?? _stoppedClock,
+            clock: widget.clock ?? _clock ?? _stoppedClock,
             motionEnabled: _motionEnabled,
             clockDuration: _clockDuration,
             motionState: widget.motionState,
+            motionGain: widget.motionGain,
+            eyeGain: widget.eyeGain ?? widget.motionGain,
+            blink: widget.blink,
+            finish: widget.finish,
           ),
         ),
       ),
@@ -195,6 +263,10 @@ final class _HermesBotFacePainter extends CustomPainter {
   final bool motionEnabled;
   final Duration clockDuration;
   final HermesBotFaceMotionState motionState;
+  final double motionGain;
+  final double eyeGain;
+  final Animation<double>? blink;
+  final HermesBotFaceFinish finish;
   final _BlobatarLayout? _blobatarLayout;
   final _BlobatarMotionProfile? _motionProfile;
 
@@ -204,6 +276,10 @@ final class _HermesBotFacePainter extends CustomPainter {
     required this.motionEnabled,
     required this.clockDuration,
     required this.motionState,
+    this.motionGain = 1,
+    this.eyeGain = 1,
+    this.blink,
+    this.finish = HermesBotFaceFinish.flat,
   }) : _blobatarLayout = switch (visual) {
          final HermesBlobatarFaceVisual face => _BlobatarLayout.create(
            face.seed,
@@ -216,22 +292,33 @@ final class _HermesBotFacePainter extends CustomPainter {
            _BlobatarMotionProfile.fromSeed(face.seed),
          _ => null,
        },
-       super(repaint: motionEnabled ? clock : null);
+       super(repaint: motionEnabled ? clock : blink);
 
   @override
   void paint(Canvas canvas, Size size) {
     switch (visual) {
-      case HermesBlobatarFaceVisual():
+      case final HermesBlobatarFaceVisual face:
         final frame = motionEnabled
-            ? _motionProfile!.sample(
-                Duration(
-                  microseconds: (clockDuration.inMicroseconds * clock.value)
-                      .round(),
-                ),
-                state: motionState,
-              )
+            ? _motionProfile!
+                  .sample(
+                    Duration(
+                      microseconds: (clockDuration.inMicroseconds * clock.value)
+                          .round(),
+                    ),
+                    state: motionState,
+                  )
+                  .scaled(motionGain, eyeGain: eyeGain)
+            : blink != null
+            ? _restPose(blink!.value)
             : HermesBotFaceMotionSnapshot.staticFrame;
-        _paintBlobatar(canvas, size, _blobatarLayout!, frame);
+        _paintBlobatar(
+          canvas,
+          size,
+          _blobatarLayout!,
+          frame,
+          matte: finish == HermesBotFaceFinish.matte,
+          headColor: face.colorHex == null ? null : face.headColor,
+        );
       case final HermesClassicFaceVisual face:
         _paintClassic(canvas, size, face);
     }
@@ -241,27 +328,108 @@ final class _HermesBotFacePainter extends CustomPainter {
   bool shouldRepaint(_HermesBotFacePainter oldDelegate) =>
       !_sameVisual(oldDelegate.visual, visual) ||
       oldDelegate.motionEnabled != motionEnabled ||
-      oldDelegate.motionState != motionState;
+      oldDelegate.motionState != motionState ||
+      oldDelegate.motionGain != motionGain ||
+      oldDelegate.eyeGain != eyeGain ||
+      oldDelegate.blink != blink ||
+      oldDelegate.finish != finish;
 }
 
-bool _sameVisual(HermesBotFaceVisual a, HermesBotFaceVisual b) =>
-    switch ((a, b)) {
-      (final HermesBlobatarFaceVisual x, final HermesBlobatarFaceVisual y) =>
-        x.shapeWire == y.shapeWire && x.seed == y.seed,
-      (final HermesClassicFaceVisual x, final HermesClassicFaceVisual y) =>
-        x.shape == y.shape && x.colorHex == y.colorHex,
-      _ => false,
-    };
+/// Still idle pose of a living face: the reference frame with its eyes
+/// closed by a one-shot blink at [t] (0 and 1 = open, 0.5 = shut). It is
+/// never [HermesBotFaceMotionSnapshot.staticFrame] itself, so the eyes keep
+/// the living catchlight.
+HermesBotFaceMotionSnapshot _restPose(double t) {
+  final open = t <= 0 || t >= 1
+      ? 1.0
+      : t < .5
+      ? 1 - 0.92 * Curves.easeIn.transform(t / .5)
+      : 0.08 + 0.92 * Curves.easeOut.transform((t - .5) / .5);
+  return HermesBotFaceMotionSnapshot(
+    breatheScaleX: 1,
+    breatheScaleY: 1,
+    bobY: 0,
+    blinkScaleY: open,
+    eyeOffsetX: 0,
+    eyeOffsetY: 0,
+    eyeScaleX: 1,
+    eyeScaleY: 1,
+    headTiltRadians: 0,
+  );
+}
+
+/// Paints one static frame of [visual] into [canvas] (no ticker, no widget
+/// tree). Used to rasterise Bot faces for notification `Person` icons and
+/// home-screen widgets, so they match the in-app face exactly.
+///
+/// [pose] replaces the neutral reference frame with a static expression
+/// (widgets and notifications cannot animate, so each state gets its own
+/// frame: eyes aside while working, happy eyes when done, raised brows when
+/// it needs you, crossed eyes when it failed). Classic faces ignore it.
+void paintHermesBotFaceFrame(
+  Canvas canvas,
+  Size size,
+  HermesBotFaceVisual visual, {
+  HermesBotFaceMotionState motionState = HermesBotFaceMotionState.idle,
+  HermesBotFaceMotionSnapshot? pose,
+}) {
+  if (pose != null && visual is HermesBlobatarFaceVisual) {
+    _paintBlobatar(
+      canvas,
+      size,
+      _BlobatarLayout.create(visual.seed, visual.pinnedKind),
+      pose,
+      headColor: visual.colorHex == null ? null : visual.headColor,
+    );
+    return;
+  }
+  _HermesBotFacePainter(
+    visual,
+    clock: const AlwaysStoppedAnimation<double>(0),
+    motionEnabled: false,
+    clockDuration: HermesBotFace.clockDuration,
+    motionState: motionState,
+  ).paint(canvas, size);
+}
+
+bool _sameVisual(HermesBotFaceVisual a, HermesBotFaceVisual b) => switch ((
+  a,
+  b,
+)) {
+  (final HermesBlobatarFaceVisual x, final HermesBlobatarFaceVisual y) =>
+    x.shapeWire == y.shapeWire && x.seed == y.seed && x.colorHex == y.colorHex,
+  (final HermesClassicFaceVisual x, final HermesClassicFaceVisual y) =>
+    x.shape == y.shape && x.colorHex == y.colorHex,
+  _ => false,
+};
 
 // ---------------------------------------------------------------------------
 // Blobatar 2.0.0 native port. The package viewBox is exactly 100 x 100.
+
+/// Matte volume shader in the 100×100 Blobatar space: a soft highlight
+/// up-left fading to a gentle shade down-right. Built once and reused by
+/// every matte face (no per-frame allocation).
+final Shader _matteVolume = const RadialGradient(
+  center: Alignment(-0.35, -0.45),
+  radius: 0.95,
+  colors: [Color(0x33FFFFFF), Color(0x00FFFFFF), Color(0x29000000)],
+  stops: [0, .5, 1],
+).createShader(const Rect.fromLTWH(0, 0, 100, 100));
+
+/// Layer bounds of the matte volume (head motion stays inside it).
+const Rect _matteBounds = Rect.fromLTWH(-20, -20, 140, 140);
+
+/// Eyes of a matte (Dots) face are drawn this much larger.
+const double _matteEyeScale = 1.16;
 
 void _paintBlobatar(
   Canvas canvas,
   Size size,
   _BlobatarLayout layout,
-  HermesBotFaceMotionSnapshot motion,
-) {
+  HermesBotFaceMotionSnapshot motion, {
+  bool matte = false,
+  Color? headColor,
+}) {
   canvas.save();
   canvas.scale(size.width / 100, size.height / 100);
   canvas
@@ -270,8 +438,9 @@ void _paintBlobatar(
     ..scale(motion.breatheScaleX, motion.breatheScaleY)
     ..translate(-50, -50);
   final head = Paint()
-    ..color = _colorFromHex(layout.headHex)
+    ..color = headColor ?? _colorFromHex(layout.headHex)
     ..style = PaintingStyle.fill;
+  if (matte) canvas.saveLayer(_matteBounds, Paint());
   for (final petal in layout.petals) {
     canvas.drawCircle(Offset(petal.cx, petal.cy), petal.r, head);
   }
@@ -279,34 +448,149 @@ void _paintBlobatar(
     canvas.drawPath(extra.path, head);
   }
   canvas.drawPath(layout.bodyPath.path, head);
+  if (matte) {
+    // srcATop keeps the volume inside the head drawn into this layer, so
+    // overlapping petals shade once and nothing spills outside the body.
+    canvas.drawRect(
+      _matteBounds,
+      Paint()
+        ..shader = _matteVolume
+        ..blendMode = BlendMode.srcATop,
+    );
+    canvas.restore();
+  }
 
+  final eyeColor = headColor == null
+      ? _colorFromHex(layout.eyeHex)
+      : ThemeContrast.bestBlackOrWhite(headColor);
   final eye = Paint()
-    ..color = _colorFromHex(layout.eyeHex)
+    ..color = eyeColor
     ..style = PaintingStyle.fill;
+  // Living faces get a catchlight (dark eyes) or a pupil (light eyes) that
+  // leads the glance, so a look left/right reads at roster size. The static
+  // reference frame (notifications, widgets, reduced motion) stays exactly
+  // the Blobatar reference.
+  final alive = !identical(motion, HermesBotFaceMotionSnapshot.staticFrame);
+  final lightEyes = eyeColor.computeLuminance() > .45;
   for (final value in layout.eyes) {
+    final cx = value.cx + motion.eyeOffsetX;
+    final cy = value.cy + motion.eyeOffsetY;
+    final eyeScale = matte ? _matteEyeScale : 1.0;
+    final rx = value.rx * motion.eyeScaleX * eyeScale;
+    final ry = value.ry * motion.eyeScaleY * motion.blinkScaleY * eyeScale;
+    if (motion.brows != 0) {
+      _paintBrow(canvas, value, cx, cy, rx, ry, motion.brows, eyeColor);
+    }
+    if (motion.eyeGlyph == HermesBotFaceEyeGlyph.cross) {
+      _paintCrossEye(canvas, cx, cy, value.rx, value.ry, eyeColor);
+      continue;
+    }
+    if (motion.eyeGlyph == HermesBotFaceEyeGlyph.happy) {
+      // Content "smiling eyes": an upward arc (^ ^) instead of the open eye.
+      final w = math.max(rx * 1.35, 2.6);
+      final h = math.max(ry * .75, 2.4);
+      canvas.drawPath(
+        Path()
+          ..moveTo(cx - w, cy + h * .45)
+          ..quadraticBezierTo(cx, cy - h * 1.35, cx + w, cy + h * .45),
+        Paint()
+          ..color = eyeColor
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = math.max(1.8, rx * .95),
+      );
+      continue;
+    }
     canvas.drawPath(
-      _superellipse(
-        _BlobEye(
-          value.cx + motion.eyeOffsetX,
-          value.cy + motion.eyeOffsetY,
-          value.rx * motion.eyeScaleX,
-          value.ry * motion.eyeScaleY * motion.blinkScaleY,
-          value.n,
-          value.rot,
-        ),
-      ).path,
+      _superellipse(_BlobEye(cx, cy, rx, ry, value.n, value.rot)).path,
       eye,
     );
+    // Hidden while the lid is mostly shut (blink or squint).
+    if (!alive || ry < value.ry * .45) continue;
+    final lead = Offset(
+      (motion.eyeOffsetX * .22).clamp(-rx * .45, rx * .45),
+      (motion.eyeOffsetY * .22).clamp(-ry * .45, ry * .45),
+    );
+    if (lightEyes) {
+      final r = math.min(rx, ry) * .62;
+      canvas.drawCircle(
+        Offset(cx, cy) + lead,
+        r,
+        Paint()..color = const Color(0xff1c1917).withValues(alpha: .92),
+      );
+    } else {
+      final r = math.max(.9, math.min(rx, ry) * .38);
+      canvas.drawCircle(
+        Offset(cx - rx * .28, cy - ry * .34) + lead,
+        r,
+        Paint()..color = const Color(0xffffffff).withValues(alpha: .82),
+      );
+    }
   }
   canvas.restore();
 }
 
+void _paintBrow(
+  Canvas canvas,
+  _BlobEye eye,
+  double cx,
+  double cy,
+  double rx,
+  double ry,
+  double brows,
+  Color color,
+) {
+  // brows > 0: raised (surprise / "needs you"); brows < 0: worried, the
+  // inner end lifted (failed).
+  final outward = eye.cx < 50 ? -1.0 : 1.0;
+  final lift = ry + math.max(2.6, ry * .45) + (brows > 0 ? brows * 1.6 : 0);
+  final half = math.max(rx * 1.05, 2.4);
+  final tilt = brows < 0 ? -brows * 2.2 : 0.0;
+  final inner = Offset(cx - outward * half, cy - lift - tilt);
+  final outer = Offset(cx + outward * half, cy - lift + tilt * .35);
+  final mid = Offset(
+    (inner.dx + outer.dx) / 2,
+    math.min(inner.dy, outer.dy) - (brows > 0 ? 1.4 : .3),
+  );
+  canvas.drawPath(
+    Path()
+      ..moveTo(inner.dx, inner.dy)
+      ..quadraticBezierTo(mid.dx, mid.dy, outer.dx, outer.dy),
+    Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = math.max(1.6, math.min(rx, ry) * .55),
+  );
+}
+
+void _paintCrossEye(
+  Canvas canvas,
+  double cx,
+  double cy,
+  double rx,
+  double ry,
+  Color color,
+) {
+  final r = math.max(rx * 1.25, math.min(ry, rx * 2.2) * .62);
+  final paint = Paint()
+    ..color = color
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeWidth = math.max(1.8, rx * .75);
+  canvas
+    ..drawLine(Offset(cx - r, cy - r), Offset(cx + r, cy + r), paint)
+    ..drawLine(Offset(cx + r, cy - r), Offset(cx - r, cy + r), paint);
+}
+
+/// Eye drawing for a static expression frame.
+enum HermesBotFaceEyeGlyph { open, happy, cross }
+
 /// Observable frame of the Blobatar motion layer.
 ///
 /// The renderer applies these values only when [HermesBotFace.animate] is true.
-/// Keeping the snapshot public and test-only lets motion be verified without
-/// exposing painter internals or relying on fragile golden timing.
-@visibleForTesting
+/// Public so motion can be verified without painter internals, and so static
+/// expression frames (widgets, notifications) can pass a pose.
 final class HermesBotFaceMotionSnapshot {
   final double breatheScaleX;
   final double breatheScaleY;
@@ -318,6 +602,12 @@ final class HermesBotFaceMotionSnapshot {
   final double eyeScaleY;
   final double headTiltRadians;
 
+  /// Static-expression extras (never produced by the living motion layer).
+  final HermesBotFaceEyeGlyph eyeGlyph;
+
+  /// 0 = no brows; > 0 raised; < 0 worried.
+  final double brows;
+
   const HermesBotFaceMotionSnapshot({
     required this.breatheScaleX,
     required this.breatheScaleY,
@@ -328,7 +618,28 @@ final class HermesBotFaceMotionSnapshot {
     required this.eyeScaleX,
     required this.eyeScaleY,
     required this.headTiltRadians,
+    this.eyeGlyph = HermesBotFaceEyeGlyph.open,
+    this.brows = 0,
   });
+
+  /// Same pose with every displacement multiplied by [gain] (blink and eye
+  /// scale keep their shape).
+  HermesBotFaceMotionSnapshot scaled(double gain, {double? eyeGain}) =>
+      gain == 1 && (eyeGain ?? gain) == 1
+      ? this
+      : HermesBotFaceMotionSnapshot(
+          breatheScaleX: 1 + (breatheScaleX - 1) * gain,
+          breatheScaleY: 1 + (breatheScaleY - 1) * gain,
+          bobY: bobY * gain,
+          blinkScaleY: blinkScaleY,
+          eyeOffsetX: eyeOffsetX * (eyeGain ?? gain),
+          eyeOffsetY: eyeOffsetY * (eyeGain ?? gain),
+          eyeScaleX: eyeScaleX,
+          eyeScaleY: eyeScaleY,
+          headTiltRadians: headTiltRadians * gain,
+          eyeGlyph: eyeGlyph,
+          brows: brows,
+        );
 
   static const staticFrame = HermesBotFaceMotionSnapshot(
     breatheScaleX: 1,
@@ -431,6 +742,21 @@ final class _BlobatarMotionProfile {
     final speakingPulse = Curves.easeInOut.transform(
       _alternateProgress(elapsedMs + breathePhaseMs, 420),
     );
+    // Thinking: the gaze wanders slowly along the top of the eye, left and
+    // right, while the head stays tilted.
+    final wander = math.sin((elapsedMs + saccadePhaseMs) / 2600 * 2 * math.pi);
+    // Working: read one "line" left→right in 1.1 s, snap back in 0.25 s.
+    final scanCycle = _cycleProgress(elapsedMs + blinkPhaseMs, 1350);
+    final scan = scanCycle < 0.815
+        ? -1 + 2 * Curves.easeInOut.transform(scanCycle / 0.815)
+        : 1 - 2 * Curves.easeOut.transform((scanCycle - 0.815) / 0.185);
+    final keyPress = _alternateProgress(elapsedMs + bobPhaseMs, 170);
+    // Every ~11 s a content squint ("happy eyes"): the eyes narrow to a
+    // smile for ~0.7 s, then open again.
+    final squintCycle = _cycleProgress(elapsedMs + saccadePhaseMs * 1.7, 11000);
+    final squint = squintCycle < 0.064
+        ? math.sin(squintCycle / 0.064 * math.pi)
+        : 0.0;
     return switch (state) {
       HermesBotFaceMotionState.idle => HermesBotFaceMotionSnapshot(
         breatheScaleX: 1 + 0.022 * breathe,
@@ -438,9 +764,9 @@ final class _BlobatarMotionProfile {
         bobY: -1.1 * bob,
         blinkScaleY: blink,
         eyeOffsetX: glance.dx,
-        eyeOffsetY: glance.dy,
-        eyeScaleX: 1,
-        eyeScaleY: 1,
+        eyeOffsetY: glance.dy - squint * 0.6,
+        eyeScaleX: 1 + 0.08 * squint,
+        eyeScaleY: 1 - 0.5 * squint,
         headTiltRadians: followedGlance.dx * 0.008,
       ),
       HermesBotFaceMotionState.listening => HermesBotFaceMotionSnapshot(
@@ -459,8 +785,10 @@ final class _BlobatarMotionProfile {
         breatheScaleY: 1 - 0.012 * breathe,
         bobY: -0.65 * bob,
         blinkScaleY: blink,
-        eyeOffsetX: lookX * 0.78 + glance.dx * 0.18,
-        eyeOffsetY: -lookY.abs() * 0.78 + glance.dy * 0.1,
+        // Up-left ↔ up-right, never a sub-pixel twitch.
+        eyeOffsetX:
+            math.max(lookX.abs(), 1.6) * 0.9 * wander + glance.dx * 0.18,
+        eyeOffsetY: -math.max(lookY.abs(), 1.3) * 0.9 + glance.dy * 0.1,
         eyeScaleX: 1,
         eyeScaleY: 0.9,
         headTiltRadians:
@@ -477,6 +805,17 @@ final class _BlobatarMotionProfile {
         eyeScaleY: 1 - 0.08 * speakingPulse,
         headTiltRadians:
             (lookX.isNegative ? -1 : 1) * (speakingPulse - 0.5) * 0.018,
+      ),
+      HermesBotFaceMotionState.working => HermesBotFaceMotionSnapshot(
+        breatheScaleX: 1 + 0.012 * breathe,
+        breatheScaleY: 1 - 0.01 * breathe,
+        bobY: -0.35 * bob - 0.35 * keyPress,
+        blinkScaleY: blink,
+        eyeOffsetX: scan * math.max(lookX.abs(), 1.8) * 1.05,
+        eyeOffsetY: lookY.abs() * 0.55,
+        eyeScaleX: 1.04,
+        eyeScaleY: 0.94,
+        headTiltRadians: scan * 0.012,
       ),
     };
   }
@@ -574,7 +913,28 @@ final class _BlobatarLayout {
     required this.bodyPath,
   });
 
+  // Un layout es inmutable una vez construido (los `..` sobre `body` de
+  // `_build` ocurren solo ahí) y deriva por completo de (seed, pinnedKind),
+  // así que se memoriza. `_HermesBotFacePainter` lo pedía en cada build de
+  // cada avatar (~40 hashes de rasgos + construcción de paths), y una lista de
+  // bots se reconstruye a menudo (refresco en vivo de Mission Control,
+  // scroll). Acotado: el orden de inserción del Map hace de FIFO simple.
+  static final Map<(String, String?), _BlobatarLayout> _layoutCache = {};
+  static const _layoutCacheLimit = 128;
+
   factory _BlobatarLayout.create(String seed, String? pinnedKind) {
+    final key = (seed, pinnedKind);
+    final cached = _layoutCache[key];
+    if (cached != null) return cached;
+    final layout = _BlobatarLayout._build(seed, pinnedKind);
+    if (_layoutCache.length >= _layoutCacheLimit) {
+      _layoutCache.remove(_layoutCache.keys.first);
+    }
+    _layoutCache[key] = layout;
+    return layout;
+  }
+
+  factory _BlobatarLayout._build(String seed, String? pinnedKind) {
     final traits = _BlobatarTraits(seed);
     final selected = pinnedKind ?? _pickShape(traits('shape'));
     if (!hermesBlobatarKinds.contains(selected)) {

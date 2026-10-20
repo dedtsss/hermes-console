@@ -15,6 +15,9 @@ import '../widgets/hermes_pill.dart';
 import '../widgets/hermes_ui.dart';
 import 'lock_screen.dart';
 import '../widgets/hermes_app_bar.dart';
+import '../design/hermes_design.dart'
+    show HermesDialogAction, HermesDialogActionStyle, showHermesDialog;
+import '../feedback/screen_help.dart';
 
 /// Ajustes globales de permisos / aprobaciones (PRIORIDAD 2 de la fase de
 /// permisos). Lee y escribe sobre el [ApprovalPolicyService] compartido, así
@@ -82,45 +85,49 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
   }
 
   Future<bool> _confirmYolo() async {
-    final colors = Theme.of(context).hermes;
-    final ok = await showDialog<bool>(
+    final ok = await showHermesDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text(Strings.of(context).permEnableYoloQ),
-        content: Text(Strings.of(context).permYoloBody),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(Strings.of(context).commonCancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: colors.error),
-            child: Text(Strings.of(context).permEnableYolo),
-          ),
-        ],
-      ),
+      title: Strings.of(context).permEnableYoloQ,
+      message: Strings.of(context).permYoloBody,
+      actions: [
+        HermesDialogAction(
+          label: Strings.of(context).commonCancel,
+          value: false,
+          style: HermesDialogActionStyle.cancel,
+        ),
+        HermesDialogAction(
+          label: Strings.of(context).permEnableYolo,
+          value: true,
+          style: HermesDialogActionStyle.destructive,
+        ),
+      ],
     );
     return ok == true;
   }
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).hermes;
     final policy = _policy;
     return Scaffold(
-      appBar: HermesAppBar(title: Text(Strings.of(context).permTitle)),
+      appBar: HermesAppBar(
+        title: Text(Strings.of(context).permTitle),
+        actions: [
+          ScreenHelpButton(
+            title: Strings.of(context).permTitle,
+            paragraphs: [
+              Strings.of(context).permDefaultModeNote,
+              Strings.of(context).permOptionsNote,
+            ],
+          ),
+        ],
+      ),
       body: policy == null
           ? Center(child: TuiLoader())
           : ListView(
+              clipBehavior: hermesUnderHeader,
               padding: const EdgeInsets.all(16),
               children: [
                 HermesSectionHeader(Strings.of(context).permDefaultMode),
-                Text(
-                  Strings.of(context).permDefaultModeNote,
-                  style: TextStyle(fontSize: 12.5, color: colors.textSecondary),
-                ),
-                const SizedBox(height: 10),
                 ..._modeOptions.map(
                   (m) => _ModeCard(
                     mode: m,
@@ -130,16 +137,6 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
                 ),
                 const SizedBox(height: 8),
                 HermesSectionHeader(Strings.of(context).permOptions),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: Text(
-                    Strings.of(context).permOptionsNote,
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      color: Theme.of(context).hermes.textSecondary,
-                    ),
-                  ),
-                ),
                 _flag(
                   Strings.of(context).permAppLock,
                   Strings.of(context).permAppLockSub,
@@ -362,7 +359,7 @@ class _SavedRulesState extends State<_SavedRules> {
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text(
           Strings.of(context).permNoSaved,
-          style: TextStyle(fontSize: 12.5, color: colors.textDisabled),
+          style: TextStyle(fontSize: 12.5, color: colors.textTertiary),
         ),
       );
     }
@@ -450,7 +447,7 @@ class _ActivityList extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text(
           Strings.of(context).permNoActivity,
-          style: TextStyle(fontSize: 12.5, color: colors.textDisabled),
+          style: TextStyle(fontSize: 12.5, color: colors.textTertiary),
         ),
       );
     }
@@ -488,7 +485,7 @@ class _ActivityList extends StatelessWidget {
               const SizedBox(width: 8),
               Text(
                 relativeTime(e.ts),
-                style: TextStyle(fontSize: 10.5, color: colors.textDisabled),
+                style: TextStyle(fontSize: 10.5, color: colors.textTertiary),
               ),
             ],
           ),

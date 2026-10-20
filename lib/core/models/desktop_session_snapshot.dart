@@ -1,3 +1,8 @@
+import 'connection_request.dart';
+import '../utils/assistant_content.dart';
+import 'agent_task_list.dart';
+import 'transcript_privacy_state.dart';
+
 /// Typed, defensive projection of the Hermes Agent 0.19 Desktop session
 /// lifecycle responses.
 ///
@@ -6,7 +11,11 @@
 class DesktopSessionSnapshot {
   final String runtimeSessionId;
   final String storedSessionId;
+  final DesktopStoredSessionIdProvenance storedSessionIdProvenance;
   final bool created;
+  final String? lineageRootId;
+  final bool identityAliasesConsistent;
+  final bool storedSessionIdentityExplicit;
   final List<DesktopSessionMessage> messages;
   final bool messagesProvided;
   final bool messagesFullyParsed;
@@ -27,11 +36,36 @@ class DesktopSessionSnapshot {
   final Map<String, dynamic> raw;
   final Map<String, dynamic>? pendingClarify;
   final bool pendingClarifyProvided;
+  final Map<String, dynamic>? pendingApproval;
+  final bool pendingApprovalProvided;
+
+  /// `pending_connection`: the connector prompt still waiting on this
+  /// session, so a client that missed `connection.request` restores the card
+  /// with the server's deadline. Null when absent, null or unusable.
+  final ConnectionRequest? pendingConnection;
+  final bool pendingConnectionProvided;
+
+  /// `open_requests`: server→client requests (clarify, approval, sudo, …)
+  /// still waiting on this session. Hermes only sends each request frame once,
+  /// so a client that was offline or not yet attached when it was written
+  /// learns about it here (`tui_gateway/server_requests.py::open_requests`).
+  /// Each entry is the request frame `{id, method, params}`.
+  final List<Map<String, dynamic>> openRequests;
+
+  /// `todo_state` del gateway: la lista de tareas del agente para esta sesión
+  /// (también la reconstruye desde el historial durable cuando no hay agente
+  /// vivo). `null` si no la trae o no es utilizable.
+  final AgentTaskList? todoState;
 
   const DesktopSessionSnapshot({
     required this.runtimeSessionId,
     required this.storedSessionId,
+    this.storedSessionIdProvenance =
+        DesktopStoredSessionIdProvenance.requestedFallback,
     required this.created,
+    this.lineageRootId,
+    this.identityAliasesConsistent = true,
+    this.storedSessionIdentityExplicit = true,
     this.messages = const [],
     this.messagesProvided = false,
     this.messagesFullyParsed = true,
@@ -47,7 +81,43 @@ class DesktopSessionSnapshot {
     this.raw = const {},
     this.pendingClarify,
     this.pendingClarifyProvided = false,
+    this.pendingApproval,
+    this.pendingApprovalProvided = false,
+    this.pendingConnection,
+    this.pendingConnectionProvided = false,
+    this.openRequests = const [],
+    this.todoState,
   });
+
+  DesktopSessionSnapshot withoutPersistedMessages() => DesktopSessionSnapshot(
+    runtimeSessionId: runtimeSessionId,
+    storedSessionId: storedSessionId,
+    storedSessionIdProvenance: storedSessionIdProvenance,
+    created: created,
+    lineageRootId: lineageRootId,
+    identityAliasesConsistent: identityAliasesConsistent,
+    storedSessionIdentityExplicit: storedSessionIdentityExplicit,
+    messagesProvided: false,
+    messagesFullyParsed: messagesFullyParsed,
+    messageCount: messageCount,
+    hydrating: hydrating,
+    inflight: inflight,
+    queued: queued,
+    running: running,
+    status: status,
+    startedAt: startedAt,
+    turnStartedAt: turnStartedAt,
+    info: info,
+    pendingClarify: pendingClarify,
+    pendingClarifyProvided: pendingClarifyProvided,
+    pendingApproval: pendingApproval,
+    pendingApprovalProvided: pendingApprovalProvided,
+    pendingConnection: pendingConnection,
+    pendingConnectionProvided: pendingConnectionProvided,
+    openRequests: openRequests,
+    todoState: todoState,
+    raw: raw,
+  );
 
   factory DesktopSessionSnapshot.fromJson(
     Map<String, dynamic> json, {
@@ -55,7 +125,7 @@ class DesktopSessionSnapshot {
     required bool created,
     required String method,
   }) {
-    final runtimeSessionId = _nonEmptyString(json['session_id']);
+    final runtimeSessionId = _exactNonEmptyIdentity(json['session_id']);
     if (runtimeSessionId == null) {
       throw FormatException('$method omitted a valid runtime session id');
     }
@@ -64,14 +134,83 @@ class DesktopSessionSnapshot {
     // may use it as a boolean status flag. Identity fields are intentionally
     // strict: a bool/number must never become the persisted strings "true" or
     // "42" through an incidental toString().
+    var identityAliasesConsistent = true;
+    String? readStoredAlias(String key, {bool booleanStatusAllowed = false}) {
+      if (!json.containsKey(key)) return null;
+      final value = json[key];
+      if (booleanStatusAllowed && value is bool) return null;
+      if (value is String && (value.isEmpty || value != value.trim())) {
+        throw FormatException('$method contains an invalid $key identity');
+      }
+      if (value is! String) {
+        identityAliasesConsistent = false;
+        return null;
+      }
+      return value;
+    }
+
+    final explicitStoredSessionId = readStoredAlias('stored_session_id');
+    final explicitSessionKey = readStoredAlias('session_key');
+    final explicitResumed = readStoredAlias(
+      'resumed',
+      booleanStatusAllowed: true,
+    );
+    final explicitAliases = <String>{
+      ?explicitStoredSessionId,
+      ?explicitSessionKey,
+      ?explicitResumed,
+    };
+    if (explicitAliases.length > 1) identityAliasesConsistent = false;
     final storedSessionId =
-        _nonEmptyString(json['stored_session_id']) ??
-        _nonEmptyString(json['session_key']) ??
-        _nonEmptyString(json['resumed']) ??
-        _nonEmptyString(requestedStoredSessionId);
+        explicitStoredSessionId ??
+        explicitSessionKey ??
+        explicitResumed ??
+        _exactNonEmptyIdentity(requestedStoredSessionId);
     if (storedSessionId == null) {
       throw FormatException('$method omitted a valid stored session id');
     }
+
+    final infoJson = _stringKeyedMap(json['info']);
+    final infoStoredSessionId = infoJson == null
+        ? null
+        : _exactNonEmptyIdentity(infoJson['stored_session_id']);
+    if (infoJson?.containsKey('stored_session_id') == true &&
+        (infoStoredSessionId == null ||
+            infoStoredSessionId != storedSessionId)) {
+      identityAliasesConsistent = false;
+    }
+    final infoRuntimeSessionId = infoJson == null
+        ? null
+        : _exactNonEmptyIdentity(infoJson['session_id']);
+    if (infoJson?.containsKey('session_id') == true &&
+        (infoRuntimeSessionId == null ||
+            infoRuntimeSessionId != runtimeSessionId)) {
+      identityAliasesConsistent = false;
+    }
+
+    String? lineageRootId;
+    void collectLineageAliases(Map<String, dynamic>? source) {
+      if (source == null) return;
+      for (final key in const <String>[
+        '_lineage_root_id',
+        'lineage_root_id',
+        'lineage_root',
+      ]) {
+        if (!source.containsKey(key)) continue;
+        final value = source[key];
+        if (value is! String || value.isEmpty || value != value.trim()) {
+          identityAliasesConsistent = false;
+          continue;
+        }
+        if (lineageRootId != null && lineageRootId != value) {
+          identityAliasesConsistent = false;
+        }
+        lineageRootId ??= value;
+      }
+    }
+
+    collectLineageAliases(json);
+    collectLineageAliases(infoJson);
 
     final rawMessages = json['messages'];
     final messages = <DesktopSessionMessage>[];
@@ -96,7 +235,20 @@ class DesktopSessionSnapshot {
     return DesktopSessionSnapshot(
       runtimeSessionId: runtimeSessionId,
       storedSessionId: storedSessionId,
+      storedSessionIdProvenance: explicitStoredSessionId != null
+          ? DesktopStoredSessionIdProvenance.storedSessionId
+          : explicitSessionKey != null
+          ? DesktopStoredSessionIdProvenance.sessionKey
+          : explicitResumed != null
+          ? DesktopStoredSessionIdProvenance.resumed
+          : DesktopStoredSessionIdProvenance.requestedFallback,
       created: created,
+      lineageRootId: lineageRootId,
+      identityAliasesConsistent: identityAliasesConsistent,
+      storedSessionIdentityExplicit:
+          explicitStoredSessionId != null ||
+          explicitSessionKey != null ||
+          explicitResumed != null,
       messages: List.unmodifiable(messages),
       messagesProvided: rawMessages is List && json['messages_omitted'] != true,
       messagesFullyParsed: messagesFullyParsed,
@@ -111,6 +263,12 @@ class DesktopSessionSnapshot {
       info: DesktopSessionRuntimeInfo.fromJson(json['info']),
       pendingClarify: _stringKeyedMap(json['pending_clarify']),
       pendingClarifyProvided: json.containsKey('pending_clarify'),
+      pendingApproval: _stringKeyedMap(json['pending_approval']),
+      pendingApprovalProvided: json.containsKey('pending_approval'),
+      pendingConnection: normalizeConnectionRequest(json['pending_connection']),
+      pendingConnectionProvided: json.containsKey('pending_connection'),
+      openRequests: _openServerRequests(json['open_requests']),
+      todoState: AgentTaskList.tryParse(json['todo_state']),
       // Keep only unknown, non-payload extension fields. The 0.19 snapshot can
       // contain the whole transcript and a many-KiB system prompt; duplicating
       // those in `raw` increases memory pressure and makes accidental logging
@@ -136,6 +294,15 @@ class DesktopSessionSnapshot {
   }
 }
 
+/// Source of the durable identity selected while parsing the response. A
+/// request fallback correlates only that exact request and proves no lineage.
+enum DesktopStoredSessionIdProvenance {
+  storedSessionId,
+  sessionKey,
+  resumed,
+  requestedFallback,
+}
+
 enum DesktopSessionMessageRole { system, user, assistant, tool, unknown }
 
 class DesktopSessionMessage {
@@ -146,6 +313,24 @@ class DesktopSessionMessage {
   final Map<String, dynamic> artifactContainers;
   final DesktopSessionMessageRole role;
   final String rawRole;
+
+  /// Privacy decision captured while the original row classifiers still exist.
+  final bool publiclyRenderable;
+  final TranscriptPrivacyObservation? privacyObservation;
+
+  TranscriptPrivacyObservation get transcriptPrivacyObservation =>
+      privacyObservation ??
+      TranscriptPrivacyObservation(
+        rowId: identityAliasesConsistent ? rowId : null,
+        messageId: identityAliasesConsistent ? stableId : null,
+        negative: !publiclyRenderable,
+        invalidRowClaims: [
+          if (!identityAliasesConsistent && rowId != null) rowId!,
+        ],
+        invalidMessageClaims: [
+          if (!identityAliasesConsistent && stableId != null) stableId!,
+        ],
+      );
   final Object? content;
   final String? text;
   final String? name;
@@ -153,6 +338,7 @@ class DesktopSessionMessage {
   final String? reasoningContent;
   final Object? reasoningDetails;
   final Object? codexReasoningItems;
+  final Object? codexMessageItems;
   final Object? context;
   final DateTime? timestamp;
   final String? toolCallId;
@@ -164,6 +350,8 @@ class DesktopSessionMessage {
   const DesktopSessionMessage({
     required this.role,
     required this.rawRole,
+    this.publiclyRenderable = true,
+    this.privacyObservation,
     this.stableId,
     this.rowId,
     this.identityAliasesConsistent = true,
@@ -176,6 +364,7 @@ class DesktopSessionMessage {
     this.reasoningContent,
     this.reasoningDetails,
     this.codexReasoningItems,
+    this.codexMessageItems,
     this.context,
     this.timestamp,
     this.toolCallId,
@@ -216,6 +405,8 @@ class DesktopSessionMessage {
       artifactContainers: _freezeArtifactContainers(json),
       role: role,
       rawRole: rawRole,
+      publiclyRenderable: !hasPrivateTranscriptClassifier(json),
+      privacyObservation: TranscriptPrivacyObservation.fromRaw(json),
       content: content,
       text: text,
       name: name,
@@ -223,6 +414,7 @@ class DesktopSessionMessage {
       reasoningContent: _stringValue(json['reasoning_content']),
       reasoningDetails: _freezeJson(json['reasoning_details']),
       codexReasoningItems: _freezeJson(json['codex_reasoning_items']),
+      codexMessageItems: _freezeJson(json['codex_message_items']),
       context: _freezeJson(json['context']),
       timestamp: _epochSeconds(json['timestamp']),
       toolCallId: _nonEmptyString(json['tool_call_id']),
@@ -243,7 +435,12 @@ class DesktopInflightTurn {
   final String? error;
   final String? status;
   final bool? recoverable;
+
+  /// Structured failure descriptor of a retained failed turn
+  /// (agent/error_surface.py): only its short scalar fields are kept.
+  final Map<String, Object> errorSurface;
   final List<DesktopInflightCorrection> corrections;
+  final List<int?> correctionOffsets;
   final DateTime? startedAt;
   final DateTime? updatedAt;
   final Map<String, dynamic> raw;
@@ -255,11 +452,14 @@ class DesktopInflightTurn {
     this.error,
     this.status,
     this.recoverable,
+    this.errorSurface = const {},
     List<DesktopInflightCorrection> corrections = const [],
+    List<int?> correctionOffsets = const [],
     this.startedAt,
     this.updatedAt,
     this.raw = const {},
-  }) : corrections = List<DesktopInflightCorrection>.unmodifiable(corrections);
+  }) : corrections = List<DesktopInflightCorrection>.unmodifiable(corrections),
+       correctionOffsets = List<int?>.unmodifiable(correctionOffsets);
 
   static DesktopInflightTurn? tryParse(Object? value) {
     final json = _stringKeyedMap(value);
@@ -282,6 +482,13 @@ class DesktopInflightTurn {
         if (correction != null) corrections.add(correction);
       }
     }
+    final correctionOffsets = <int?>[];
+    final rawOffsets = json['correction_offsets'];
+    if (rawOffsets is List) {
+      for (final value in rawOffsets) {
+        correctionOffsets.add(_nonNegativeInt(value));
+      }
+    }
     final terminalStatus = status?.toLowerCase() == 'error';
     if (assistant == null &&
         streaming == null &&
@@ -298,7 +505,9 @@ class DesktopInflightTurn {
       error: error,
       status: status,
       recoverable: recoverable,
+      errorSurface: _errorSurfaceScalars(json['error_surface']),
       corrections: corrections,
+      correctionOffsets: correctionOffsets,
       startedAt: _epochSeconds(json['started_at']),
       updatedAt: _epochSeconds(json['updated_at']),
       raw: _freezeExtras(json, _inflightParsedKeys),
@@ -418,6 +627,39 @@ class DesktopSessionRuntimeInfo {
     this.installWarning,
     this.raw = const {},
   });
+
+  DesktopSessionRuntimeInfo withUsage(DesktopUsageStats value) =>
+      DesktopSessionRuntimeInfo(
+        model: model,
+        provider: provider,
+        reasoningEffort: reasoningEffort,
+        serviceTier: serviceTier,
+        fast: fast,
+        yolo: yolo,
+        approvalMode: approvalMode,
+        toolCount: toolCount,
+        skillCount: skillCount,
+        cwd: cwd,
+        branch: branch,
+        project: project,
+        personality: personality,
+        running: running,
+        lazy: lazy,
+        title: title,
+        storedSessionId: storedSessionId,
+        desktopContract: desktopContract,
+        version: version,
+        releaseDate: releaseDate,
+        updateBehind: updateBehind,
+        updateCommand: updateCommand,
+        usage: value,
+        profileName: profileName,
+        mcpServerCount: mcpServerCount,
+        configWarning: configWarning,
+        credentialWarning: credentialWarning,
+        installWarning: installWarning,
+        raw: raw,
+      );
 
   factory DesktopSessionRuntimeInfo.fromJson(Object? value) {
     final json = _stringKeyedMap(value);
@@ -614,6 +856,11 @@ String? _nonEmptyString(Object? value) {
   return trimmed.isEmpty ? null : trimmed;
 }
 
+String? _exactNonEmptyIdentity(Object? value) {
+  if (value is! String || value.isEmpty || value != value.trim()) return null;
+  return value;
+}
+
 String? _stableOpaqueId(Object? value) {
   if (value is! String) return null;
   if (!RegExp(r'^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$').hasMatch(value)) {
@@ -671,6 +918,28 @@ DateTime? _epochSeconds(Object? value) {
   } on RangeError {
     return null;
   }
+}
+
+List<Map<String, dynamic>> _openServerRequests(Object? value) {
+  if (value is! List) return const [];
+  final requests = <Map<String, dynamic>>[];
+  for (final entry in value) {
+    final frame = _stringKeyedMap(entry);
+    if (frame == null) continue;
+    final id = frame['id'];
+    final method = frame['method'];
+    final params = _stringKeyedMap(frame['params']);
+    if (id is! String || id.trim().isEmpty || id != id.trim()) continue;
+    if (method is! String || method.trim().isEmpty || params == null) continue;
+    requests.add(
+      Map<String, dynamic>.unmodifiable({
+        'id': id,
+        'method': method,
+        'params': Map<String, dynamic>.unmodifiable(params),
+      }),
+    );
+  }
+  return List.unmodifiable(requests);
 }
 
 Map<String, dynamic>? _stringKeyedMap(Object? value) {
@@ -761,6 +1030,38 @@ int _deepJsonHash(Object? value) {
   return value.hashCode;
 }
 
+/// The identity/recovery scalars of an `error_surface`; never free text
+/// beyond a short label and the gateway's bounded `message`.
+Map<String, Object> _errorSurfaceScalars(Object? value) {
+  if (value is! Map) return const {};
+  final out = <String, Object>{};
+  for (final key in const [
+    'layer',
+    'code',
+    'provider',
+    'provider_label',
+    'auth_kind',
+    'model',
+  ]) {
+    final item = value[key];
+    if (item is String && item.isNotEmpty && item.length <= 128) {
+      out[key] = item;
+    }
+  }
+  final retryable = value['retryable'];
+  if (retryable is bool) out['retryable'] = retryable;
+  final resetsAt = value['resets_at'];
+  if (resetsAt is num && resetsAt.isFinite && resetsAt > 0) {
+    out['resets_at'] = resetsAt;
+  }
+  final message = value['message'];
+  if (message is String && message.trim().isNotEmpty) {
+    final text = message.trim();
+    out['message'] = text.length <= 500 ? text : text.substring(0, 500);
+  }
+  return Map.unmodifiable(out);
+}
+
 Map<String, dynamic> _freezeExtras(
   Map<String, dynamic> value,
   Set<String> parsedKeys,
@@ -815,6 +1116,10 @@ const _snapshotParsedKeys = <String>{
   'turn_started_at',
   'info',
   'pending_clarify',
+  'pending_approval',
+  'pending_connection',
+  'open_requests',
+  'todo_state',
 };
 
 const _messageParsedKeys = <String>{
@@ -832,6 +1137,7 @@ const _messageParsedKeys = <String>{
   'reasoning_content',
   'reasoning_details',
   'codex_reasoning_items',
+  'codex_message_items',
   'context',
   'timestamp',
   'tool_call_id',
@@ -856,6 +1162,7 @@ const _inflightParsedKeys = <String>{
   'assistant',
   'corrections',
   'error',
+  'error_surface',
   'recoverable',
   'status',
   'streaming',

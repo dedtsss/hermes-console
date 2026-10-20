@@ -1,31 +1,13 @@
 // Bandera de variante de build (flavor) en tiempo de compilación.
 //
-// Hay dos salidas del mismo código (ver docs/RELEASE_DISTRIBUTION.md):
-//  · full → app completa con instancia local en Termux (descarga directa).
-//  · play → solo-remoto, sin la función de instancia local (Google Play).
-//
-// El valor se inyecta en el build con `--dart-define=HERMES_FLAVOR=play|full`.
-// Por defecto es `full` para que el desarrollo y los tests conserven el
-// comportamiento completo actual sin tener que pasar el flag.
+// Distribution flavors retain their branding and channel boundaries.
+// Console connects to existing servers in every flavor.
 const String kHermesFlavor = String.fromEnvironment(
   'HERMES_FLAVOR',
   defaultValue: 'full',
 );
 
-/// ¿Está habilitada la función de instancia local en Termux en este build?
-///
-/// Retirada de la UI para el lanzamiento (spec 028, U-13): `false` por
-/// defecto en TODAS las variantes — por ahora la app es solo-remota. Las
-/// conexiones localhost ya guardadas no se borran: quedan ocultas de listas
-/// y flujos de alta (reversible). En `play` no puede activarse nunca.
-///
-/// Reactivación para desarrollo/APK completo:
-///   flutter build apk --debug --dart-define=HERMES_LOCAL_AGENT=true
-const bool kLocalAgentEnabled =
-    bool.fromEnvironment('HERMES_LOCAL_AGENT', defaultValue: false) &&
-    kHermesFlavor != 'play';
-
-/// ¿Está habilitado el modo conversación por voz (VoiceStage/sesión continua)?
+/// ¿Está habilitado el modo conversación por voz (VoiceStatusLine/sesión continua)?
 ///
 /// Forma parte del producto en todas las variantes. El define negativo permite
 /// construir rápidamente una candidata de rollback sin mantener dos ramas ni
@@ -56,3 +38,15 @@ bool voiceRuntimeNeedsForeground({
   required bool active,
   required bool continueWhenLocked,
 }) => active && continueWhenLocked;
+
+/// An open GPT-Live session may keep running with the app hidden (screen off,
+/// another app in front) only when the user chose continuity with the screen
+/// locked AND the microphone foreground service is the one running. That
+/// service can only be started with the app in front, so a session it does
+/// not cover ends when the app is hidden, opt-in or not. A destroyed view
+/// (the app swiped away) is not "hidden": its chat is gone, so it ends too.
+bool liveVoiceMayContinueHidden({
+  required bool continueWhenLocked,
+  required bool microphoneServiceHeld,
+  required bool viewAttached,
+}) => continueWhenLocked && microphoneServiceHeld && viewAttached;

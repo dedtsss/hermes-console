@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import '../utils/fts_snippet.dart';
 import '../utils/session_timestamp.dart';
 import 'connection_manager.dart';
+import 'session_archive.dart';
 
 enum SessionArchiveMode {
   exclude('exclude'),
@@ -123,6 +125,12 @@ final class SessionLibrarySnapshot {
   final int epoch;
   final int? total;
 
+  /// Set only when this refresh fell back to the gateway: its complete
+  /// default listing of the query's profile (every page, no filter), as the
+  /// server returned it. What a deletion tombstone may be confirmed against
+  /// (SessionListRead.end).
+  final List<Session>? completeGatewayListing;
+
   const SessionLibrarySnapshot({
     this.sessions = const [],
     this.source = SessionLibrarySource.local,
@@ -130,6 +138,7 @@ final class SessionLibrarySnapshot {
     this.stale = false,
     this.epoch = 0,
     this.total,
+    this.completeGatewayListing,
   });
 }
 
@@ -166,6 +175,7 @@ final class SessionRepository {
   int? _total;
   bool _exhausted = false;
   Future<SessionLibrarySnapshot>? _nextPageFlight;
+  final Set<String> _deletionTombstones = <String>{};
 
   SessionRepository(this._dashboard, this._gateway) : _ownsDashboard = false;
 
@@ -179,6 +189,32 @@ final class SessionRepository {
 
   SessionLibrarySnapshot get snapshot => _snapshot();
 
+  /// Removes a server-confirmed deletion from the retained bounded snapshot.
+  /// Gateway omissions are otherwise ambiguous and deliberately preserve rows.
+  void evictSessions(Iterable<Session> deleted) {
+    final aliases = <String>{
+      for (final session in deleted) ..._sessionIdentityAliases(session),
+    };
+    if (aliases.isEmpty) return;
+    _deletionTombstones.addAll(aliases);
+    ++_queryEpoch;
+    ++_searchEpoch;
+    if (_sessions.isEmpty) return;
+    final before = _sessions.length;
+    _sessions = List<Session>.unmodifiable(
+      _sessions.where(
+        (session) => _sessionIdentityAliases(
+          session,
+        ).every((alias) => !aliases.contains(alias)),
+      ),
+    );
+    final removed = before - _sessions.length;
+    final total = _total;
+    if (removed > 0 && total != null) {
+      _total = total > removed ? total - removed : 0;
+    }
+  }
+
   Future<SessionLibrarySnapshot> refresh(
     SessionLibraryQuery query, {
     Iterable<String> keepIds = const <String>[],
@@ -186,6 +222,7 @@ final class SessionRepository {
     final previousFingerprint = _query?.fingerprint;
     final previousSource = _source;
     final epoch = ++_queryEpoch;
+    final deletionTombstones = Set<String>.of(_deletionTombstones);
     final fingerprint = query.fingerprint;
     final retainedIds = Set<String>.unmodifiable(keepIds);
     _query = query;
@@ -194,6 +231,7 @@ final class SessionRepository {
       if (!_isCurrent(epoch, fingerprint)) return _snapshot();
       if (previousFingerprint != fingerprint) _sessions = const [];
       _applyPage(page, replace: true, epoch: epoch, keepIds: retainedIds);
+      _deletionTombstones.removeAll(deletionTombstones);
       return _snapshot();
     } catch (error) {
       if (!_isCurrent(epoch, fingerprint)) return _snapshot();
@@ -204,23 +242,53 @@ final class SessionRepository {
           previousSource != SessionLibrarySource.gateway) {
         rethrow;
       }
-      final fallback = await _gateway.getSessions(
+      final rawFallback = await _gateway.getSessions(
         includeChildren: query.includeChildren,
+        profile: query.profile,
       );
       if (!_isCurrent(epoch, fingerprint)) return _snapshot();
+      final fallback = rawFallback
+          .where((row) => !_matchesAliases(row, deletionTombstones))
+          .toList(growable: false);
       if (previousFingerprint != fingerprint) _sessions = const [];
-      _sessions = List<Session>.unmodifiable(
-        _mergeSessionPage(
-          _sessions,
-          _filterFallback(fallback, query),
-          retainedIds,
-        ),
+      final visibleFallback = _filterFallback(fallback, query).toList();
+      final visibleLineages = {
+        for (final row in visibleFallback) row.logicalId,
+      };
+      final explicitlyExcludedLineages = {
+        for (final row in fallback)
+          if (!visibleLineages.contains(row.logicalId)) row.logicalId,
+      };
+      final previousForMerge = _sessions
+          .where((row) => !explicitlyExcludedLineages.contains(row.logicalId))
+          .toList(growable: false);
+      final fallbackRetainedIds =
+          sameScope && previousSource == SessionLibrarySource.gateway
+          ? <String>{
+              ...retainedIds,
+              for (final row in previousForMerge) row.id,
+              for (final row in previousForMerge) row.logicalId,
+            }
+          : retainedIds;
+      final merged = _mergeSessionPage(
+        previousForMerge,
+        visibleFallback,
+        fallbackRetainedIds,
       );
+      if (query.order == SessionLibraryOrder.recent) {
+        merged.sort(compareSessionsByRecentActivity);
+      }
+      _sessions = List<Session>.unmodifiable(merged);
       _source = SessionLibrarySource.gateway;
       _nextOffset = _sessions.length;
       _total = null;
       _exhausted = false;
-      return _snapshot();
+      _deletionTombstones.removeAll(deletionTombstones);
+      return _snapshot(
+        completeGatewayListing: query.includeChildren
+            ? null
+            : List<Session>.unmodifiable(rawFallback),
+      );
     }
   }
 
@@ -254,6 +322,7 @@ final class SessionRepository {
     SessionLibraryQuery? libraryQuery,
   }) async {
     final epoch = ++_searchEpoch;
+    final deletionTombstones = Set<String>.of(_deletionTombstones);
     final query = text.trim();
     final scope = libraryQuery ?? SessionLibraryQuery(profile: profile?.trim());
     if (query.isEmpty) {
@@ -276,7 +345,9 @@ final class SessionRepository {
         final scoped = parsed == null
             ? null
             : _captureDashboardOwner(parsed, scope);
-        if (scoped != null && _matchesSearchScope(scoped, scope)) {
+        if (scoped != null &&
+            !_matchesAliases(scoped, deletionTombstones) &&
+            _matchesSearchScope(scoped, scope)) {
           byLogicalId.putIfAbsent(scoped.logicalId, () => scoped);
         }
       }
@@ -356,17 +427,52 @@ final class SessionRepository {
     ]);
   }
 
+  /// PATCH /api/sessions/{id} with per-session state (`hidden`, `title`,
+  /// `unread`), as Desktop; see [SessionArchive.attachRemoteState]. Returns
+  /// the handler's answer and updates the retained rows it confirms.
+  Future<Map<String, Object?>> patchSessionState(
+    String sessionId,
+    Map<String, Object> fields,
+    String? profile,
+  ) async {
+    final response = await patchDashboardSessionState(
+      _dashboard,
+      sessionId,
+      fields,
+      profile,
+    );
+    final title = response['title'];
+    final hidden = response['hidden'];
+    final unread = response['unread'];
+    _sessions = List<Session>.unmodifiable([
+      for (final row in _sessions)
+        if (row.id == sessionId || row.logicalId == sessionId)
+          row.copyWith(
+            title: fields.containsKey('title') && title is String
+                ? title
+                : null,
+            hidden: hidden is bool ? hidden : null,
+            unread: unread is bool ? unread : null,
+          )
+        else
+          row,
+    ]);
+    return response;
+  }
+
   bool _isCurrent(int epoch, String fingerprint) =>
       epoch == _queryEpoch && _query?.fingerprint == fingerprint;
 
-  SessionLibrarySnapshot _snapshot() => SessionLibrarySnapshot(
-    sessions: List<Session>.unmodifiable(_sessions),
-    source: _source,
-    exhaustive: _source == SessionLibrarySource.dashboard && _exhausted,
-    stale: false,
-    epoch: _queryEpoch,
-    total: _total,
-  );
+  SessionLibrarySnapshot _snapshot({List<Session>? completeGatewayListing}) =>
+      SessionLibrarySnapshot(
+        sessions: List<Session>.unmodifiable(_sessions),
+        source: _source,
+        exhaustive: _source == SessionLibrarySource.dashboard && _exhausted,
+        stale: false,
+        epoch: _queryEpoch,
+        total: _total,
+        completeGatewayListing: completeGatewayListing,
+      );
 
   Future<_SessionPage> _loadDashboardPage(
     SessionLibraryQuery query,
@@ -411,7 +517,13 @@ final class SessionRepository {
             for (final row in _sessions) row.logicalId,
           };
     _sessions = List<Session>.unmodifiable(
-      _mergeSessionPage(_sessions, page.sessions, retained),
+      _mergeSessionPage(
+        _sessions,
+        page.sessions.where(
+          (row) => !_matchesAliases(row, _deletionTombstones),
+        ),
+        retained,
+      ),
     );
     _source = SessionLibrarySource.dashboard;
     _total = page.total;
@@ -422,6 +534,15 @@ final class SessionRepository {
         (page.total != null && _nextOffset >= page.total!) ||
         (page.rawCount > 0 && page.rawCount < page.limit);
   }
+
+  static Set<String> _sessionIdentityAliases(Session session) => {
+    session.logicalId,
+    ...session.identityIds,
+  };
+
+  static bool _matchesAliases(Session session, Set<String> aliases) =>
+      aliases.isNotEmpty &&
+      _sessionIdentityAliases(session).any(aliases.contains);
 
   static Session _canonicalSessionWinner(Session current, Session candidate) {
     if (current.id == candidate.id &&
@@ -486,9 +607,7 @@ final class SessionRepository {
     final requestedOwner = Session.profileOwner(query.profile);
     for (final row in rows) {
       if (row.messageCount < query.boundedMinMessages) continue;
-      if (!query.includeChildren && row.parentSessionId?.isNotEmpty == true) {
-        continue;
-      }
+      if (!query.includeChildren && !row.listsAsOwnRow) continue;
       if (query.archived == SessionArchiveMode.exclude && row.archived) {
         continue;
       }
@@ -518,6 +637,7 @@ final class SessionRepository {
     if (value is! Map) return null;
     final id = _boundedString(value['session_id'], 1024)?.trim();
     if (id == null || id.isEmpty) return null;
+    final snippet = _boundedString(value['snippet'], 1024);
     return Session(
       id: id,
       lineageRootId: _boundedString(value['lineage_root'], 1024)?.trim(),
@@ -526,10 +646,12 @@ final class SessionRepository {
       source: _boundedString(value['source'], 128) ?? '',
       messageCount: _nonNegativeInt(value['message_count']) ?? 1,
       isActive: value['is_active'] == true,
-      preview:
-          _boundedString(value['snippet'], 1024) ??
-          _boundedString(value['preview'], 1024) ??
-          '',
+      // Desktop strips the FTS delimiters from the preview; the raw snippet
+      // rides along so the row can paint the matches highlighted.
+      preview: snippet != null
+          ? stripFtsMarkers(snippet)
+          : _boundedString(value['preview'], 1024) ?? '',
+      searchSnippet: snippet != null && hasFtsMarkers(snippet) ? snippet : null,
       startedAt:
           normalizeEpochTimestamp(value['started_at']) ??
           normalizeEpochTimestamp(value['session_started']) ??
@@ -633,3 +755,41 @@ String _canonicalSourceFingerprint(Iterable<String> values) {
   final canonical = values.toList(growable: false)..sort();
   return canonical.join(',');
 }
+
+/// PATCH /api/sessions/{id} on the Dashboard with [fields] (Desktop's
+/// per-session flags); the owning profile rides in the body, as Desktop.
+Future<Map<String, Object?>> patchDashboardSessionState(
+  DashboardClient dashboard,
+  String sessionId,
+  Map<String, Object> fields,
+  String? profile,
+) => dashboard.apiPatch(
+  'sessions/${Uri.encodeComponent(sessionId)}',
+  body: {
+    ...fields,
+    if (profile?.trim().isNotEmpty == true) 'profile': profile!.trim(),
+  },
+);
+
+/// The HTTP status of a Dashboard failure, for
+/// [SessionArchive.attachRemoteState].
+int? dashboardHttpStatusOf(Object error) =>
+    error is DashboardHttpException ? error.statusCode : null;
+
+/// A [SessionStateWriter] for surfaces with no repository of their own
+/// (Home): each write opens and closes its own Dashboard client, so it
+/// outlives no screen.
+SessionStateWriter dashboardSessionStateWriter(SavedConnection connection) =>
+    (sessionId, fields, profile) async {
+      final dashboard = DashboardClient.lazy(connection);
+      try {
+        return await patchDashboardSessionState(
+          dashboard,
+          sessionId,
+          fields,
+          profile,
+        );
+      } finally {
+        dashboard.close();
+      }
+    };

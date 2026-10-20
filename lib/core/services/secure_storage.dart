@@ -32,6 +32,9 @@ class SecureStorage {
     String value,
   ) => _storage.write(key: _dashKey(connectionId, field), value: value);
 
+  Future<void> deleteDashboardSecret(String connectionId, String field) =>
+      _storage.delete(key: _dashKey(connectionId, field));
+
   Future<void> deleteDashboardSecrets(String connectionId) async {
     for (final f in const ['token', 'user', 'pass']) {
       await _storage.delete(key: _dashKey(connectionId, f));
@@ -43,15 +46,23 @@ class SecureStorage {
   static String _bridgeKey(String connectionId, String field) =>
       'bridge_${field}_$connectionId';
 
-  Future<String?> readBridge(String connectionId, String field) =>
-      _storage.read(key: _bridgeKey(connectionId, field));
-
-  Future<void> writeBridge(String connectionId, String field, String value) =>
-      _storage.write(key: _bridgeKey(connectionId, field), value: value);
-
   Future<void> deleteBridge(String connectionId) async {
     for (final f in const ['url', 'token']) {
       await _storage.delete(key: _bridgeKey(connectionId, f));
+    }
+  }
+
+  /// Every secret a bridge-era install (≤ 1.2.14) left in the Keystore:
+  /// `bridge_url_<id>` and `bridge_token_<id>`. Names only, never values.
+  Future<List<String>> legacyBridgeKeys() async {
+    final all = await _storage.readAll();
+    return all.keys.where((k) => k.startsWith('bridge_')).toList()..sort();
+  }
+
+  /// Deletes them. Nothing reads these keys any more.
+  Future<void> deleteLegacyBridgeKeys() async {
+    for (final key in await legacyBridgeKeys()) {
+      await _storage.delete(key: key);
     }
   }
 
@@ -72,7 +83,13 @@ class SecureStorage {
 
   Future<void> deleteSsh(String connectionId) async {
     for (final f in const [
-      'user', 'host', 'port', 'method', 'password', 'privkey', 'passphrase',
+      'user',
+      'host',
+      'port',
+      'method',
+      'password',
+      'privkey',
+      'passphrase',
       'hostkey',
     ]) {
       await _storage.delete(key: _sshKey(connectionId, f));
@@ -94,13 +111,16 @@ class SecureStorage {
 
   Future<void> clearAllConnectionSecrets() async {
     final all = await _storage.readAll();
-    for (final k in all.keys.where(
-      (k) =>
-          k.startsWith('api_key_') ||
-          k.startsWith('dash_') ||
-          k.startsWith('bridge_') ||
-          k.startsWith('ssh_'),
-    )) {
+    final keys = all.keys
+        .where(
+          (k) =>
+              k.startsWith('api_key_') ||
+              k.startsWith('dash_') ||
+              k.startsWith('bridge_') ||
+              k.startsWith('ssh_'),
+        )
+        .toList(growable: false);
+    for (final k in keys) {
       await _storage.delete(key: k);
     }
   }

@@ -3,17 +3,22 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_android/core/bots/ui/roster/living_bot_face.dart';
 import 'package:hermes_android/core/models/agent_profile.dart';
 import 'package:hermes_android/core/models/kanban.dart';
 import 'package:hermes_android/core/models/mission_control.dart';
 import 'package:hermes_android/core/screens/mission_control_screen.dart';
 import 'package:hermes_android/core/services/active_chat_service.dart';
 import 'package:hermes_android/core/services/connection_manager.dart';
-import 'package:hermes_android/core/services/mission_bot_activity_store.dart';
+import 'package:hermes_android/core/models/hosted_groups.dart';
 import 'package:hermes_android/core/services/mission_control_repository.dart';
 import 'package:hermes_android/core/theme/app_theme.dart';
+import 'package:hermes_android/core/widgets/hermes_bot_face.dart';
 import 'package:hermes_android/l10n/app_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'support/fake_bot_chat_title_lookup.dart';
+import 'support/spec070_fixtures.dart';
 
 final _connection = SavedConnection(
   id: 'mission-bots-discovery',
@@ -77,7 +82,6 @@ Widget _host({
   required ConnectionManager manager,
   required MissionBackendSnapshot snapshot,
   ActiveChatService? activeChats,
-  MissionBotActivityStore? botActivityStore,
   ValueChanged<Session>? botChatOpenObserver,
 }) => MaterialApp(
   locale: const Locale('es'),
@@ -89,8 +93,8 @@ Widget _host({
     connManager: manager,
     dataSource: _FakeSource(snapshot),
     activeChats: activeChats,
-    botActivityStore: botActivityStore,
     botChatOpenObserver: botChatOpenObserver,
+    botChatTitleLookup: FakeBotChatTitleLookup(),
   ),
 );
 
@@ -153,6 +157,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // Spec 070 S1: search is a round header button.
+    await tester.tap(find.byKey(const ValueKey('roster-search')));
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey('mission-bot-search')),
       '  ALPHA   ops  ',
@@ -207,9 +214,13 @@ void main() {
     expect(find.byKey(const ValueKey('mission-bot-infra')), findsOneWidget);
   });
 
-  testWidgets('Executing Bot Chats are grouped under Active now', (
+  testWidgets('Executing Bot Chats carry the working signal on their face', (
     tester,
   ) async {
+    // This test checks grouping; steady live motion has no settled frame.
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
     final manager = await _manager();
     final chats = ActiveChatService();
     addTearDown(chats.dispose);
@@ -230,7 +241,12 @@ void main() {
         activeChats: chats,
         snapshot: _snapshot(
           profiles: const [
-            AgentProfile(name: 'infra'),
+            // The running chat is infra's canonical Bot Chat: only that chat
+            // lights the avatar.
+            AgentProfile(
+              name: 'infra',
+              canonicalSession: AgentProfileSessionSummary(id: 's-infra'),
+            ),
             AgentProfile(name: 'quality_assurance'),
           ],
           sessions: [infraSession],
@@ -239,69 +255,245 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('mission-active-now')), findsOneWidget);
-    expect(find.byKey(const ValueKey('mission-bot-row-infra')), findsOneWidget);
+    // Spec 070 S1: no "Active now" section; the face carries the state.
+    expect(find.byKey(const ValueKey('mission-active-now')), findsNothing);
     expect(
-      find.byKey(const ValueKey('mission-bot-row-quality_assurance')),
-      findsOneWidget,
-    );
-  });
-
-  testWidgets('Opening a Bot Chat clears its scoped unread watermark', (
-    tester,
-  ) async {
-    final manager = await _manager();
-    final activityStore = MissionBotActivityStore(manager.prefs);
-    await activityStore.markRead(
-      connectionId: _connection.id,
-      profile: 'infra',
-      activityAtMs: 110000,
-    );
-    final session = _session('s-infra-new', 'infra', updatedAt: 120);
-    final opened = Completer<Session>();
-
-    await tester.pumpWidget(
-      _host(
-        manager: manager,
-        botActivityStore: activityStore,
-        botChatOpenObserver: (value) {
-          if (!opened.isCompleted) opened.complete(value);
-        },
-        snapshot: _snapshot(
-          profiles: const [
-            AgentProfile(
-              name: 'infra',
-              botModeUiMeta: {'chat': null},
-              botModeMetadataPublished: true,
-            ),
-          ],
-          sessions: [session],
-        ),
+      find.descendant(
+        of: find.byKey(const ValueKey('mission-bot-row-infra')),
+        matching: find.byKey(const ValueKey('living-face-ring-working')),
       ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(
-      find.byKey(const ValueKey('mission-bot-unread-infra')),
       findsOneWidget,
     );
-
-    await tester.tap(find.byKey(const ValueKey('mission-bot-infra')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('bot-detail-chat')));
-    final openedSession = await tester.runAsync(
-      () => opened.future.timeout(const Duration(seconds: 1)),
-    );
-    await tester.pumpAndSettle();
-
-    expect(openedSession?.profile, 'infra');
     expect(
-      find.byKey(const ValueKey('mission-bot-unread-infra')),
+      find.descendant(
+        of: find.byKey(const ValueKey('mission-bot-row-quality_assurance')),
+        matching: find.byKey(const ValueKey('living-face-ring-working')),
+      ),
       findsNothing,
     );
-    expect(
-      activityStore.watermark(_connection.id, 'infra'),
-      greaterThanOrEqualTo(120000),
-    );
   });
+
+  testWidgets(
+    'A fresh worker alone leaves the avatar calm, like an idle bot face',
+    (tester) async {
+      debugLivingBotFacesStill = false;
+      addTearDown(() => debugLivingBotFacesStill = true);
+      final manager = await _manager();
+      addTearDown(manager.dispose);
+      final snapshot = _snapshot(
+        profiles: [
+          AgentProfile(
+            name: 'forja',
+            workerSession: AgentProfileWorkerSession(
+              id: 'w',
+              source: 'tool',
+              title: 'Revisando PR #38',
+              lastActive: DateTime.now().millisecondsSinceEpoch / 1000,
+            ),
+          ),
+          const AgentProfile(name: 'idle'),
+        ],
+      );
+      await tester.pumpWidget(_host(manager: manager, snapshot: snapshot));
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 300));
+      // The avatar opens the Bot Chat, so its aura reflects that chat only;
+      // a background worker is other work (Desktop's canonical-chat rule).
+      final row = find.byKey(const ValueKey('mission-bot-row-forja'));
+      expect(find.text('Trabajando · Revisando PR #38'), findsNothing);
+      expect(
+        find.descendant(
+          of: row,
+          matching: find.byKey(const ValueKey('living-face-ring-working')),
+        ),
+        findsNothing,
+      );
+      final idle = find.byKey(const ValueKey('mission-bot-row-idle'));
+      expect(
+        find.descendant(
+          of: idle,
+          matching: find.byKey(const ValueKey('living-face-ring-working')),
+        ),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widget<HermesBotFace>(
+              find.descendant(of: idle, matching: find.byType(HermesBotFace)),
+            )
+            .motionState,
+        HermesBotFaceMotionState.idle,
+      );
+      tester.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(disableAnimations: true);
+      addTearDown(
+        tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('Bots home with only idle bots stops producing frames', (
+    tester,
+  ) async {
+    debugLivingBotFacesStill = false;
+    addTearDown(() => debugLivingBotFacesStill = true);
+    final manager = await _manager();
+    addTearDown(manager.dispose);
+    final snapshot = _snapshot(
+      profiles: const [
+        AgentProfile(name: 'argos'),
+        AgentProfile(name: 'astra'),
+        AgentProfile(name: 'radar'),
+      ],
+    );
+    await tester.pumpWidget(_host(manager: manager, snapshot: snapshot));
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(LivingBotFace), findsWidgets);
+    expect(livingBotFaceActiveTickers, 0);
+    var busy = 0;
+    const steps = 200;
+    for (var i = 0; i < steps; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+      if (tester.binding.transientCallbackCount > 0) busy++;
+    }
+    expect(
+      busy,
+      lessThan(steps ~/ 4),
+      reason: 'idle Bots home kept ticking in $busy of $steps samples',
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  // QA 9495: the Bots home faces are alive (breath, blinks, glances), but
+  // ten faces ride ONE capped idle timer (#163 budget): no vsync ticker and
+  // no timer per face.
+  testWidgets('ten idle bots stay alive on one shared idle timer', (
+    tester,
+  ) async {
+    debugLivingBotFacesStill = false;
+    addTearDown(() => debugLivingBotFacesStill = true);
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final manager = await _manager();
+    addTearDown(manager.dispose);
+    final snapshot = _snapshot(
+      profiles: [
+        // Ten tiles (four pinned on top): every face shares the idle clock.
+        for (var i = 0; i < 10; i++)
+          AgentProfile(
+            name: 'quiet_bot_$i',
+            botModeUiMeta: {if (i < 4) 'pinned': true},
+          ),
+      ],
+    );
+    await tester.pumpWidget(_host(manager: manager, snapshot: snapshot));
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(LivingBotFace).evaluate().length, greaterThan(8));
+    expect(
+      find.byWidgetPredicate(
+        (w) =>
+            w.key is ValueKey<String> &&
+            ((w.key! as ValueKey<String>).value.startsWith('dots-tile-') ||
+                ((w.key! as ValueKey<String>).value.startsWith(
+                      'dots-pinned-',
+                    ) &&
+                    w.key != const ValueKey('dots-pinned-header'))),
+      ),
+      findsNWidgets(10),
+      reason: 'six grid tiles and the four pinned ones on top',
+    );
+    expect(livingBotFaceActiveTickers, 0);
+    expect(livingBotFaceIdleFaces, greaterThanOrEqualTo(10));
+    expect(livingBotFaceClockTimers, 1, reason: 'one timer for all faces');
+    var ticks = 0;
+    void count() => ticks++;
+    livingBotFaceIdleClock.addListener(count);
+    addTearDown(() => livingBotFaceIdleClock.removeListener(count));
+    var vsync = 0;
+    for (var i = 0; i < 100; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+      if (tester.binding.transientCallbackCount > 0) vsync++;
+      expect(livingBotFaceClockTimers, 1);
+    }
+    expect(ticks, inInclusiveRange(120, 130), reason: '12.5 fps for all');
+    expect(vsync, lessThan(10), reason: 'no face vsync ticker while idle');
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(livingBotFaceClockTimers, 0);
+  });
+
+  testWidgets(
+    'Room attention marks the room row, not the bots seated in that room',
+    (tester) async {
+      final manager = await _manager();
+      final log = HostedGroupLogPage.append(
+        spec070LogPage('groups_log_page1'),
+        spec070LogPage('groups_log_page2'),
+      );
+      final session = _session('s-radar-new', 'radar', updatedAt: 120);
+      await tester.pumpWidget(
+        _host(
+          manager: manager,
+          snapshot: MissionBackendSnapshot(
+            profiles: const [
+              AgentProfile(name: 'astra'),
+              AgentProfile(name: 'radar'),
+            ],
+            sessions: [session],
+            profilesCapability: MissionCapabilityState.available,
+            sessionsCapability: MissionCapabilityState.available,
+            hostedGroups: HostedGroupsSnapshot(
+              rooms: [spec070Room()],
+              logs: [log],
+              // No pending actions: radar's failed turn is the only signal.
+              driverStatuses: {
+                'room-devs': const RoomDriverStatus(
+                  running: false,
+                  working: false,
+                  blocked: false,
+                ),
+              },
+            ),
+            loadedAt: DateTime.fromMillisecondsSinceEpoch(0),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // radar (failed room turn) and astra (@user mention) need the user in
+      // the room: the room sits under "Needs you", while their avatars stay
+      // calm because their Bot Chats wait on nothing.
+      for (final name in const ['radar', 'astra']) {
+        expect(
+          find.descendant(
+            of: find.byKey(ValueKey('mission-bot-row-$name')),
+            matching: find.byKey(const ValueKey('living-face-ring-attention')),
+          ),
+          findsNothing,
+        );
+      }
+      expect(
+        find.byKey(const ValueKey('mission-bot-unread-radar')),
+        findsNothing,
+      );
+      // The room card carries the amber "waiting for you" dot instead.
+      expect(
+        find.byWidgetPredicate(
+          (w) =>
+              w.key is ValueKey<String> &&
+              (w.key! as ValueKey<String>).value.startsWith(
+                'roster-room-needs-you-',
+              ),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 }

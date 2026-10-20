@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_android/core/models/desktop_session_snapshot.dart';
 import 'package:hermes_android/core/services/active_chat_service.dart';
 import 'package:hermes_android/core/services/connection_manager.dart';
+import 'package:hermes_android/core/services/prompt_client_surface.dart';
 import 'package:hermes_android/core/services/secure_storage.dart';
+import 'package:hermes_android/core/services/tui_gateway_client.dart';
 import 'package:hermes_android/core/services/voice/conversation/full_duplex_barge_in_monitor.dart';
 import 'package:hermes_android/core/services/voice/conversation/local_voice_conversation_controller.dart';
 import 'package:hermes_android/core/services/voice/hermes_pcm_stream.dart';
@@ -17,6 +21,8 @@ import 'package:hermes_android/core/services/voice/voice_service.dart';
 import 'package:hermes_android/core/services/voice/voice_settings.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../support/in_memory_compression_restore_storage.dart';
 
 class _FakeVoice extends VoiceService {
   _FakeVoice(SharedPreferences prefs, {bool bargeInEnabled = true})
@@ -35,6 +41,9 @@ class _FakeVoice extends VoiceService {
   int cancelDictationCalls = 0;
   int stopSpeakingCalls = 0;
   int disposeSttCalls = 0;
+
+  /// What each release of the recogniser asked for: kept loaded or not.
+  final List<bool> keepRecognizerWarmRequests = <bool>[];
   int disposeTtsCalls = 0;
   final List<String> voiceExitCalls = [];
   int prepareNarrationCalls = 0;
@@ -45,6 +54,7 @@ class _FakeVoice extends VoiceService {
   bool releaseSpeechBeforeStopCompletes = false;
   bool captureReadyAutomatically = true;
   Object? waitSpeechError;
+  Object? stopSpeakingError;
   Completer<void>? disposeSttGate;
   Completer<void>? disposeTtsGate;
   Completer<void>? _stopSpeakingGate;
@@ -154,6 +164,8 @@ class _FakeVoice extends VoiceService {
   Future<void> stopSpeaking() async {
     stopSpeakingCalls++;
     voiceExitCalls.add('stopSpeaking');
+    final stopError = stopSpeakingError;
+    if (stopError != null) throw stopError;
     if (nativeSpeechStreamingAvailable) {
       await super.stopSpeaking();
     }
@@ -178,7 +190,8 @@ class _FakeVoice extends VoiceService {
   }
 
   @override
-  Future<void> disposeSttForVoiceExit() async {
+  Future<void> disposeSttForVoiceExit({bool keepRecognizerWarm = false}) async {
+    keepRecognizerWarmRequests.add(keepRecognizerWarm);
     disposeSttCalls++;
     voiceExitCalls.add('disposeStt');
     await disposeSttGate?.future;
@@ -488,7 +501,16 @@ SavedConnection _connection() => SavedConnection(
   label: 'Test',
   host: 'hermes.test',
   port: 8642,
-  apiKey: 'test-key',
+  apiKey: String.fromCharCodes(const [116, 101, 115, 116]),
+);
+
+SavedConnection _localOnDeviceConnection() => SavedConnection(
+  id: 'voice-local-on-device-controller',
+  label: 'Local test',
+  host: '127.0.0.1',
+  port: 8642,
+  apiKey: String.fromCharCodes(const [108, 111, 99, 97, 108]),
+  onDeviceLoopback: true,
 );
 
 class _Harness {
@@ -511,6 +533,206 @@ class _Harness {
   }
 }
 
+class _FailingVoiceDesktopGateway implements HermesDesktopGateway {
+  final StreamController<TuiGatewayEvent> _events =
+      StreamController<TuiGatewayEvent>.broadcast();
+
+  @override
+  Stream<TuiGatewayEvent> get events => _events.stream;
+
+  @override
+  bool get isConnected => false;
+
+  @override
+  Future<void> connect() async => throw StateError('desktop unavailable');
+
+  @override
+  Future<DesktopSessionBinding> resumeSession(
+    String storedSessionId, {
+    String profile = '',
+    List<Map<String, dynamic>> seedMessages = const [],
+    String model = '',
+  }) async => throw StateError('desktop unavailable');
+
+  @override
+  Future<void> submitPrompt(String runtimeSessionId, String text) async =>
+      throw StateError('desktop unavailable');
+
+  @override
+  Future<void> steer(String runtimeSessionId, String text) async =>
+      throw StateError('desktop unavailable');
+
+  @override
+  Future<void> interrupt(String runtimeSessionId) async {}
+
+  @override
+  Future<void> resolveApproval(
+    String runtimeSessionId,
+    String choice, {
+    bool resolveAll = false,
+    String? requestId,
+  }) async {}
+
+  @override
+  Future<void> close() => _events.close();
+}
+
+class _NoLiveMutationVoiceGateway
+    implements
+        HermesDesktopGateway,
+        HermesDesktopClientSurfacePromptGateway,
+        HermesDesktopRedirectGateway,
+        HermesDesktopSessionLifecycleGateway {
+  final StreamController<TuiGatewayEvent> _events =
+      StreamController<TuiGatewayEvent>.broadcast();
+  final List<String> submissions = [];
+  final List<Map<String, dynamic>> metadata = [];
+  int redirectCalls = 0;
+  int steerCalls = 0;
+
+  @override
+  Stream<TuiGatewayEvent> get events => _events.stream;
+
+  @override
+  bool get isConnected => true;
+
+  @override
+  Future<void> connect() async {}
+
+  @override
+  Future<DesktopSessionBinding> resumeSession(
+    String storedSessionId, {
+    String profile = '',
+    List<Map<String, dynamic>> seedMessages = const [],
+    String model = '',
+  }) async => DesktopSessionBinding(
+    runtimeSessionId: 'runtime-voice-no-live-mutation',
+    storedSessionId: storedSessionId,
+    created: false,
+  );
+
+  @override
+  Future<DesktopSessionSnapshot> resumeExisting(
+    String storedSessionId, {
+    String profile = '',
+    bool omitMessages = false,
+    bool deferHistory = false,
+  }) async => DesktopSessionSnapshot(
+    runtimeSessionId: 'runtime-voice-no-live-mutation',
+    storedSessionId: storedSessionId,
+    created: false,
+  );
+
+  @override
+  Future<DesktopSessionSnapshot> createForFirstSubmit({
+    String profile = '',
+    List<Map<String, dynamic>> seedMessages = const [],
+    String model = '',
+  }) async => const DesktopSessionSnapshot(
+    runtimeSessionId: 'runtime-voice-no-live-mutation',
+    storedSessionId: 'stored-voice-no-live-mutation',
+    created: true,
+  );
+
+  @override
+  Future<void> submitPrompt(String runtimeSessionId, String text) async {
+    submissions.add(text);
+    metadata.add({});
+  }
+
+  @override
+  Future<void> submitPromptWithSurface(
+    String runtimeSessionId,
+    String text,
+    PromptClientSurface surface,
+  ) async {
+    submissions.add(text);
+    metadata.add(surface.toParams());
+  }
+
+  @override
+  Future<void> submitInterruptedPromptWithSurface(
+    String runtimeSessionId,
+    String text,
+    PromptClientSurface surface,
+  ) => submitPromptWithSurface(runtimeSessionId, text, surface);
+
+  @override
+  Future<void> submitQueuedPromptWithSurface(
+    String runtimeSessionId,
+    String text,
+    PromptClientSurface surface,
+  ) => submitPromptWithSurface(runtimeSessionId, text, surface);
+
+  @override
+  Future<DesktopTurnAck> submitPromptIdempotentWithSurface(
+    String runtimeSessionId,
+    String text,
+    String clientTurnId,
+    PromptClientSurface surface,
+  ) async {
+    await submitPromptWithSurface(runtimeSessionId, text, surface);
+    return DesktopTurnAck.fromJson({
+      'accepted': true,
+      'client_turn_id': clientTurnId,
+      'server_turn_id': 'synthetic',
+      'state': 'accepted',
+      'duplicate': false,
+    }, expectedClientTurnId: clientTurnId);
+  }
+
+  @override
+  Future<DesktopTurnAck> submitQueuedPromptIdempotentWithSurface(
+    String runtimeSessionId,
+    String text,
+    String clientTurnId,
+    PromptClientSurface surface,
+  ) => submitPromptIdempotentWithSurface(
+    runtimeSessionId,
+    text,
+    clientTurnId,
+    surface,
+  );
+
+  @override
+  Future<void> steer(String runtimeSessionId, String text) async {
+    steerCalls++;
+  }
+
+  @override
+  Future<DesktopRedirectDisposition> redirect(
+    String runtimeSessionId,
+    String text,
+  ) async {
+    redirectCalls++;
+    return DesktopRedirectDisposition.redirected;
+  }
+
+  @override
+  Future<void> interrupt(String runtimeSessionId) async {}
+
+  @override
+  Future<void> resolveApproval(
+    String runtimeSessionId,
+    String choice, {
+    bool resolveAll = false,
+    String? requestId,
+  }) async {}
+
+  void complete(String text) {
+    _events.add(
+      TuiGatewayEvent(
+        type: 'message.complete',
+        sessionId: 'runtime-voice-no-live-mutation',
+        payload: {'text': text},
+      ),
+    );
+  }
+
+  @override
+  Future<void> close() => _events.close();
+}
+
 Future<_Harness> _harness({
   FullDuplexBargeInMonitor? fullDuplexMonitor,
   Future<void> Function(String prompt)? onBeforeSend,
@@ -519,6 +741,7 @@ Future<_Harness> _harness({
   bool continueWhenLocked = false,
   bool rejectRuns = false,
   bool captureReadyAutomatically = true,
+  bool allowTransportFallback = false,
 }) async {
   final prefs = await SharedPreferences.getInstance();
   final voice = _FakeVoice(prefs, bargeInEnabled: bargeInEnabled);
@@ -527,7 +750,9 @@ Future<_Harness> _harness({
     await voice.acceptVoiceDisclosure(continueWhenLocked: true);
   }
   final gateway = _FakeGateway(rejectRuns: rejectRuns);
-  final service = ActiveChatService();
+  final service = ActiveChatService(
+    compressionRestoreStore: testCompressionRestoreStore(),
+  );
   final chat = service.attach(
     connection: _connection(),
     sessionId: 'visible-session',
@@ -546,6 +771,7 @@ Future<_Harness> _harness({
   await controller.enter(
     chat: chat,
     model: 'hermes-agent',
+    allowTransportFallback: allowTransportFallback,
     onBeforeSend: onBeforeSend,
   );
   return _Harness(voice, gateway, service, chat, controller);
@@ -561,10 +787,355 @@ Future<void> _waitFor(
   expect(condition(), isTrue, reason: diagnostics?.call());
 }
 
+class _VoiceTicketDashboard extends DashboardClient {
+  _VoiceTicketDashboard()
+    : super(host: '127.0.0.1', port: 1, manualToken: 'unused');
+
+  @override
+  Future<DashboardWebSocketAuth> webSocketAuth() async =>
+      const DashboardWebSocketAuth(
+        queryName: 'ticket',
+        credential: 'synthetic',
+      );
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() => SharedPreferences.setMockInitialValues({'app_locale': 'es'}));
+
+  for (final requireVoiceMarker in [false, true]) {
+    for (final voiceSubmitFails in [false, true]) {
+      test(
+        '${requireVoiceMarker ? 'voice marker contract' : 'typed negative control'} over real RPC after ${voiceSubmitFails ? 'error' : 'cancel'}',
+        () async {
+          final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+          final sockets = <WebSocket>[];
+          final submits = <Map<String, dynamic>>[];
+          server.listen((request) async {
+            final socket = await WebSocketTransformer.upgrade(request);
+            sockets.add(socket);
+            socket.add(
+              jsonEncode({
+                'jsonrpc': '2.0',
+                'method': 'event',
+                'params': {
+                  'type': 'gateway.ready',
+                  'payload': {'heartbeat': false, 'change_events': true},
+                },
+              }),
+            );
+            await for (final raw in socket) {
+              final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+              final params = (frame['params'] as Map?) ?? const {};
+              final method = frame['method'];
+              if (method == 'client.capabilities') continue;
+              if (method == 'prompt.submit') {
+                submits.add(Map<String, dynamic>.from(params));
+              }
+              if (method == 'prompt.submit' &&
+                  voiceSubmitFails &&
+                  submits.length == 1) {
+                socket.add(
+                  jsonEncode({
+                    'jsonrpc': '2.0',
+                    'id': frame['id'],
+                    'error': {
+                      'code': 4000,
+                      'message': 'Synthetic submit rejection',
+                    },
+                  }),
+                );
+                continue;
+              }
+              final result = switch (method) {
+                'gateway.capabilities' => {
+                  'per_session_exclusive_submit': true,
+                },
+                'session.resume' => {
+                  'session_id': 'runtime-spoken',
+                  'stored_session_id': params['session_id'],
+                  'running': false,
+                  'status': 'idle',
+                },
+                'prompt.submit' => {
+                  'accepted': true,
+                  'client_turn_id': params['client_turn_id'],
+                  'server_turn_id': 'turn-${submits.length}',
+                  'state': 'accepted',
+                  'duplicate': false,
+                },
+                'session.interrupt' => {'interrupted': true},
+                _ => <String, dynamic>{'status': 'ok'},
+              };
+              socket.add(
+                jsonEncode({
+                  'jsonrpc': '2.0',
+                  'id': frame['id'],
+                  'result': result,
+                }),
+              );
+            }
+          });
+          final prefs = await SharedPreferences.getInstance();
+          final voice = _FakeVoice(prefs, bargeInEnabled: false);
+          final connection = SavedConnection(
+            id: 'chained-wire',
+            label: 'Synthetic',
+            host: '127.0.0.1',
+            port: 8642,
+            apiKey: '',
+            dashboardUrl: 'http://127.0.0.1:${server.port}',
+            kind: InstanceKind.vps,
+          );
+          final desktop = TuiGatewayClient(
+            connection,
+            dashboard: _VoiceTicketDashboard(),
+          );
+          final service = ActiveChatService(
+            compressionRestoreStore: testCompressionRestoreStore(),
+          );
+          final chat = service.attach(
+            connection: connection,
+            sessionId: 'stored-spoken',
+            sessionTitle: 'Synthetic',
+            api: ApiClient(
+              baseUrl: 'http://hermes.test:8642',
+              apiKey: '',
+              httpClient: _FakeGateway(),
+            ),
+            desktopGateway: desktop,
+            allowUnownedDesktopSnapshotForTesting: true,
+            disableForegroundKeepAlive: true,
+          );
+          final controller = LocalVoiceConversationController(
+            voice,
+            playbackTailDelay: (_) async {},
+          );
+          addTearDown(() async {
+            await controller.exit();
+            controller.dispose();
+            service.dispose();
+            await desktop.close();
+            for (final socket in sockets) {
+              await socket.close();
+            }
+            for (final capture in voice.captures) {
+              await capture.close();
+            }
+            await server.close(force: true);
+          });
+          await controller.enter(chat: chat, model: 'main-model');
+          voice.captures.single.add(
+            const SttResult('Spoken synthetic prompt', true),
+          );
+          await _waitFor(() => submits.isNotEmpty);
+          expect(submits.single['text'], 'Spoken synthetic prompt');
+          expect(submits.single.containsKey('surface'), isFalse);
+          await controller.exit();
+          chat.cancel();
+          await _waitFor(() => !chat.isStreaming);
+          await chat.send(
+            fullText: 'Typed synthetic prompt',
+            model: 'main-model',
+            history: chat.buildHistory(),
+          );
+          await _waitFor(() => submits.length == 2);
+          expect(submits.last.containsKey('voice_turn'), isFalse);
+          expect(submits.last['text'], 'Typed synthetic prompt');
+          if (requireVoiceMarker) expect(submits.first['voice_turn'], isTrue);
+        },
+      );
+    }
+  }
+
+  test(
+    'Voice encola FIFO sin redirect ni steer y conserva submit idle',
+    () async {
+      final prefs = await SharedPreferences.getInstance();
+      final voice = _FakeVoice(prefs);
+      final rest = _FakeGateway();
+      final desktop = _NoLiveMutationVoiceGateway();
+      final service = ActiveChatService(
+        compressionRestoreStore: testCompressionRestoreStore(),
+      );
+      final chat = service.attach(
+        connection: _connection(),
+        sessionId: 'remote-voice-no-live-mutation',
+        sessionTitle: 'Remote voice queue',
+        api: ApiClient(
+          baseUrl: 'http://hermes.test:8642',
+          apiKey: String.fromCharCodes(const [107]),
+          httpClient: rest,
+        ),
+        desktopGateway: desktop,
+        allowUnownedDesktopSnapshotForTesting: true,
+        disableForegroundKeepAlive: true,
+      );
+      final controller = LocalVoiceConversationController(
+        voice,
+        playbackTailDelay: (_) async {},
+      );
+      await controller.enter(chat: chat, model: 'hermes-agent');
+
+      voice.captures.single.add(const SttResult('Primer turno de voz', true));
+      await _waitFor(
+        () => desktop.submissions.length == 1,
+        diagnostics: () =>
+            'idle submissions=${desktop.submissions} phase=${controller.phase}',
+      );
+
+      controller.stopAndTalk();
+      await _waitFor(
+        () => voice.captures.length == 2,
+        diagnostics: () =>
+            'captures=${voice.captures.length} phase=${controller.phase}',
+      );
+      voice.captures.last.add(const SttResult('Segundo turno de voz', true));
+      await _waitFor(
+        () => desktop.redirectCalls > 0 || chat.queuedMessages.isNotEmpty,
+        diagnostics: () =>
+            'redirect=${desktop.redirectCalls} queue=${chat.queuedMessages} '
+            'phase=${controller.phase}',
+      );
+
+      expect(desktop.redirectCalls, 0);
+      expect(desktop.steerCalls, 0);
+      expect(chat.queuedMessages, ['Segundo turno de voz']);
+      expect(rest.runBodies, isEmpty);
+
+      desktop.complete('primero hecho');
+      await _waitFor(
+        () => desktop.submissions.length == 2,
+        diagnostics: () =>
+            'drained submissions=${desktop.submissions} queue=${chat.queuedMessages}',
+      );
+      expect(desktop.metadata, [
+        {'voice_turn': true},
+        {'voice_turn': true},
+      ]);
+      expect(desktop.submissions, [
+        'Primer turno de voz',
+        'Segundo turno de voz',
+      ]);
+      expect(desktop.redirectCalls, 0);
+      expect(desktop.steerCalls, 0);
+      expect(rest.runBodies, isEmpty);
+
+      desktop.complete('segundo hecho');
+      await controller.exit();
+      controller.dispose();
+      service.dispose();
+      await desktop.close();
+    },
+  );
+
+  test(
+    'remote voice never falls back to REST when desktop admission fails',
+    () async {
+      final prefs = await SharedPreferences.getInstance();
+      final voice = _FakeVoice(prefs);
+      final httpGateway = _FakeGateway();
+      final desktop = _FailingVoiceDesktopGateway();
+      final service = ActiveChatService(
+        compressionRestoreStore: testCompressionRestoreStore(),
+      );
+      final chat = service.attach(
+        connection: _connection(),
+        sessionId: 'remote-voice-no-rest',
+        sessionTitle: 'Remote voice',
+        api: ApiClient(
+          baseUrl: 'http://hermes.test:8642',
+          apiKey: String.fromCharCodes(const [107]),
+          httpClient: httpGateway,
+        ),
+        desktopGateway: desktop,
+      );
+      final controller = LocalVoiceConversationController(
+        voice,
+        playbackTailDelay: (_) async {},
+      );
+      final beforeSend = Completer<void>();
+      await controller.enter(
+        chat: chat,
+        model: 'hermes-agent',
+        onBeforeSend: (_) async {
+          if (!beforeSend.isCompleted) beforeSend.complete();
+        },
+      );
+
+      voice.captures.single.add(const SttResult('mensaje remoto', true));
+      await beforeSend.future.timeout(const Duration(seconds: 2));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(httpGateway.runBodies, isEmpty);
+      await controller.exit();
+      controller.dispose();
+      service.dispose();
+      await desktop.close();
+    },
+  );
+
+  test(
+    'voice preserves a caller policy that forbids local REST fallback',
+    () async {
+      final prefs = await SharedPreferences.getInstance();
+      final voice = _FakeVoice(prefs);
+      final httpGateway = _FakeGateway();
+      final desktop = _FailingVoiceDesktopGateway();
+      final service = ActiveChatService(
+        compressionRestoreStore: testCompressionRestoreStore(),
+      );
+      final chat = service.attach(
+        connection: _localOnDeviceConnection(),
+        sessionId: 'local-voice-policy-no-rest',
+        sessionTitle: 'Restricted local voice',
+        api: ApiClient(
+          baseUrl: 'http://127.0.0.1:8642',
+          apiKey: String.fromCharCodes(const [108, 111, 99, 97, 108]),
+          httpClient: httpGateway,
+        ),
+        desktopGateway: desktop,
+      );
+      final controller = LocalVoiceConversationController(
+        voice,
+        playbackTailDelay: (_) async {},
+      );
+      final beforeSend = Completer<void>();
+      await controller.enter(
+        chat: chat,
+        model: 'hermes-agent',
+        allowTransportFallback: false,
+        onBeforeSend: (_) async {
+          if (!beforeSend.isCompleted) beforeSend.complete();
+        },
+      );
+      expect(controller.debugAllowTransportFallback, isFalse);
+
+      voice.captures.single.add(const SttResult('mensaje restringido', true));
+      await beforeSend.future.timeout(const Duration(seconds: 2));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(httpGateway.runBodies, isEmpty);
+      await controller.exit();
+      expect(controller.debugAllowTransportFallback, isFalse);
+      controller.dispose();
+      service.dispose();
+      await desktop.close();
+    },
+  );
+
+  test(
+    'voice binds fallback permission only while its owner is active',
+    () async {
+      final h = await _harness(allowTransportFallback: true);
+      expect(h.controller.debugAllowTransportFallback, isTrue);
+
+      await h.close();
+
+      expect(h.controller.debugAllowTransportFallback, isFalse);
+    },
+  );
 
   test('full-duplex exterior exige continuidad manual', () {
     expect(
@@ -787,6 +1358,8 @@ void main() {
       await _waitFor(() => !h.controller.active);
 
       expect(h.voice.disposeSttCalls, 1);
+      // The microphone goes; the recogniser may stay loaded for a next start.
+      expect(h.voice.keepRecognizerWarmRequests, [true]);
       expect(h.voice.disposeTtsCalls, 1);
       expect(h.controller.ownerChat, isNull);
       await h.close();
@@ -1116,6 +1689,8 @@ void main() {
 
       expect(h.controller.active, isTrue);
       expect(h.controller.userPaused, isTrue);
+      // Resume must not pay the recogniser's load again.
+      expect(h.voice.keepRecognizerWarmRequests, [true]);
       expect(h.controller.ownerChat, same(owner));
       expect(h.voice.captures, hasLength(1));
 
@@ -1301,6 +1876,21 @@ void main() {
     },
   );
 
+  test('the Stop failure note follows the English app locale', () async {
+    SharedPreferences.setMockInitialValues({'app_locale': 'en'});
+    final h = await _harness();
+    h.voice.captures.single.add(const SttResult('cancellable task', true));
+    await _waitFor(() => h.gateway.runBodies.isNotEmpty);
+    h.voice.stopSpeakingError = StateError('audio driver failed');
+
+    h.controller.cancelBackend();
+    await _waitFor(() => h.controller.note != null);
+
+    expect(h.controller.note, "Couldn't save Stop safely. Try again.");
+    h.voice.stopSpeakingError = null;
+    await h.close();
+  });
+
   test('Cancelar detiene backend; X solo libera voz y deja el run', () async {
     final cancelHarness = await _harness();
     cancelHarness.voice.captures.single.add(
@@ -1429,7 +2019,7 @@ void main() {
 
       h.gateway.token(1, 'Respuesta ');
       await _waitFor(
-        () => socket.sent.any((frame) => frame['text'] == 'Respuesta '),
+        () => socket.sent.any((frame) => frame['text'] == 'Respuesta'),
       );
       h.gateway.token(1, 'fluida.');
       await _waitFor(
@@ -1449,7 +2039,7 @@ void main() {
         socket.sent
             .where((frame) => frame['text'] != null)
             .map((frame) => frame['text']),
-        ['Respuesta ', 'fluida.'],
+        ['Respuesta', ' fluida.'],
       );
       expect(streamOpens, 1, reason: 'todo el turno comparte un speak-stream');
       await h.close();
@@ -1687,6 +2277,16 @@ void main() {
       expect(h.controller.active, isTrue);
       expect(h.controller.userPaused, isTrue);
       expect(h.controller.audioLeaseRequired, isFalse);
+      // A lock releases the recogniser for good: nothing stays loaded.
+      expect(h.voice.keepRecognizerWarmRequests, [false]);
+
+      // Also the one a pause had kept loaded for Resume.
+      final paused = await _harness();
+      paused.controller.pauseConversation();
+      await _waitFor(() => paused.voice.disposeSttCalls == 1);
+      await paused.controller.suspendForPrivacy();
+      expect(paused.voice.keepRecognizerWarmRequests, [true, false]);
+      await paused.close();
       await h.close();
     },
   );

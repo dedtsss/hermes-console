@@ -5,29 +5,68 @@
 // (vps/homelab/…) queda como detalle secundario: lo que manda es URL + auth.
 import 'dart:async';
 import 'dart:io';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../l10n/app_localizations.dart';
-import '../services/bridge_client.dart';
+import '../design/content.dart' show HermesSelectRow;
+import '../design/hermes_design.dart' as design;
+import '../design/modal.dart' show HermesOption, showHermesOptions;
 import '../services/connection_diagnostics.dart';
 import '../services/connection_manager.dart';
+import '../services/connection_setup_activity.dart';
+import '../services/dashboard_login_capabilities.dart';
+import '../utils/api_error.dart';
 import '../services/pairing_link.dart';
 import '../theme/app_theme.dart';
-import '../utils/api_error.dart';
 import '../utils/transport_privacy.dart';
 import '../widgets/api_key_help.dart';
-import '../widgets/hermes_spark_mascot.dart';
+import 'onboarding/manual_setup_page.dart';
+import '../companion/models/companion_mood.dart';
 import '../widgets/hermes_status_indicator.dart';
+import '../widgets/instance_kind_picker.dart';
 import '../widgets/hermes_ui.dart';
 import '../widgets/hermes_app_bar.dart';
+import '../widgets/hermes_notice.dart';
 import 'dashboard_setup_screen.dart';
+import 'dashboard_password_screen.dart';
 import 'qr_scan_screen.dart';
+import '../feedback/feedback_policy.dart';
+import '../feedback/screen_help.dart';
 
 enum _DuplicatePairingAction { cancel, openExisting, updateExisting }
+
+class _ConnectionOriginChanged implements Exception {
+  const _ConnectionOriginChanged();
+}
+
+/// One sentence, in plain words, for what a pairing link sets up: the Gateway
+/// and, when the link carries it, the Dashboard access. Names the host only.
+String pairingLinkSummary(Strings s, PairingLink link) => link.hasDashboardLogin
+    ? s.pairLinkSetsGatewayAndDashboard(link.host)
+    : s.pairLinkSetsGateway(link.host);
+
+String _safeDiagnosticCopy(DiagnosticsReport report, Strings s) {
+  List<ProbeResult> safe(List<ProbeResult> probes) => probes
+      .map(
+        (p) => ProbeResult(
+          name: p.name,
+          status: p.status,
+          httpCode: p.httpCode,
+          latencyMs: p.latencyMs,
+        ),
+      )
+      .toList();
+  return DiagnosticsReport(
+    gateway: safe(report.gateway),
+    dashboard: safe(report.dashboard),
+    matrix: report.matrix,
+    suggestions: const [],
+    ranAt: report.ranAt,
+  ).toCopyText(s);
+}
 
 class InstanceEditScreen extends StatefulWidget {
   final ConnectionManager connManager;
@@ -36,11 +75,8 @@ class InstanceEditScreen extends StatefulWidget {
   /// Permite probar el flujo completo con un diagnóstico determinista y sin
   /// abrir red. En producción se omite y la pantalla crea su cliente normal.
   final ConnectionDiagnostics? diagnostics;
-
-  /// Inyección acotada para probar el emparejado sin abrir sockets. Producción
-  /// usa [BridgeClient] y su provisión autenticada normales.
-  final BridgeClientFactory? bridgeClientFactory;
-  final BridgeProvisioner? bridgeProvisioner;
+  final Future<PairingLink?> Function(BuildContext)? scanCode;
+  final bool verifyChatBeforeSave;
 
   /// Si es true (alta nueva desde el chooser "Escanear QR"), abre el escáner
   /// automáticamente al entrar para rellenar el formulario sin pasos extra.
@@ -71,8 +107,8 @@ class InstanceEditScreen extends StatefulWidget {
     this.fromDeepLink = false,
     this.prefill,
     this.diagnostics,
-    this.bridgeClientFactory,
-    this.bridgeProvisioner,
+    this.scanCode,
+    this.verifyChatBeforeSave = false,
     super.key,
   });
 
@@ -81,6 +117,7 @@ class InstanceEditScreen extends StatefulWidget {
 }
 
 class _InstanceEditScreenState extends State<InstanceEditScreen> {
+  late final VoidCallback _releaseSetup;
   // General
   late final TextEditingController _nameCtrl;
   late final TextEditingController _notesCtrl;
@@ -93,26 +130,21 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
   late final TextEditingController _gatewayUrlCtrl;
   late final TextEditingController _gatewayTokenCtrl;
 
-  // Mobile Bridge. El token existente nunca se muestra en el formulario:
-  // campo vacío al editar = conservar el secreto del Keystore.
-  late final TextEditingController _bridgeUrlCtrl;
-  late final TextEditingController _bridgeTokenCtrl;
-  Future<void> _bridgeConfigLoad = Future<void>.value();
-  String _storedBridgeToken = '';
-  bool _bridgeUrlEdited = false;
-
   // Dashboard
   late final TextEditingController _dashboardUrlCtrl;
   AuthMode _dashAuthMode = AuthMode.cookieSession;
   late final TextEditingController _dashTokenCtrl;
   late final TextEditingController _dashUserCtrl;
   late final TextEditingController _dashPassCtrl;
+  bool _dashUserEdited = false;
+  bool _hasStoredDashboardAccess = false;
+  bool _dashboardLoginVerified = false;
 
   // Diagnóstico
   ConnectionDiagnostics? _diag;
   List<ProbeResult>? _gatewayResults;
   List<ProbeResult>? _dashboardResults;
-  List<ProbeResult>? _bridgeResults;
+
   bool _autoDashBusy = false;
   List<String> _suggestions = const [];
   CapabilityMatrix? _detectedMatrix;
@@ -125,7 +157,20 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
 
   // Aviso de datos precargados desde un deep link `hermes://pair`: visible
   // hasta que el usuario edite la URL del gateway o guarde.
-  bool _showDeepLinkBanner = false;
+
+  // Enlace aplicado (QR, pegado o deep link): la pantalla dice en una frase
+  // qué configura. Nunca muestra sus secretos.
+  PairingLink? _appliedLink;
+
+  // Modo de auth del Dashboard antes de que un enlace trajera su acceso, por
+  // si el usuario apunta el formulario a otro servidor y hay que descartarlo.
+  AuthMode? _dashModeBeforeLink;
+
+  // Exceptional connection options are folded for both create and edit.
+  bool _advancedExpanded = false;
+  bool _dashboardHttpConsent = false;
+  late final TextEditingController _gatewayPortCtrl;
+  late final TextEditingController _dashboardPortCtrl;
 
   // Un pairing puede llegar dos veces (initial link + stream de app_links, o un
   // rebuild mientras se resuelve el primer frame). La huella evita repetir los
@@ -142,6 +187,7 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
   @override
   void initState() {
     super.initState();
+    _releaseSetup = ConnectionSetupActivity.instance.hold();
     _diag = widget.diagnostics;
     final init = widget.initial;
     _nameCtrl = TextEditingController(text: init?.label ?? '');
@@ -150,31 +196,58 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
     _kind = init?.kind ?? InstanceKind.vps;
     _kindManuallySet = init != null;
     _localChatMode = init?.localChatMode ?? LocalChatMode.auto;
+    _gatewayPortCtrl = TextEditingController(
+      text: (init?.port ?? 8642).toString(),
+    );
+    _dashboardPortCtrl = TextEditingController(
+      text: (init?.dashboardPort ?? 9119).toString(),
+    );
     _gatewayUrlCtrl = TextEditingController(
       text: init == null ? '' : init.gatewayUrl,
     );
     _gatewayTransport = TransportPrivacy.classify(_gatewayUrlCtrl.text);
     _gatewayTokenCtrl = TextEditingController();
-    _bridgeUrlCtrl = TextEditingController();
-    _bridgeTokenCtrl = TextEditingController();
     _dashboardUrlCtrl = TextEditingController(text: init?.dashboardUrl ?? '');
-    // Solo Basic Auth (usuario/contraseña): los otros modos (token automático
-    // del Dashboard / token de sesión manual) ya no funcionan en Hermes, así que
-    // no se ofrecen. Se fuerza basicAuth siempre.
-    _dashAuthMode = AuthMode.basicAuth;
+    // Preserve the explicit stored mode. Editing a secret never infers a
+    // provider or copies the Gateway key into Dashboard authority.
+    _dashAuthMode = init?.dashboardAuthMode ?? AuthMode.unknown;
     _dashTokenCtrl = TextEditingController();
     _dashUserCtrl = TextEditingController();
     _dashPassCtrl = TextEditingController();
+    _gatewayUrlCtrl.addListener(_syncPorts);
+    _dashboardUrlCtrl.addListener(_syncPorts);
+    for (final controller in [
+      _gatewayUrlCtrl,
+      _gatewayTokenCtrl,
+      _dashboardUrlCtrl,
+      _dashTokenCtrl,
+      _dashUserCtrl,
+      _dashPassCtrl,
+    ]) {
+      controller.addListener(_dashboardAuthorityChanged);
+    }
     if (init != null) {
       _detectedMatrix = widget.connManager.loadCapabilities(init.id);
-      _bridgeConfigLoad = _loadBridgeConfig(init.id);
       // Los secretos existentes no se muestran; campo vacío = no cambiar.
-      widget.connManager.getDashboardSecrets(init.id).then((s) {
-        if (!mounted) return;
-        if ((s.username?.isNotEmpty ?? false) && _dashUserCtrl.text.isEmpty) {
-          _dashUserCtrl.text = s.username!;
-        }
-      });
+      widget.connManager
+          .getDashboardSecrets(init.id)
+          .then((s) {
+            if (!mounted) return;
+            setState(() {
+              _hasStoredDashboardAccess =
+                  (s.sessionToken?.isNotEmpty ?? false) ||
+                  (s.password?.isNotEmpty ?? false);
+              if ((s.username?.isNotEmpty ?? false) &&
+                  _dashUserCtrl.text.isEmpty) {
+                _dashUserCtrl.text = s.username!;
+              }
+            });
+          })
+          .catchError((Object error) {
+            debugPrint(
+              '[instance-edit] dashboard secrets unavailable (${error.runtimeType})',
+            );
+          });
     }
     // Alta precargada (draft sin identidad): rellena el formulario pero el
     // guardado sigue siendo un alta (id UUID nuevo, token obligatorio).
@@ -185,8 +258,11 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
       _gatewayUrlCtrl.text = pre.gatewayUrl;
       _gatewayTransport = TransportPrivacy.classify(_gatewayUrlCtrl.text);
       if (pre.dashboardUrl != null) _dashboardUrlCtrl.text = pre.dashboardUrl!;
-      _kind = pre.kind;
-      _kindManuallySet = true;
+      // A draft whose kind is only what its address implies keeps following
+      // the address; one that carries a deliberate kind keeps it.
+      final automatic = pre.kind == inferInstanceKind(pre.host);
+      _kind = automatic ? suggestInstanceKind(pre.host) : pre.kind;
+      _kindManuallySet = !automatic;
       _localChatMode = pre.localChatMode;
       _readOnly = pre.readOnly;
     }
@@ -198,7 +274,6 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
     }
     // Alta desde "pegar enlace" / deep link: precarga el formulario.
     if (widget.initialLink != null) {
-      _showDeepLinkBanner = widget.fromDeepLink;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final link = widget.initialLink!;
@@ -218,37 +293,21 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
     }
   }
 
-  Future<void> _loadBridgeConfig(String connectionId) async {
-    try {
-      final config = await widget.connManager.getBridgeConfig(connectionId);
-      if (!mounted) return;
-      setState(() {
-        _storedBridgeToken = config.token;
-        if (!_bridgeUrlEdited) _bridgeUrlCtrl.text = config.url;
-      });
-    } catch (error) {
-      // Un Keystore temporalmente inaccesible no debe romper el editor. El
-      // guardado seguirá fallando de forma visible si el problema persiste.
-      debugPrint(
-        '[instance-edit] bridge config unavailable (${error.runtimeType})',
-      );
-    }
-  }
-
   @override
   void dispose() {
     _diag?.close();
+    _releaseSetup();
     for (final c in [
       _nameCtrl,
       _notesCtrl,
       _gatewayUrlCtrl,
       _gatewayTokenCtrl,
-      _bridgeUrlCtrl,
-      _bridgeTokenCtrl,
       _dashboardUrlCtrl,
       _dashTokenCtrl,
       _dashUserCtrl,
       _dashPassCtrl,
+      _gatewayPortCtrl,
+      _dashboardPortCtrl,
     ]) {
       c.dispose();
     }
@@ -258,9 +317,11 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
   /// Abre el escáner de QR de emparejado y precarga el formulario con los datos
   /// (host+puerto+token) para que el usuario solo revise y guarde.
   Future<void> _scanQr() async {
-    final link = await Navigator.of(context).push<PairingLink>(
-      MaterialPageRoute(builder: (_) => const QrScanScreen()),
-    );
+    final link = widget.scanCode != null
+        ? await widget.scanCode!(context)
+        : await Navigator.of(context).push<PairingLink>(
+            MaterialPageRoute(builder: (_) => const QrScanScreen()),
+          );
     if (link == null || !mounted) return;
     await _applyLink(link, notify: true);
   }
@@ -315,30 +376,33 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
 
     final draft = link.toDraftConnection();
     setState(() {
+      _invalidateDiagnosis();
       if (_nameCtrl.text.trim().isEmpty) _nameCtrl.text = draft.label;
       _gatewayUrlCtrl.text = draft.gatewayUrl;
       _gatewayTransport = TransportPrivacy.classify(draft.gatewayUrl);
       _gatewayTokenCtrl.text = link.token;
-      // Los instaladores oficiales incluyen la URL y el token efectivos del
-      // Bridge. Los QR antiguos siguen funcionando: comparten API_SERVER_KEY y
-      // dejan que la app derive host:9131.
-      final bridgeToken = link.bridgeToken?.trim().isNotEmpty == true
-          ? link.bridgeToken!.trim()
-          : link.token;
-      _bridgeTokenCtrl.text = bridgeToken;
-      _storedBridgeToken = bridgeToken;
-      _bridgeUrlCtrl.text = link.bridgeUrl?.trim() ?? '';
-      _bridgeUrlEdited = true;
       if (link.dashboardUrl != null) {
         _dashboardUrlCtrl.text = link.dashboardUrl!;
       }
-      _kind = InstanceKind.vps;
-      _kindManuallySet = true;
+      if (_isNew && !_kindManuallySet) {
+        _kind = suggestInstanceKind(draft.host);
+      }
+      _appliedLink = link;
+      if (link.hasDashboardLogin) {
+        // Existing sign-in carried by the link: the same form fields, and on
+        // save the same Keystore slots, as «Acceder al Dashboard». The
+        // password stays obscured and its disclosure folded.
+        _dashModeBeforeLink ??= _dashAuthMode;
+        _dashAuthMode = AuthMode.basicAuth;
+        _dashUserCtrl.text = link.dashboardUser!;
+        _dashPassCtrl.text = link.dashboardPassword!;
+        _dashUserEdited = true;
+      }
     });
     if (notify && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(Strings.of(context).instConnLoaded)),
-      );
+      AppFeedback.of(
+        context,
+      ).notify(FeedbackKind.routine, Strings.of(context).instConnLoaded);
       // Auto-test al precargar (QR/pegar/deep link): el usuario ve enseguida si
       // conecta y, si no, la guía por causa (ConnectionDiagnostics), en vez de
       // descubrir el fallo más tarde. No altera el flujo de guardado.
@@ -350,40 +414,29 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
   Future<_DuplicatePairingAction> _showDuplicatePairingDialog(
     SavedConnection existing,
   ) async {
-    final action = await showDialog<_DuplicatePairingAction>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        final s = Strings.of(ctx);
-        return AlertDialog(
-          title: Text(s.ieDuplicateTitle),
-          content: Text(
-            s.ieDuplicateBody(
-              existing.label,
-              '${existing.host}:${existing.port}',
-            ),
-          ),
+    final s = Strings.of(context);
+    return await design.showHermesDialog<_DuplicatePairingAction>(
+          context: context,
+          barrierDismissible: false,
+          title: s.ieDuplicateTitle,
+          message: s.ieDuplicateBody(existing.label, existing.host),
           actions: [
-            TextButton(
-              onPressed: () =>
-                  Navigator.pop(ctx, _DuplicatePairingAction.cancel),
-              child: Text(s.commonCancel),
+            design.HermesDialogAction(
+              label: s.commonCancel,
+              value: _DuplicatePairingAction.cancel,
+              style: design.HermesDialogActionStyle.cancel,
             ),
-            TextButton(
-              onPressed: () =>
-                  Navigator.pop(ctx, _DuplicatePairingAction.updateExisting),
-              child: Text(s.ieDuplicateUpdate),
+            design.HermesDialogAction(
+              label: s.ieDuplicateUpdate,
+              value: _DuplicatePairingAction.updateExisting,
             ),
-            FilledButton(
-              onPressed: () =>
-                  Navigator.pop(ctx, _DuplicatePairingAction.openExisting),
-              child: Text(s.ieDuplicateOpen),
+            design.HermesDialogAction(
+              label: s.ieDuplicateOpen,
+              value: _DuplicatePairingAction.openExisting,
             ),
           ],
-        );
-      },
-    );
-    return action ?? _DuplicatePairingAction.cancel;
+        ) ??
+        _DuplicatePairingAction.cancel;
   }
 
   int _pairingFingerprint(PairingLink link) => Object.hash(
@@ -392,9 +445,34 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
     link.token,
     link.useHttps,
     link.dashboardUrl,
-    link.bridgeUrl,
-    link.bridgeToken,
+    link.dashboardUser,
+    link.dashboardPassword,
   );
+
+  /// A link's Dashboard sign-in belongs to the server that link names. If the
+  /// user points the form at another server it is dropped, unsent and unsaved.
+  void _dropLinkDashboardLoginIfRetargeted() {
+    final link = _appliedLink;
+    if (link == null || !link.hasDashboardLogin) return;
+    final gateway = SavedConnection.normalizeHostAndPort(
+      _gatewayUrlCtrl.text.trim(),
+      8642,
+    );
+    final sameGateway =
+        gateway.host.toLowerCase() == link.host.toLowerCase() &&
+        gateway.port == link.port &&
+        gateway.useHttps == link.useHttps;
+    final sameDashboard =
+        _dashboardUrlCtrl.text.trim() == (link.dashboardUrl ?? '');
+    if (sameGateway && sameDashboard) return;
+    setState(() {
+      if (_dashUserCtrl.text == link.dashboardUser) _dashUserCtrl.clear();
+      if (_dashPassCtrl.text == link.dashboardPassword) _dashPassCtrl.clear();
+      _dashAuthMode = _dashModeBeforeLink ?? _dashAuthMode;
+      _dashModeBeforeLink = null;
+      _appliedLink = null;
+    });
+  }
 
   /// Secuencia automática común a QR, pegado y deep link ya consentido.
   /// Mantenerla en un único método evita que las tres entradas diverjan.
@@ -407,8 +485,8 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
       if (!mounted) return;
       await _runProbe(
         gateway: true,
-        dashboard: _dashboardUrlCtrl.text.trim().isNotEmpty,
-        bridge: true,
+        dashboard:
+            _dashboardUrlCtrl.text.trim().isNotEmpty || link.hasDashboardLogin,
       );
     }();
     _pairingAutomationFuture = automation;
@@ -421,294 +499,157 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
   Future<void> _confirmExternalPairingAutomation(PairingLink link) async {
     if (!mounted || _externalPairingPromptOpen) return;
     _externalPairingPromptOpen = true;
-    final automate = await showDialog<bool>(
+    final s = Strings.of(context);
+    final automate = await design.showHermesDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) {
-        final s = Strings.of(ctx);
-        return AlertDialog(
-          title: Text(s.ieExternalPairingTitle),
-          content: Text(s.ieExternalPairingBody(link.host)),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(s.ieExternalPairingReview),
-            ),
-            FilledButton.icon(
-              onPressed: () => Navigator.pop(ctx, true),
-              icon: const Icon(Icons.auto_fix_high_outlined),
-              label: Text(s.ieExternalPairingContinue),
-            ),
-          ],
-        );
-      },
+      title: s.ieExternalPairingTitle,
+      message: pairingLinkSummary(s, link),
+      actions: [
+        design.HermesDialogAction(
+          label: s.ieExternalPairingReview,
+          value: false,
+          style: design.HermesDialogActionStyle.cancel,
+        ),
+        design.HermesDialogAction(
+          label: s.ieExternalPairingContinue,
+          value: true,
+        ),
+      ],
     );
     _externalPairingPromptOpen = false;
     if (automate == true && mounted) _startPairingAutomation(link);
   }
 
-  /// Botón manual "Autoconfigurar dashboard" (spec 028 A-006).
-  ///
-  /// Al EDITAR una instancia YA existente, generar una contraseña nueva ROTA la
-  /// del servidor y puede romper las sesiones guardadas en otros dispositivos o
-  /// navegadores, así que se pide confirmación explícita antes de proceder. En
-  /// un alta nueva (sin instancia guardada aún) no hay otro dispositivo que
-  /// romper: procede directo, sin diálogo.
-  Future<void> _confirmAndAutoConfigureDashboard() async {
-    if (!mounted) return;
-    if (widget.initial != null) {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(Strings.of(ctx).ieDashSetupTitle),
-          content: Text(Strings.of(ctx).ieDashSetupBody),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(Strings.of(ctx).ieNotNow),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(Strings.of(ctx).ieGeneratePassword),
-            ),
-          ],
-        ),
-      );
-      if (ok != true || !mounted) return;
-    }
-    // Confirmado (o alta nueva): feedback normal (spinner y errores).
-    await _autoConfigureDashboard();
+  int _dashboardAuthorityEpoch = 0;
+  void _dashboardAuthorityChanged() {
+    _dashboardAuthorityEpoch++;
+    _dashboardHttpConsent = false;
+    _dashboardLoginVerified = false;
   }
 
-  /// Configura el login del Dashboard vía bridge (sin SSH): deriva la URL del
-  /// bridge + token (de la instancia existente o del formulario), abre la
-  /// pantalla de alta y, al volver, precarga usuario/contraseña en modo
-  /// Basic Auth para que al guardar la app entre por cookie automáticamente.
-  Future<void> _setupDashboardViaBridge() async {
-    await _bridgeConfigLoad;
-    if (!mounted) return;
-    final bridgeUrl = _effectiveBridgeUrlFromForm();
-    final gatewayToken = _gatewayTokenCtrl.text.trim().isNotEmpty
-        ? _gatewayTokenCtrl.text.trim()
-        : (widget.initial?.apiKey ?? '');
-    final bridgeToken = _effectiveBridgeTokenFromForm;
-    if (bridgeUrl == null ||
-        bridgeUrl.isEmpty ||
-        (gatewayToken.isEmpty && bridgeToken.isEmpty)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(Strings.of(context).ieGatewayCredentialsRequired),
-        ),
-      );
-      return;
-    }
-    final result = await Navigator.of(context).push<DashboardCredsResult>(
-      MaterialPageRoute(
-        builder: (_) => DashboardSetupScreen(
-          bridgeUrl: bridgeUrl,
-          gatewayKey: gatewayToken,
-          bridgeToken: bridgeToken,
-        ),
-      ),
-    );
-    if (result == null || !mounted) return;
-    await _rememberBridgeToken(result.bridgeToken);
-    if (!mounted) return;
-    setState(() {
-      _dashAuthMode = AuthMode.basicAuth;
-      _dashUserCtrl.text = result.username;
-      _dashPassCtrl.text = result.password;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(Strings.of(context).ieDashboardConfiguredSave)),
-    );
-  }
-
-  /// Autoconfigura el login del Dashboard vía bridge SIN teclear nada:
-  /// provisiona el token del bridge, lee el usuario y FIJA una contraseña nueva
-  /// y fuerte, y la deja cargada en el formulario (Basic Auth) para que se
-  /// guarde con la instancia. Machaca la contraseña anterior del Dashboard,
-  /// por lo que en instancias ya existentes solo debe llamarse tras
-  /// confirmación explícita del usuario (botón manual vía
-  /// _confirmAndAutoConfigureDashboard, spec 028 A-006); en el alta inicial por
-  /// enlace/QR se llama con [silent] sin diálogo. Queda VISIBLE en el campo por
-  /// si se quiere usar en el navegador. Con [silent] no muestra errores ni
-  /// spinner.
-  /// Devuelve true si lo dejó configurado.
-  Future<bool> _autoConfigureDashboard({bool silent = false}) async {
-    await _bridgeConfigLoad;
-    if (!mounted) return false;
-    final bridgeUrl = _effectiveBridgeUrlFromForm();
-    final gatewayToken = _gatewayTokenCtrl.text.trim().isNotEmpty
-        ? _gatewayTokenCtrl.text.trim()
-        : (widget.initial?.apiKey ?? '');
-    if (bridgeUrl == null ||
-        bridgeUrl.isEmpty ||
-        (gatewayToken.isEmpty && _effectiveBridgeTokenFromForm.isEmpty)) {
-      if (!silent && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(Strings.of(context).ieNeedGatewayFirst)),
-        );
-      }
-      return false;
-    }
-    if (!silent && mounted) setState(() => _autoDashBusy = true);
-    try {
-      final bToken = await _resolveBridgeToken(bridgeUrl, gatewayToken);
-      if (bToken == null || bToken.isEmpty) {
-        if (!silent && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(Strings.of(context).ieBridgeNoToken)),
-          );
-        }
-        return false;
-      }
-      final client = _createBridgeClient(bridgeUrl, bToken);
-      try {
-        final creds = await client.getDashboardCredentials();
-        final existingUser = (creds['username'] ?? '').toString().trim();
-        final user = existingUser.isNotEmpty ? existingUser : 'admin';
-        final pass = _generateDashboardPassword();
-        final res = await client.setDashboardCredentials(
-          username: user,
-          password: pass,
-        );
-        if (res['ok'] != true) {
-          if (!silent && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(Strings.of(context).ieDashPassFailed)),
-            );
-          }
-          return false;
-        }
-        final finalUser = (res['username'] ?? user).toString();
-        if (!mounted) return false;
-        setState(() {
-          _dashAuthMode = AuthMode.basicAuth;
-          _dashUserCtrl.text = finalUser;
-          _dashPassCtrl.text = pass;
-          if (_dashboardUrlCtrl.text.trim().isEmpty) {
-            final pub = (creds['public_url'] ?? '').toString().trim();
-            final uri = Uri.tryParse(_gatewayUrlCtrl.text.trim());
-            final host = uri?.host ?? '';
-            final scheme = (uri?.scheme.isEmpty ?? true) ? 'http' : uri!.scheme;
-            _dashboardUrlCtrl.text = pub.isNotEmpty
-                ? pub
-                : (host.isEmpty ? '' : '$scheme://$host:9119');
-          }
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(Strings.of(context).ieDashConfigured(finalUser)),
-          ),
-        );
-        return true;
-      } finally {
-        client.close();
-      }
-    } catch (e) {
-      if (!silent && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(Strings.of(context).ieDashConfigError(e.toString())),
-          ),
-        );
-      }
-      return false;
-    } finally {
-      if (!silent && mounted) setState(() => _autoDashBusy = false);
-    }
-  }
-
-  /// Contraseña fuerte sin caracteres ambiguos (0/O, 1/l/I) para el Dashboard.
-  String _generateDashboardPassword() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
-    final rnd = Random.secure();
-    return List.generate(20, (_) => chars[rnd.nextInt(chars.length)]).join();
-  }
-
-  Future<String?> _resolveBridgeToken(
-    String bridgeUrl,
-    String gatewayToken,
-  ) async {
-    final existing = _effectiveBridgeTokenFromForm;
-    if (existing.isNotEmpty) {
-      final client = _createBridgeClient(bridgeUrl, existing);
-      try {
-        final capabilities = await client.detect();
-        if (capabilities.online && capabilities.authValid) return existing;
-      } finally {
-        client.close();
-      }
-    }
-    if (gatewayToken.trim().isEmpty) return null;
-    final provisioned =
-        await (widget.bridgeProvisioner?.call(bridgeUrl, gatewayToken.trim()) ??
-            BridgeClient.provision(bridgeUrl, gatewayToken.trim()));
-    if (provisioned == null || provisioned.isEmpty) return null;
-    await _rememberBridgeToken(provisioned);
-    return provisioned;
-  }
-
-  BridgeClient _createBridgeClient(String baseUrl, String token) =>
-      widget.bridgeClientFactory?.call(baseUrl: baseUrl, token: token) ??
-      BridgeClient(baseUrl: baseUrl, token: token);
-
-  Future<void> _rememberBridgeToken(String token) async {
-    final normalized = token.trim();
-    if (normalized.isEmpty) return;
-    _storedBridgeToken = normalized;
-    if (mounted) _bridgeTokenCtrl.text = normalized;
-    final id = widget.initial?.id;
-    if (id != null) {
-      await widget.connManager.setBridgeConfig(id, token: normalized);
-    }
-  }
-
-  String? _effectiveBridgeUrlFromForm() {
-    final override = _bridgeUrlCtrl.text.trim();
-    if (override.isNotEmpty) return override;
+  void _syncPorts() {
     final normalized = SavedConnection.normalizeHostAndPort(
       _gatewayUrlCtrl.text.trim(),
       8642,
     );
-    if (normalized.host.isEmpty) return null;
-    return SavedConnection(
-      id: widget.initial?.id ?? 'bridge-draft',
-      label: '',
-      host: normalized.host,
-      port: normalized.port,
-      apiKey: '',
-      useHttps: normalized.useHttps,
-      onDeviceLoopback:
-          widget.initial?.onDeviceLoopback ??
-          widget.prefill?.onDeviceLoopback ??
-          false,
-    ).derivedBridgeUrl;
+    final chat = normalized.port.toString();
+    if (_gatewayPortCtrl.text != chat) {
+      _gatewayPortCtrl.text = chat;
+    }
+    final port = Uri.tryParse(_effectiveDashboardUrl)?.port ?? 9119;
+    if (_dashboardPortCtrl.text != port.toString()) {
+      _dashboardPortCtrl.text = port.toString();
+    }
   }
 
-  String get _effectiveBridgeTokenFromForm {
-    final entered = _bridgeTokenCtrl.text.trim();
-    return entered.isNotEmpty ? entered : _storedBridgeToken;
+  Future<void> _setupDashboardLogin() async {
+    if (_autoDashBusy || !mounted) return;
+    if (_gatewayUrlCtrl.text.trim().isEmpty) {
+      setState(() => _error = Strings.of(context).ieGatewayUrlRequired);
+      return;
+    }
+    final epoch = _dashboardAuthorityEpoch;
+    final owner = widget.initial?.id;
+    final revision = owner == null
+        ? null
+        : widget.connManager.connectionRevisionFor(owner).value;
+    final profileRevision = owner == null
+        ? null
+        : widget.connManager.activeProfileRevisionFor(owner).value;
+    bool current() =>
+        mounted &&
+        epoch == _dashboardAuthorityEpoch &&
+        (owner == null ||
+            (widget.connManager.connectionRevisionFor(owner).value ==
+                    revision &&
+                widget.connManager.activeProfileRevisionFor(owner).value ==
+                    profileRevision));
+    setState(() => _autoDashBusy = true);
+    try {
+      final draft = await _draftConnection();
+      if (!mounted || !current()) return;
+      final result = await Navigator.of(context).push<DashboardCredsResult>(
+        MaterialPageRoute(
+          builder: (_) => DashboardSetupScreen(
+            connection: draft.$1,
+            authorityCurrent: current,
+          ),
+        ),
+      );
+      if (result == null || !current()) return;
+      setState(() {
+        _dashAuthMode = result.mode;
+        _dashUserCtrl.text = result.username;
+        _dashPassCtrl.text = result.password;
+        _dashTokenCtrl.text = result.sessionToken;
+        _invalidateDiagnosis();
+        // This same authority and, on private HTTP, explicit credential
+        // consent were verified by the sign-in route before it returned.
+        _dashboardHttpConsent = true;
+        _dashboardLoginVerified = true;
+      });
+      // Existing secure-store save owns persistence; no remote rotation or
+      // secret write after this editor lease has ended.
+    } catch (error) {
+      if (mounted && current()) {
+        final s = Strings.of(context);
+        setState(
+          () => _error = error is _ConnectionOriginChanged
+              ? s.sOriginChanged
+              : s.sSignInFailed,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _autoDashBusy = false);
+    }
   }
 
   // ── Construcción del modelo desde el formulario ───────────────────────
 
   /// Conexión efímera con el estado actual del formulario (para probar
   /// sin guardar). Usa los secretos del Keystore cuando el campo está vacío.
+  late final String _draftId = widget.initial?.id ?? const Uuid().v4();
+
   Future<(SavedConnection, DashboardSecrets)> _draftConnection() async {
-    final id = widget.initial?.id ?? const Uuid().v4();
+    final id = _draftId;
+    final epoch = _dashboardAuthorityEpoch;
+    final existing = widget.connManager
+        .getConnections()
+        .where((connection) => connection.id == id)
+        .firstOrNull;
+    final revision = widget.connManager.connectionRevisionFor(id).value;
     final normalized = SavedConnection.normalizeHostAndPort(
       _gatewayUrlCtrl.text.trim(),
       8642,
     );
+    for (final controller in [_gatewayPortCtrl, _dashboardPortCtrl]) {
+      final port = int.tryParse(controller.text);
+      if (port == null || port < 1 || port > 65535) {
+        throw const FormatException('Invalid port');
+      }
+    }
     var apiKey = _gatewayTokenCtrl.text.trim();
     if (apiKey.isEmpty && widget.initial != null) {
-      apiKey = widget.initial!.apiKey;
+      if (existing != null &&
+          existing.apiKey.isNotEmpty &&
+          (existing.host.toLowerCase() != normalized.host.toLowerCase() ||
+              existing.port != normalized.port ||
+              existing.useHttps != normalized.useHttps)) {
+        // Blank means preserve only within the original authority, never
+        // permission to carry a legacy secret to another server.
+        throw const _ConnectionOriginChanged();
+      }
+      apiKey = existing?.apiKey ?? '';
     }
     final stored = widget.initial == null
         ? const DashboardSecrets()
         : await widget.connManager.getDashboardSecrets(id);
+    if (!mounted) throw StateError('Instance editor closed');
+    if (epoch != _dashboardAuthorityEpoch ||
+        revision != widget.connManager.connectionRevisionFor(id).value) {
+      throw DashboardAuthException(DashboardAuthFailureCode.loginRequired);
+    }
     final secrets = DashboardSecrets(
       sessionToken: _dashTokenCtrl.text.trim().isNotEmpty
           ? _dashTokenCtrl.text.trim()
@@ -742,46 +683,66 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
           widget.prefill?.onDeviceLoopback ??
           false,
       localChatMode: _localChatMode,
-      kind: _kindManuallySet ? _kind : inferInstanceKind(normalized.host),
+      kind: _kindManuallySet ? _kind : suggestInstanceKind(normalized.host),
     );
+    if (existing != null &&
+        (existing.dashboardHost.toLowerCase() !=
+                conn.dashboardHost.toLowerCase() ||
+            existing.dashboardPort != conn.dashboardPort ||
+            existing.dashboardUseHttps != conn.dashboardUseHttps) &&
+        ((stored.sessionToken?.isNotEmpty ?? false) ||
+            (stored.username?.isNotEmpty ?? false) ||
+            (stored.password?.isNotEmpty ?? false))) {
+      // Legacy slots are ID-bound, not origin-bound. Fail closed rather than
+      // persist a new endpoint under a slot that still owns old credentials.
+      throw const _ConnectionOriginChanged();
+    }
+    TransportPrivacy.requireAllowed(conn.gatewayUrl);
+    TransportPrivacy.requireAllowed(conn.effectiveDashboardUrl);
     return (conn, secrets);
   }
 
   // ── Diagnóstico ───────────────────────────────────────────────────────
 
-  /// Convierte las excepciones de probar/guardar en un mensaje legible en
-  /// español (sin volcar "SocketException: … (OS Error: …)" al banner). El
-  /// detalle técnico queda en el log de debug y en "copiar diagnóstico".
+  /// Tell the person the cause and next step, without exception text or
+  /// server bodies. The diagnostic route holds the technical probe results.
   String _friendlyError(Object e) {
-    debugPrint('[instance-edit] detalle técnico del error: $e');
+    debugPrint('[instance-edit] error (${e.runtimeType})');
     final str = Strings.of(context);
+    if (e is _ConnectionOriginChanged) {
+      return str.sOriginChanged;
+    }
     if (e is TimeoutException) {
-      return str.ieErrTimeout;
+      return str.o2Unreachable;
     }
     if (e is SocketException) {
-      final os = e.osError?.message.toLowerCase() ?? '';
-      if (os.contains('refused')) {
-        return str.ieErrRefused;
-      }
-      if (os.contains('unreachable') || os.contains('network')) {
-        return str.ieErrUnreachable;
-      }
-      return str.ieErrHostNotFound;
+      return str.o2Unreachable;
     }
     if (e is HandshakeException || e is TlsException) {
-      return str.ieErrTls;
+      return str.sCertificate;
     }
     if (e is FormatException) {
-      return str.ieErrBadUrl;
+      if (e.message == 'Invalid port') {
+        return str.sInvalidPort;
+      }
+      return str.sBadAddress;
     }
-    // Errores HTTP con cuerpo JSON, u otros: extrae el detalle útil.
-    return humanizeApiError(e);
+    // Only structural causes, never a remote error body.
+    if (e is DashboardAuthException || e is DashboardHttpException) {
+      return localizedApiError(str, e);
+    }
+    if (_gatewayTransport == TransportPrivacyClass.publicCleartext ||
+        TransportPrivacy.classify(_effectiveDashboardUrl) ==
+            TransportPrivacyClass.publicCleartext) {
+      return str.commonCleartextPublic;
+    }
+    return str.sTryAgain;
   }
 
   _DiagnosticsSnapshot get _diagnosticsSnapshot => _DiagnosticsSnapshot(
     gateway: _gatewayResults,
     dashboard: _dashboardResults,
-    bridge: _bridgeResults,
+
     suggestions: _suggestions,
     matrix: _detectedMatrix,
     serverCapabilities: _serverCaps,
@@ -792,7 +753,6 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
   Future<_DiagnosticsSnapshot> _runProbe({
     bool gateway = false,
     bool dashboard = false,
-    bool bridge = false,
   }) async {
     if (_gatewayUrlCtrl.text.trim().isEmpty) {
       setState(
@@ -800,11 +760,29 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
       );
       return _diagnosticsSnapshot;
     }
-    await _bridgeConfigLoad;
     if (!mounted) return _diagnosticsSnapshot;
     // Capturado antes de los await para localizar las sugerencias del
     // diagnóstico sin usar el contexto tras un gap asíncrono.
     final s = Strings.of(context);
+    if (_requiresDashboardConsent && !_dashboardHttpConsent) {
+      setState(() => _diagnosticError = s.sConsentNeeded);
+      return _diagnosticsSnapshot;
+    }
+    final epoch = _dashboardAuthorityEpoch;
+    final owner = widget.initial?.id;
+    final revision = owner == null
+        ? null
+        : widget.connManager.connectionRevisionFor(owner).value;
+    final profile = owner == null
+        ? null
+        : widget.connManager.activeProfileRevisionFor(owner).value;
+    bool current() =>
+        epoch == _dashboardAuthorityEpoch &&
+        (owner == null ||
+            (widget.connManager.connectionRevisionFor(owner).value ==
+                    revision &&
+                widget.connManager.activeProfileRevisionFor(owner).value ==
+                    profile));
     setState(() {
       _probing = true;
       _diagnosticError = null;
@@ -822,17 +800,14 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
               _dashUserCtrl.text.trim() != (storedSecrets?.username ?? ''));
       _diag ??= ConnectionDiagnostics();
 
-      // "Todo" (las tres): usa run() que además calcula matriz y sugerencias
-      // a partir del conjunto completo.
-      if (gateway && dashboard && bridge) {
-        final report = await _diag!.run(
-          s,
-          conn,
-          secrets,
-          bridgeUrl: _effectiveBridgeUrlFromForm(),
-          bridgeToken: _effectiveBridgeTokenFromForm,
-        );
+      // Complete diagnostics observes only the configured official surfaces.
+      if (gateway && dashboard) {
+        final report = await _diag!.run(s, conn, secrets);
         if (!mounted) return _diagnosticsSnapshot;
+        if (!current()) {
+          setState(() => _diagnosticError = s.sConnectionChanged);
+          return _diagnosticsSnapshot;
+        }
         // El diagnóstico es un dato de solo lectura y debe sobrevivir aunque el
         // usuario salga sin pulsar Guardar. La función comprueba que URL/auth y
         // credenciales siguen siendo las de la conexión viva; nunca persiste
@@ -846,18 +821,25 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
           );
         } catch (e) {
           debugPrint(
-            '[instance-edit] no se pudo persistir la matriz verificada: $e',
+            '[instance-edit] capability storage failed (${e.runtimeType})',
           );
         }
         if (!mounted) return _diagnosticsSnapshot;
+        if (!current()) {
+          setState(() => _diagnosticError = s.sConnectionChanged);
+          return _diagnosticsSnapshot;
+        }
         setState(() {
           _gatewayResults = report.gateway;
           _dashboardResults = report.dashboard;
-          _bridgeResults = report.bridge;
+
           _suggestions = report.suggestions;
           _detectedMatrix = report.matrix;
           _serverCaps = report.serverCapabilities;
           _lastReport = report;
+          if (!report.matrix.dashboardAuthValid.isYes) {
+            _dashboardLoginVerified = false;
+          }
         });
         return _diagnosticsSnapshot;
       }
@@ -867,7 +849,7 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
       List<ProbeResult>? gwResults;
       ServerCapabilities? gwCaps;
       List<ProbeResult>? dashResults;
-      List<ProbeResult>? bridgeResults;
+
       if (gateway) {
         final (results, _, serverCaps) = await _diag!.probeGateway(conn);
         gwResults = results;
@@ -876,21 +858,19 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
       if (dashboard) {
         dashResults = await _diag!.probeDashboard(conn, secrets);
       }
-      if (bridge) {
-        bridgeResults = await _diag!.probeBridge(
-          conn,
-          bridgeUrl: _effectiveBridgeUrlFromForm(),
-          bridgeToken: _effectiveBridgeTokenFromForm,
-        );
-      }
+
       if (!mounted) return _diagnosticsSnapshot;
+      if (!current()) {
+        setState(() => _diagnosticError = s.sConnectionChanged);
+        return _diagnosticsSnapshot;
+      }
       setState(() {
         if (gwResults != null) {
           _gatewayResults = gwResults;
           _serverCaps = gwCaps;
         }
         if (dashResults != null) _dashboardResults = dashResults;
-        if (bridgeResults != null) _bridgeResults = bridgeResults;
+
         if (gateway || dashboard) {
           _suggestions = _diag!.buildSuggestions(
             s,
@@ -910,24 +890,22 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
     return _diagnosticsSnapshot;
   }
 
-  /// Estado de ánimo de la mascota según el diagnóstico actual.
-  HermesSparkMood _diagMood() => _diagnosticsSnapshot.mood(probing: _probing);
-
   /// Indicador NEUTRO del diagnóstico de conexión (sin mascota). El icono no
   /// depende solo del color: TalkBack recibe un estado localizado y explícito.
   Widget _diagIndicator() {
-    final mood = _diagMood();
     final s = Strings.of(context);
-    final label = switch (mood) {
-      HermesSparkMood.connecting ||
-      HermesSparkMood.thinking => s.ieDiagA11yChecking,
-      HermesSparkMood.success => s.ieDiagA11ySuccess,
-      HermesSparkMood.error => s.ieDiagA11yError,
-      HermesSparkMood.offline => s.ieDiagA11yOffline,
-      HermesSparkMood.idle ||
-      HermesSparkMood.waiting ||
-      HermesSparkMood.jump => s.ieDiagA11yUnchecked,
-    };
+    final label = _statusSentence(s);
+    final mood = _probing
+        ? CompanionMood.connecting
+        : label == s.sReady
+        ? CompanionMood.success
+        : label == s.sUnchecked
+        ? CompanionMood.idle
+        : label == s.o2MissingDashboard || label == s.o2ReadOnly
+        ? CompanionMood.waiting
+        : label == s.o2Unreachable
+        ? CompanionMood.offline
+        : CompanionMood.error;
     return Semantics(
       label: label,
       image: true,
@@ -939,40 +917,16 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
 
   // ── Guardar ───────────────────────────────────────────────────────────
 
-  String _diagnosticsSummary(Strings s) {
-    if (_probing) return s.ieConnectionCheckRunning;
-    if (!_diagnosticsSnapshot.hasAnyResults) {
-      return _detectedMatrix?.checkedAtMs == null
-          ? s.ieConnectionCheckSubtitle
-          : s.ieConnectionCheckSaved;
-    }
-    if (!_diagnosticsSnapshot.hasAllSurfaces) {
-      return s.ieConnectionCheckPartialSummary;
-    }
-    return switch (_diagMood()) {
-      HermesSparkMood.success => s.ieConnectionCheckReadySummary,
-      HermesSparkMood.offline => s.ieConnectionCheckOfflineSummary,
-      HermesSparkMood.error => s.ieConnectionCheckIssuesSummary,
-      _ => s.ieConnectionCheckSubtitle,
-    };
-  }
-
   Future<void> _openDiagnostics() async {
-    await _bridgeConfigLoad;
     if (!mounted) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => _InstanceDiagnosticsScreen(
           initial: _diagnosticsSnapshot,
           onRun: (scope) => switch (scope) {
-            _DiagnosticScope.all => _runProbe(
-              gateway: true,
-              dashboard: true,
-              bridge: true,
-            ),
+            _DiagnosticScope.all => _runProbe(gateway: true, dashboard: true),
             _DiagnosticScope.gateway => _runProbe(gateway: true),
             _DiagnosticScope.dashboard => _runProbe(dashboard: true),
-            _DiagnosticScope.bridge => _runProbe(bridge: true),
           },
         ),
       ),
@@ -995,6 +949,18 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
       setState(() => _error = Strings.of(context).ieGatewayTokenRequired);
       return;
     }
+    if (widget.verifyChatBeforeSave) {
+      await _runProbe(gateway: true, dashboard: true);
+      if (!mounted) return;
+      if (_diagnosticError != null ||
+          !(_lastReport?.gateway.any(
+                (p) => p.name == 'sessions' && p.status.isOk,
+              ) ??
+              false)) {
+        setState(() => _error = _statusSentence(Strings.of(context)));
+        return;
+      }
+    }
     setState(() {
       _saving = true;
       _error = null;
@@ -1004,8 +970,14 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
       // el mismo enlace de pairing.
       await _pairingAutomationFuture;
       if (!mounted) return;
-      await _bridgeConfigLoad;
       final (conn, _) = await _draftConnection();
+      if (!mounted) return;
+      // Capture the intended edits before the first persistence await. Blank
+      // secrets mean preserve the CURRENT stored value, not the initial model.
+      final gatewayKey = _gatewayTokenCtrl.text.trim();
+      final dashboardToken = _dashTokenCtrl.text.trim();
+      final dashboardUser = _dashUserCtrl.text.trim();
+      final dashboardPassword = _dashPassCtrl.text;
       final withCheck = _detectedMatrix?.checkedAtMs == null
           ? conn
           : SavedConnection(
@@ -1024,25 +996,29 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
               localChatMode: conn.localChatMode,
               kind: conn.kind,
             );
-      await widget.connManager.upsertConnection(withCheck);
+      await widget.connManager.upsertConnection(
+        withCheck.copyWith(apiKey: gatewayKey),
+      );
       await widget.connManager.setDashboardSecrets(
         conn.id,
-        sessionToken: _dashTokenCtrl.text.trim().isNotEmpty
-            ? _dashTokenCtrl.text.trim()
+        sessionToken: dashboardToken.isNotEmpty ? dashboardToken : null,
+        username:
+            (_isNew || _dashUserEdited || dashboardPassword.isNotEmpty) &&
+                dashboardUser.isNotEmpty
+            ? dashboardUser
             : null,
-        username: _dashUserCtrl.text.trim().isNotEmpty
-            ? _dashUserCtrl.text.trim()
-            : null,
-        password: _dashPassCtrl.text.isNotEmpty ? _dashPassCtrl.text : null,
-      );
-      await widget.connManager.setBridgeConfig(
-        conn.id,
-        url: _bridgeUrlCtrl.text,
-        token: _bridgeTokenCtrl.text,
+        password: dashboardPassword.isNotEmpty ? dashboardPassword : null,
       );
       final matrix = _detectedMatrix;
       if (matrix != null && matrix.checkedAtMs != null) {
         await widget.connManager.saveCapabilities(conn.id, matrix);
+      } else if (_dashboardLoginVerified) {
+        await widget.connManager.saveCapabilities(
+          conn.id,
+          capabilitiesAfterDashboardLogin(
+            widget.connManager.loadCapabilities(conn.id),
+          ),
+        );
       }
       // Una instancia recién dada de alta pasa a ser la ACTIVA: quien acaba de
       // emparejar quiere usarla ya (el home y Ajustes escuchan el notifier y
@@ -1059,299 +1035,796 @@ class _InstanceEditScreenState extends State<InstanceEditScreen> {
     }
   }
 
-  // ── UI ────────────────────────────────────────────────────────────────
+  // ── Connection screen S ─────────────────────────────────────────────
+
+  void _invalidateDiagnosis() {
+    _error = null;
+    _gatewayResults = null;
+    _dashboardResults = null;
+    _lastReport = null;
+    _detectedMatrix = null;
+    _diagnosticError = null;
+  }
+
+  void _onGatewayUrlChanged(String value) {
+    _dropLinkDashboardLoginIfRetargeted();
+    final normalized = SavedConnection.normalizeHostAndPort(value.trim(), 8642);
+    setState(() {
+      _gatewayTransport = TransportPrivacy.classify(value);
+      if (!_kindManuallySet) _kind = suggestInstanceKind(normalized.host);
+      if (_gatewayPortCtrl.text != normalized.port.toString()) {
+        _gatewayPortCtrl.text = normalized.port.toString();
+      }
+    });
+  }
+
+  Widget _field({
+    Key? key,
+    required TextEditingController controller,
+    required String label,
+    String? hint,
+    String? helper,
+    bool obscure = false,
+    bool autocorrect = true,
+    TextInputType? keyboardType,
+    int? maxLines = 1,
+    ValueChanged<String>? onChanged,
+    bool paste = false,
+  }) => Padding(
+    padding: const EdgeInsets.all(design.HermesSpace.x3),
+    child: HermesField(
+      fieldKey: key,
+      controller: controller,
+      label: label,
+      hint: hint,
+      helperText: helper,
+      obscure: obscure,
+      autocorrect: autocorrect,
+      enableSuggestions: !obscure,
+      enableIMEPersonalizedLearning: !obscure,
+      keyboardType: keyboardType,
+      maxLines: maxLines,
+      textInputAction: maxLines == 1
+          ? TextInputAction.next
+          : TextInputAction.newline,
+      suffix: paste
+          ? IconButton(
+              tooltip: Strings.of(context).sPaste,
+              icon: const Icon(Icons.content_paste),
+              onPressed: () => _pasteField(controller, onChanged),
+            )
+          : null,
+      onChanged: (value) {
+        _invalidateDiagnosis();
+        onChanged?.call(value);
+        setState(() {});
+      },
+    ),
+  );
+
+  Future<void> _pasteField(
+    TextEditingController controller,
+    ValueChanged<String>? onChanged,
+  ) async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      if (!mounted || data?.text == null) return;
+      setState(() {
+        controller.text = data!.text!;
+        _invalidateDiagnosis();
+        onChanged?.call(controller.text);
+      });
+    } catch (_) {
+      if (mounted) {
+        HermesNotice.show(
+          context,
+          message: Strings.of(context).o2ClipboardFailed,
+          kind: HermesNoticeKind.error,
+        );
+      }
+    }
+  }
+
+  Future<void> _pastePairing() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      if (!mounted) return;
+      final link = PairingLink.tryParse(data?.text ?? '');
+      if (link == null) {
+        setState(() => _error = Strings.of(context).o2InvalidCode);
+      } else {
+        await _applyLink(link, notify: true);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = Strings.of(context).o2ClipboardFailed);
+      }
+    }
+  }
+
+  Future<void> _changePassword() async {
+    final saved = widget.initial;
+    if (saved == null ||
+        saved.dashboardAuthMode != AuthMode.basicAuth ||
+        _readOnly) {
+      return;
+    }
+    final epoch = _dashboardAuthorityEpoch;
+    final revision = widget.connManager.connectionRevisionFor(saved.id).value;
+    final profile = widget.connManager.activeProfileRevisionFor(saved.id).value;
+    bool current() =>
+        mounted &&
+        epoch == _dashboardAuthorityEpoch &&
+        widget.connManager.getConnections().any(
+          (c) => c.id == saved.id && !c.readOnly,
+        ) &&
+        widget.connManager.connectionRevisionFor(saved.id).value == revision &&
+        widget.connManager.activeProfileRevisionFor(saved.id).value == profile;
+    try {
+      final (draft, _) = await _draftConnection();
+      if (!mounted || !current()) return;
+      if (draft.gatewayUrl != saved.gatewayUrl ||
+          draft.effectiveDashboardUrl != saved.effectiveDashboardUrl) {
+        setState(() => _error = Strings.of(context).sPasswordSaveConnection);
+        return;
+      }
+      final updated = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => DashboardPasswordScreen(
+            connection: saved,
+            connManager: widget.connManager,
+            authorityCurrent: current,
+          ),
+        ),
+      );
+      if (updated != true || !mounted || epoch != _dashboardAuthorityEpoch) {
+        return;
+      }
+      final secrets = await widget.connManager.getDashboardSecrets(saved.id);
+      if (!mounted || epoch != _dashboardAuthorityEpoch) return;
+      setState(() {
+        _dashUserCtrl.text = secrets.username ?? '';
+        _dashPassCtrl.clear();
+        _dashUserEdited = false;
+        _invalidateDiagnosis();
+      });
+      if (mounted) {
+        HermesNotice.show(
+          context,
+          message: Strings.of(context).sPasswordSaved,
+          kind: HermesNoticeKind.success,
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = Strings.of(context).sPasswordSaveFailed);
+      }
+    }
+  }
+
+  void _setGatewayPort(String value) {
+    final port = int.tryParse(value);
+    if (port == null || port < 1 || port > 65535) return;
+    final old = SavedConnection.normalizeHostAndPort(
+      _gatewayUrlCtrl.text.trim(),
+      8642,
+    );
+    if (old.host.isEmpty) return;
+    _gatewayUrlCtrl.text = Uri(
+      scheme: old.useHttps ? 'https' : 'http',
+      host: old.host,
+      port: port,
+    ).toString();
+    _onGatewayUrlChanged(_gatewayUrlCtrl.text);
+  }
+
+  void _setDashboardPort(String value) {
+    final port = int.tryParse(value);
+    if (port == null || port < 1 || port > 65535) return;
+    final uri = Uri.tryParse(
+      _dashboardUrlCtrl.text.trim().isEmpty
+          ? _effectiveDashboardUrl
+          : _dashboardUrlCtrl.text.trim(),
+    );
+    if (uri == null || uri.host.isEmpty) return;
+    _dashboardUrlCtrl.text = uri.replace(port: port).toString();
+    _dropLinkDashboardLoginIfRetargeted();
+  }
+
+  String get _effectiveDashboardUrl {
+    final normalized = SavedConnection.normalizeHostAndPort(
+      _gatewayUrlCtrl.text.trim(),
+      8642,
+    );
+    return SavedConnection(
+      id: _draftId,
+      label: '',
+      host: normalized.host,
+      port: normalized.port,
+      apiKey: '',
+      useHttps: normalized.useHttps,
+      dashboardUrl: _dashboardUrlCtrl.text.trim().isEmpty
+          ? null
+          : _dashboardUrlCtrl.text.trim(),
+    ).effectiveDashboardUrl;
+  }
+
+  bool get _requiresDashboardConsent {
+    if (_dashPassCtrl.text.isEmpty && _dashTokenCtrl.text.trim().isEmpty) {
+      return false;
+    }
+    final url = _effectiveDashboardUrl;
+    if (TransportPrivacy.classify(url) !=
+        TransportPrivacyClass.privateCleartext) {
+      return false;
+    }
+    final host = Uri.tryParse(url)?.host ?? '';
+    return host != 'localhost' &&
+        !(InternetAddress.tryParse(host)?.isLoopback ?? false);
+  }
+
+  void _setEncrypted(bool value) {
+    final normalized = SavedConnection.normalizeHostAndPort(
+      _gatewayUrlCtrl.text.trim(),
+      8642,
+    );
+    if (normalized.host.isEmpty) return;
+    _gatewayUrlCtrl.text = Uri(
+      scheme: value ? 'https' : 'http',
+      host: normalized.host,
+      port: normalized.port,
+    ).toString();
+    _onGatewayUrlChanged(_gatewayUrlCtrl.text);
+    _invalidateDiagnosis();
+  }
+
+  Future<void> _chooseAuth() async {
+    final s = Strings.of(context);
+    final mode = await showHermesOptions<AuthMode>(
+      context: context,
+      title: s.ieDashboardAuth,
+      selected: _dashAuthMode,
+      options: [
+        HermesOption(
+          value: AuthMode.sessionToken,
+          label: s.ieDashboardAuthSession,
+        ),
+        HermesOption(value: AuthMode.basicAuth, label: s.ieDashboardAuthBasic),
+      ],
+    );
+    if (mode == null || !mounted) return;
+    _dashboardAuthorityChanged();
+    setState(() {
+      _dashAuthMode = mode;
+      _invalidateDiagnosis();
+    });
+  }
+
+  Future<void> _delete() async {
+    final connection = widget.initial;
+    if (connection == null) return;
+    final s = Strings.of(context);
+    final confirmed = await design.showHermesDialog<bool>(
+      context: context,
+      title: s.sRemoveTitle,
+      message: s.sRemoveBody(connection.label),
+      actions: [
+        design.HermesDialogAction(
+          label: s.commonCancel,
+          value: false,
+          style: design.HermesDialogActionStyle.cancel,
+        ),
+        design.HermesDialogAction(
+          label: s.sRemove,
+          value: true,
+          style: design.HermesDialogActionStyle.destructive,
+        ),
+      ],
+    );
+    if (confirmed != true || !mounted) return;
+    await widget.connManager.deleteConnection(connection.id);
+    if (mounted) {
+      Navigator.of(context).pop(true);
+    }
+  }
+
+  String _statusSentence(Strings s) {
+    if (_probing) return s.sChecking;
+    if (_diagnosticError != null) return _diagnosticError!;
+    final gateway = _gatewayResults;
+    if (gateway == null) return s.sUnchecked;
+    if (gateway.any(
+      (r) =>
+          r.status == ProbeStatus.authInvalid ||
+          r.status == ProbeStatus.authRequired,
+    )) {
+      return s.sChatKeyRejected;
+    }
+    if (gateway.any((r) => r.status == ProbeStatus.tlsError)) {
+      return s.sCertificate;
+    }
+    if (gateway.any(
+      (r) =>
+          (r.name == 'health' || r.name == 'sessions') &&
+          {
+            ProbeStatus.timeout,
+            ProbeStatus.dnsError,
+            ProbeStatus.refused,
+            ProbeStatus.error,
+          }.contains(r.status),
+    )) {
+      return s.o2Unreachable;
+    }
+    if (!gateway.any((r) => r.name == 'sessions' && r.status.isOk)) {
+      return s.sWrongChatAddress;
+    }
+    final dashboard = _dashboardResults;
+    if (dashboard?.any((r) => r.status == ProbeStatus.tlsError) == true) {
+      return s.sCertificate;
+    }
+    if (dashboard?.any((r) => r.name == 'status' && !r.status.isOk) == true) {
+      return s.sDashboardUnreachable;
+    }
+    if (dashboard == null ||
+        !dashboard.any((r) => r.name == 'auth' && r.status.isOk) ||
+        dashboard.any(
+          (r) =>
+              r.status == ProbeStatus.authInvalid ||
+              r.status == ProbeStatus.authRequired,
+        )) {
+      return s.o2MissingDashboard;
+    }
+    if (_readOnly ||
+        (_detectedMatrix?.chatSupported.isNo == true &&
+            _detectedMatrix?.sessionsWrite.isNo == true)) {
+      return s.o2ReadOnly;
+    }
+    return s.sReady;
+  }
+
+  /// Cleartext is normal inside a private network (a quiet footnote) and
+  /// never allowed over the public internet (a warning, and the save refuses).
+  Widget _transportNote(Strings s, HermesThemeColors colors) {
+    if (_gatewayUrlCtrl.text.trim().isEmpty) return const SizedBox.shrink();
+    switch (_gatewayTransport) {
+      case TransportPrivacyClass.secure:
+        return const SizedBox.shrink();
+      case TransportPrivacyClass.privateCleartext:
+        return Padding(
+          key: const ValueKey('instance-cleartext-private'),
+          padding: const EdgeInsets.fromLTRB(
+            design.HermesSpace.x1,
+            design.HermesSpace.x2,
+            design.HermesSpace.x1,
+            0,
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.lock_open_outlined,
+                size: 14,
+                color: colors.textSecondary,
+              ),
+              const SizedBox(width: design.HermesSpace.x2),
+              Expanded(
+                child: Text(
+                  s.commonCleartextPrivate,
+                  style: design.HermesType.support.copyWith(
+                    color: colors.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      case TransportPrivacyClass.publicCleartext:
+        return Padding(
+          padding: const EdgeInsets.only(top: design.HermesSpace.x3),
+          child: HermesInfoBanner(
+            s.commonCleartextPublic,
+            key: const ValueKey('instance-cleartext-public'),
+            icon: Icons.warning_amber_outlined,
+            tone: colors.warning,
+          ),
+        );
+    }
+  }
+
+  Widget _question(String text) => Padding(
+    padding: const EdgeInsets.fromLTRB(4, 24, 4, 8),
+    child: Semantics(
+      header: true,
+      child: Text(
+        text,
+        style: design.HermesType.title.copyWith(
+          color: Theme.of(context).hermes.textPrimary,
+        ),
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).hermes;
     final s = Strings.of(context);
-    return Scaffold(
-      appBar: HermesAppBar(
-        // Título estándar del tema (color/peso/espaciado/tamaño coherentes con
-        // el resto): sin estilo inline que lo descuadre frente a otras pantallas.
-        title: Text(_isNew ? s.ieNewInstanceTitle : s.homeEditInstance),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
+    final colors = Theme.of(context).hermes;
+    final user = _dashUserCtrl.text.trim();
+    final normalized = SavedConnection.normalizeHostAndPort(
+      _gatewayUrlCtrl.text.trim(),
+      8642,
+    );
+    return design.HermesPage(
+      title: _isNew ? s.sNewConnection : widget.initial!.label,
+      listKey: const ValueKey('instance-editor-scroll'),
+      // The list ends above Save, which sits on the page itself like every
+      // other form's: it never covers a row, and it rides above the keyboard.
+      wrapBody: (body) => Column(
         children: [
-          if (_error != null) ...[
-            const SizedBox(height: 8),
-            HermesInfoBanner(
+          Expanded(child: design.HermesFadedEnd(child: body)),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              design.HermesSpace.pageH,
+              design.HermesSpace.x2,
+              design.HermesSpace.pageH,
+              design.HermesSpace.x4 + MediaQuery.paddingOf(context).bottom,
+            ),
+            child: HermesPrimaryButton(
+              key: const ValueKey('instance-save'),
+              label: _saving ? s.ieSaving : s.commonSave,
+              icon: Icons.save_outlined,
+              onTap: _saving || _probing ? null : _save,
+            ),
+          ),
+        ],
+      ),
+      children: [
+        if (_error != null)
+          Semantics(
+            liveRegion: true,
+            child: HermesInfoBanner(
               _error!,
               icon: Icons.error_outline,
               tone: colors.error,
             ),
-          ],
-          if (_showDeepLinkBanner) ...[
-            const SizedBox(height: 8),
-            HermesInfoBanner(
-              s.ieExternalLinkBanner,
-              icon: Icons.link,
-              tone: colors.warning,
-            ),
-          ],
-          if (widget.initial == null) ...[
-            const SizedBox(height: 8),
-            FilledButton.tonalIcon(
-              onPressed: _scanQr,
-              icon: const Icon(Icons.qr_code_scanner),
-              label: Text(Strings.of(context).qrScanTitle),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              Strings.of(context).instQrFasterHint,
-              style: TextStyle(fontSize: 12, color: colors.textSecondary),
-            ),
-            const SizedBox(height: 8),
-          ],
-          HermesSectionHeader(s.ieSectionGeneral),
-          TextField(
-            controller: _nameCtrl,
-            decoration: InputDecoration(labelText: Strings.of(context).ieName),
           ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _notesCtrl,
-            maxLines: 2,
-            minLines: 1,
-            decoration: InputDecoration(
-              labelText: Strings.of(context).ieNote,
-              hintText: Strings.of(context).ieNoteHint,
-            ),
-          ),
-          const SizedBox(height: 4),
-          HermesSwitchTile(
-            contentPadding: EdgeInsets.zero,
-            title: Strings.of(context).ieReadOnly,
-            subtitle: Strings.of(context).ieReadOnlySub,
-            value: _readOnly,
-            onChanged: (v) => setState(() => _readOnly = v),
-          ),
-          if (_kind == InstanceKind.localhost) ...[
-            const SizedBox(height: 8),
-            DropdownButtonFormField<LocalChatMode>(
-              initialValue: _localChatMode,
-              style: Theme.of(context).dropdownMenuTheme.textStyle,
-              decoration: InputDecoration(
-                labelText: Strings.of(context).ieLocalChatMode,
-              ),
-              items: LocalChatMode.values
-                  .map(
-                    (m) => DropdownMenuItem(
-                      value: m,
-                      child: Text(switch (m) {
-                        LocalChatMode.auto => s.ieLocalModeAuto,
-                        LocalChatMode.simple => s.ieLocalModeSimple,
-                        LocalChatMode.agent => s.ieLocalModeAgent,
-                      }, style: const TextStyle(fontSize: 14)),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (v) {
-                if (v != null) setState(() => _localChatMode = v);
-              },
-            ),
-            if (_localChatMode != LocalChatMode.agent)
-              Padding(
-                padding: const EdgeInsets.only(top: 4, left: 2),
-                child: Text(
-                  _localChatMode == LocalChatMode.auto
-                      ? Strings.of(context).instChatSimpleAuto
-                      : Strings.of(context).instChatSimpleNoTools,
-                  style: TextStyle(fontSize: 11.5, color: colors.textSecondary),
-                ),
-              ),
-          ],
-          HermesSectionHeader(s.ieSectionGateway),
-          TextField(
-            key: const ValueKey('instance-gateway-url'),
-            controller: _gatewayUrlCtrl,
-            autocorrect: false,
-            keyboardType: TextInputType.url,
-            decoration: InputDecoration(
-              labelText: Strings.of(context).ieGatewayUrl,
-              hintText: s.ieGatewayUrlHint,
-            ),
-            onChanged: (v) {
-              final transport = TransportPrivacy.classify(v);
-              InstanceKind? inferred;
-              if (!_kindManuallySet) {
-                final n = SavedConnection.normalizeHostAndPort(v.trim(), 8642);
-                final candidate = inferInstanceKind(n.host);
-                if (candidate != _kind) inferred = candidate;
-              }
-              if (transport != _gatewayTransport ||
-                  inferred != null ||
-                  _showDeepLinkBanner) {
-                setState(() {
-                  _gatewayTransport = transport;
-                  if (inferred != null) _kind = inferred;
-                  // El usuario ya tocó la URL: deja de avisar de precarga.
-                  _showDeepLinkBanner = false;
-                });
-              }
-            },
-          ),
-          if (_gatewayUrlCtrl.text.trim().isNotEmpty) ...[
-            const SizedBox(height: 8),
-            _TransportPrivacyNote(transport: _gatewayTransport),
-          ],
-          const SizedBox(height: 10),
-          TextField(
-            key: const ValueKey('instance-gateway-token'),
-            controller: _gatewayTokenCtrl,
-            obscureText: true,
-            decoration: InputDecoration(
-              labelText: _isNew
-                  ? Strings.of(context).ieGatewayToken
-                  : Strings.of(context).ieGatewayTokenEmpty,
-            ),
-          ),
-          const SizedBox(height: 4),
-          const ApiKeyHelpLink(),
-          HermesSectionHeader(s.ieSectionBridge),
-          HermesInfoBanner(s.ieBridgeQrHint, icon: Icons.hub_outlined),
-          const SizedBox(height: 10),
-          TextField(
-            key: const ValueKey('instance-bridge-token'),
-            controller: _bridgeTokenCtrl,
-            obscureText: true,
-            autocorrect: false,
-            enableSuggestions: false,
-            decoration: InputDecoration(
-              labelText: _isNew ? s.bridgeToken : s.ieBridgeTokenEmpty,
-              hintText: s.bridgeTokenHint,
-            ),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            key: const ValueKey('instance-bridge-url'),
-            controller: _bridgeUrlCtrl,
-            autocorrect: false,
-            keyboardType: TextInputType.url,
-            decoration: InputDecoration(
-              labelText: s.bridgeUrlAdvanced,
-              hintText:
-                  _effectiveBridgeUrlFromForm() ?? 'http://100.x.x.x:9131',
-              helperText: s.ieBridgeUrlEmptyHint,
-              helperMaxLines: 2,
-            ),
-            onChanged: (_) => setState(() => _bridgeUrlEdited = true),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            s.bridgeTokenNote,
-            style: TextStyle(fontSize: 11, color: colors.textDisabled),
-          ),
-          HermesSectionHeader(s.ieSectionDashboard),
-          TextField(
-            controller: _dashboardUrlCtrl,
-            autocorrect: false,
-            keyboardType: TextInputType.url,
-            decoration: InputDecoration(
-              labelText: Strings.of(context).ieDashboardUrl,
-              hintText:
-                  widget.initial?.effectiveDashboardUrl ?? s.ieDashboardUrlHint,
-            ),
-          ),
-          const SizedBox(height: 10),
-          // Camino recomendado: un toque, sin teclear nada. Provisiona el
-          // bridge, fija una contraseña nueva y la deja cargada (visible).
-          FilledButton.icon(
-            onPressed: _autoDashBusy ? null : _confirmAndAutoConfigureDashboard,
-            icon: _autoDashBusy
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.auto_fix_high_outlined),
-            label: Text(Strings.of(context).ieAutoconfigDash),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _setupDashboardViaBridge,
-            icon: const Icon(Icons.key_outlined),
-            label: Text(Strings.of(context).instDashPwBridge),
-          ),
-          Text(
-            Strings.of(context).instDashPwHint,
-            style: TextStyle(fontSize: 12, color: colors.textSecondary),
-          ),
-          // Solo Basic Auth: usuario + contraseña, siempre visibles.
-          const SizedBox(height: 10),
-          TextField(
-            controller: _dashUserCtrl,
-            autocorrect: false,
-            decoration: InputDecoration(
-              labelText: Strings.of(context).commonUser,
-            ),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _dashPassCtrl,
-            obscureText: true,
-            decoration: InputDecoration(
-              labelText: _isNew
-                  ? Strings.of(context).commonPassword
-                  : Strings.of(context).iePasswordEmpty,
-            ),
-          ),
-          const SizedBox(height: 8),
+        if (_appliedLink != null)
           HermesInfoBanner(
-            Strings.of(context).ieDashboardProtected,
-            icon: Icons.shield_outlined,
-            tone: colors.warning,
+            pairingLinkSummary(s, _appliedLink!),
+            key: const ValueKey('pairing-link-summary'),
+            icon: Icons.link,
           ),
-          HermesSectionHeader(s.ieSectionType),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: InstanceKind.values.map((k) {
-              final sel = k == _kind;
-              return ChoiceChip(
-                label: Text(
-                  k.label,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: sel ? colors.onAccent : colors.textSecondary,
+        design.HermesListGroup(
+          children: [
+            design.HermesListRow(
+              title: s.sTestConnection,
+              key: const ValueKey('instance-test'),
+              icon: Icons.wifi_tethering,
+              trailing: _diagIndicator(),
+              onTap: _probing
+                  ? null
+                  : () => _runProbe(gateway: true, dashboard: true),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+              child: Semantics(
+                liveRegion: true,
+                child: Text(
+                  _statusSentence(s),
+                  key: const ValueKey('instance-connection-status'),
+                  style: design.HermesType.text.copyWith(
+                    color: colors.textSecondary,
                   ),
                 ),
-                selected: sel,
-                selectedColor: colors.accent,
-                visualDensity: VisualDensity.compact,
-                onSelected: (_) => setState(() {
-                  _kind = k;
-                  _kindManuallySet = true;
-                }),
-              );
-            }).toList(),
-          ),
-          HermesSectionHeader(s.ieConnectionCheckTitle),
-          HermesGroup(
-            children: [
-              _DiagnosticsEntry(
-                title: s.ieConnectionCheckAction,
-                subtitle: _diagnosticsSummary(s),
-                indicator: _diagIndicator(),
-                onTap: _probing ? null : _openDiagnostics,
               ),
+            ),
+            design.HermesListRow(
+              title: s.sDetails,
+              key: const ValueKey('instance-details'),
+              icon: Icons.info_outline,
+              onTap: _openDiagnostics,
+            ),
+          ],
+        ),
+        _question(s.sWhere),
+        design.HermesListGroup(
+          dividerIndent: 14,
+          children: [
+            _field(
+              key: const ValueKey('instance-name'),
+              controller: _nameCtrl,
+              label: s.ieName,
+            ),
+            _field(
+              key: const ValueKey('instance-gateway-url'),
+              controller: _gatewayUrlCtrl,
+              label: s.ieGatewayUrl,
+              hint: s.sAddressHint,
+              autocorrect: false,
+              keyboardType: TextInputType.url,
+              onChanged: _onGatewayUrlChanged,
+              paste: true,
+            ),
+          ],
+        ),
+        _transportNote(s, colors),
+        // Still the first block's: where the Hermes is, and what kind of
+        // place it is. Same row as the first-run confirmation.
+        Padding(
+          padding: const EdgeInsets.only(top: design.HermesSpace.x3),
+          child: KeyedSubtree(
+            key: const ValueKey('instance-icon'),
+            child: InstanceKindPicker(
+              value: _kind,
+              onChanged: (v) => setState(() {
+                _kind = v;
+                _kindManuallySet = true;
+              }),
+            ),
+          ),
+        ),
+        _question(s.sAccess),
+        design.HermesListGroup(
+          dividerIndent: 14,
+          children: [
+            if (_isNew)
+              _field(
+                key: const ValueKey('instance-gateway-token'),
+                controller: _gatewayTokenCtrl,
+                label: s.ieGatewayToken,
+                obscure: true,
+                autocorrect: false,
+                paste: true,
+              ),
+            design.HermesListRow(
+              title: s.o2SignIn,
+              key: const ValueKey('instance-dashboard-sign-in'),
+              icon: Icons.login,
+              subtitle: user.isNotEmpty
+                  ? s.sDashboardUser(user)
+                  : _hasStoredDashboardAccess
+                  ? s.sSavedAccess
+                  : s.sSignInNeeded,
+              onTap: _autoDashBusy ? null : _setupDashboardLogin,
+            ),
+            if (!_isNew &&
+                widget.initial!.dashboardAuthMode == AuthMode.basicAuth)
+              design.HermesListRow(
+                title: s.sPasswordTitle,
+                icon: Icons.password_outlined,
+                key: const ValueKey('instance-change-password'),
+                onTap: _readOnly || widget.initial!.readOnly
+                    ? null
+                    : _changePassword,
+              ),
+          ],
+        ),
+        // Outside the group: a tile on a decorated surface hides its ink.
+        if (_requiresDashboardConsent)
+          CheckboxListTile(
+            key: const ValueKey('instance-http-consent'),
+            value: _dashboardHttpConsent,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+            controlAffinity: ListTileControlAffinity.leading,
+            title: Text(s.dashboardSetupCredentialConsent),
+            onChanged: (v) => setState(() => _dashboardHttpConsent = v == true),
+          ),
+        _question(s.sOptions),
+        design.HermesListGroup(
+          children: [
+            design.HermesListRow(
+              title: s.sScanNewCode,
+              icon: Icons.qr_code_scanner,
+              key: const ValueKey('instance-scan'),
+              onTap: _scanQr,
+            ),
+            design.HermesListRow(
+              title: s.qrPasteLink,
+              icon: Icons.content_paste,
+              key: const ValueKey('instance-paste-code'),
+              onTap: _pastePairing,
+            ),
+            design.HermesListRow(
+              title: s.sAdvanced,
+              icon: Icons.tune,
+              key: const ValueKey('instance-advanced'),
+              trailing: Icon(
+                _advancedExpanded ? Icons.expand_less : Icons.expand_more,
+              ),
+              onTap: () =>
+                  setState(() => _advancedExpanded = !_advancedExpanded),
+            ),
+          ],
+        ),
+        if (_advancedExpanded) ...[
+          const SizedBox(height: design.HermesSpace.x3),
+          design.HermesListGroup(
+            dividerIndent: 14,
+            children: [
+              _field(
+                key: const ValueKey('instance-chat-port'),
+                controller: _gatewayPortCtrl,
+                label: s.sChatPort,
+                keyboardType: TextInputType.number,
+                onChanged: _setGatewayPort,
+              ),
+              _field(
+                key: const ValueKey('instance-dashboard-port'),
+                controller: _dashboardPortCtrl,
+                label: s.sDashboardPort,
+                keyboardType: TextInputType.number,
+                onChanged: _setDashboardPort,
+              ),
+              if (!_isNew)
+                _field(
+                  key: const ValueKey('instance-gateway-token'),
+                  controller: _gatewayTokenCtrl,
+                  label: s.ieGatewayTokenEmpty,
+                  obscure: true,
+                  autocorrect: false,
+                  paste: true,
+                ),
+              design.HermesListRow(
+                title: s.sEncrypted,
+                subtitle: 'HTTPS',
+                onTap: () => _setEncrypted(!normalized.useHttps),
+                trailing: Semantics(
+                  label: s.sEncrypted,
+                  child: Switch(
+                    value: normalized.useHttps,
+                    onChanged: _setEncrypted,
+                  ),
+                ),
+              ),
+              _field(
+                key: const ValueKey('instance-dashboard-url'),
+                controller: _dashboardUrlCtrl,
+                label: s.ieDashboardUrl,
+                hint: _effectiveDashboardUrl,
+                autocorrect: false,
+                keyboardType: TextInputType.url,
+                onChanged: (_) => _dropLinkDashboardLoginIfRetargeted(),
+                paste: true,
+              ),
+              HermesSelectRow(
+                key: const ValueKey('dashboard-manual-auth-mode'),
+                title: s.ieDashboardAuth,
+                value: switch (_dashAuthMode) {
+                  AuthMode.sessionToken => s.ieDashboardAuthSession,
+                  AuthMode.basicAuth => s.ieDashboardAuthBasic,
+                  AuthMode.cookieSession => s.ieDashboardAuthAuto,
+                  _ => s.sSignInNeeded,
+                },
+                onTap: _chooseAuth,
+              ),
+              if (_dashAuthMode == AuthMode.basicAuth ||
+                  _dashAuthMode == AuthMode.unknown) ...[
+                _field(
+                  key: const ValueKey('dashboard-manual-user'),
+                  controller: _dashUserCtrl,
+                  label: s.commonUser,
+                  autocorrect: false,
+                  onChanged: (_) {
+                    _dashUserEdited = true;
+                    if (_dashUserCtrl.text.trim().isNotEmpty) {
+                      _dashAuthMode = AuthMode.basicAuth;
+                    }
+                  },
+                ),
+                _field(
+                  key: const ValueKey('dashboard-manual-password'),
+                  controller: _dashPassCtrl,
+                  label: _isNew ? s.commonPassword : s.iePasswordEmpty,
+                  obscure: true,
+                  autocorrect: false,
+                  paste: true,
+                  onChanged: (_) {
+                    if (_dashPassCtrl.text.isNotEmpty) {
+                      _dashAuthMode = AuthMode.basicAuth;
+                    }
+                  },
+                ),
+              ],
+              if (_dashAuthMode == AuthMode.sessionToken)
+                _field(
+                  key: const ValueKey('dashboard-manual-token'),
+                  controller: _dashTokenCtrl,
+                  label: s.dashboardSetupSessionToken,
+                  obscure: true,
+                  autocorrect: false,
+                  paste: true,
+                ),
+              design.HermesListRow(
+                title: s.sBrowserSignIn,
+                icon: Icons.open_in_browser,
+                key: const ValueKey('instance-oauth'),
+                onTap: _setupDashboardLogin,
+              ),
+              design.HermesListRow(
+                title: s.ieReadOnly,
+                subtitle: s.ieReadOnlySub,
+                key: const ValueKey('instance-read-only'),
+                onTap: () => setState(() => _readOnly = !_readOnly),
+                trailing: Semantics(
+                  label: s.ieReadOnly,
+                  child: Switch(
+                    value: _readOnly,
+                    onChanged: (v) => setState(() => _readOnly = v),
+                  ),
+                ),
+              ),
+              _field(
+                key: const ValueKey('instance-note'),
+                controller: _notesCtrl,
+                label: s.ieNote,
+                maxLines: null,
+              ),
+              if (_kind == InstanceKind.localhost)
+                Padding(
+                  padding: const EdgeInsets.all(design.HermesSpace.x3),
+                  child: design.HermesSelectField<LocalChatMode>(
+                    key: const ValueKey('instance-local-chat-mode'),
+                    value: _localChatMode,
+                    decoration: InputDecoration(labelText: s.ieLocalChatMode),
+                    options: [
+                      for (final m in LocalChatMode.values)
+                        design.HermesOption(
+                          value: m,
+                          label: switch (m) {
+                            LocalChatMode.auto => s.ieLocalModeAuto,
+                            LocalChatMode.simple => s.ieLocalModeSimple,
+                            LocalChatMode.agent => s.ieLocalModeAgent,
+                          },
+                        ),
+                    ],
+                    onChanged: (v) => setState(() => _localChatMode = v),
+                  ),
+                ),
             ],
           ),
-          const SizedBox(height: 20),
-          HermesPrimaryButton(
-            key: const ValueKey('instance-save'),
-            label: _saving ? s.ieSaving : s.ieSaveInstance,
-            icon: Icons.save_outlined,
-            onTap: _saving ? null : _save,
+          const ApiKeyHelpLink(),
+          design.HermesListRow(
+            title: s.o2SetupByHand,
+            icon: Icons.terminal,
+            key: const ValueKey('instance-by-hand-help'),
+            onTap: () => Navigator.of(context).push<void>(
+              MaterialPageRoute(builder: (_) => const ManualSetupPage()),
+            ),
+          ),
+          design.HermesListRow(
+            title: s.ieDiagCopyBtn,
+            icon: Icons.copy_outlined,
+            key: const ValueKey('instance-copy-diagnostic'),
+            onTap: _lastReport == null
+                ? null
+                : () {
+                    Clipboard.setData(
+                      ClipboardData(text: _safeDiagnosticCopy(_lastReport!, s)),
+                    );
+                    HermesNotice.show(context, message: s.ieDiagCopied);
+                  },
           ),
         ],
-      ),
+        if (!_isNew)
+          Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: design.HermesListGroup(
+              children: [
+                design.HermesListRow(
+                  title: s.sRemoveTitle,
+                  destructive: true,
+                  icon: Icons.delete_outline,
+                  key: const ValueKey('instance-delete'),
+                  onTap: _saving ? null : _delete,
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }
 
-enum _DiagnosticScope { all, gateway, dashboard, bridge }
+enum _DiagnosticScope { all, gateway, dashboard }
 
 typedef _DiagnosticsRunner =
     Future<_DiagnosticsSnapshot> Function(_DiagnosticScope scope);
@@ -1360,7 +1833,10 @@ enum _DiagnosticSurfaceState { unchecked, ready, attention, offline }
 
 _DiagnosticSurfaceState _surfaceState(List<ProbeResult>? results) {
   final checked = (results ?? const <ProbeResult>[])
-      .where((result) => result.status != ProbeStatus.skipped)
+      .where(
+        (result) =>
+            result.status != ProbeStatus.skipped && !result.absentOptional,
+      )
       .toList();
   if (checked.isEmpty) return _DiagnosticSurfaceState.unchecked;
   const offline = {
@@ -1385,7 +1861,7 @@ _DiagnosticSurfaceState _surfaceState(List<ProbeResult>? results) {
 class _DiagnosticsSnapshot {
   final List<ProbeResult>? gateway;
   final List<ProbeResult>? dashboard;
-  final List<ProbeResult>? bridge;
+
   final List<String> suggestions;
   final CapabilityMatrix? matrix;
   final ServerCapabilities? serverCapabilities;
@@ -1395,7 +1871,7 @@ class _DiagnosticsSnapshot {
   const _DiagnosticsSnapshot({
     required this.gateway,
     required this.dashboard,
-    required this.bridge,
+
     required this.suggestions,
     required this.matrix,
     required this.serverCapabilities,
@@ -1403,98 +1879,37 @@ class _DiagnosticsSnapshot {
     required this.error,
   });
 
-  bool get hasAnyResults =>
-      gateway != null || dashboard != null || bridge != null;
+  bool get hasAnyResults => gateway != null || dashboard != null;
 
-  bool get hasAllSurfaces =>
-      gateway != null && dashboard != null && bridge != null;
+  bool get hasAllSurfaces => gateway != null && dashboard != null;
 
   List<_DiagnosticSurfaceState> get surfaceStates => [
     _surfaceState(gateway),
     _surfaceState(dashboard),
-    _surfaceState(bridge),
   ];
 
-  HermesSparkMood mood({bool probing = false}) {
-    if (probing) return HermesSparkMood.connecting;
+  CompanionMood mood({bool probing = false}) {
+    if (probing) return CompanionMood.connecting;
     final states = surfaceStates;
     if (states.every((state) => state == _DiagnosticSurfaceState.unchecked)) {
-      return HermesSparkMood.idle;
+      return CompanionMood.idle;
     }
     if (states.any((state) => state == _DiagnosticSurfaceState.offline)) {
-      return HermesSparkMood.offline;
+      return CompanionMood.offline;
     }
     if (states.any((state) => state == _DiagnosticSurfaceState.attention)) {
-      return HermesSparkMood.error;
+      return CompanionMood.error;
     }
     if (states.every((state) => state == _DiagnosticSurfaceState.ready)) {
-      return HermesSparkMood.success;
+      return CompanionMood.success;
     }
-    return HermesSparkMood.waiting;
+    return CompanionMood.waiting;
   }
 }
 
 /// En el editor solo queda esta fila: guardar una instancia ya no queda
 /// enterrado bajo endpoints, badges y cuatro botones técnicos. El detalle vive
 /// en una pantalla propia, pero el estado sigue siendo visible de un vistazo.
-class _DiagnosticsEntry extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final Widget indicator;
-  final VoidCallback? onTap;
-
-  const _DiagnosticsEntry({
-    required this.title,
-    required this.subtitle,
-    required this.indicator,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).hermes;
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-        child: Row(
-          children: [
-            indicator,
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w600,
-                      color: colors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    subtitle,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      height: 1.35,
-                      color: colors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(Icons.chevron_right, size: 18, color: colors.textDisabled),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _InstanceDiagnosticsScreen extends StatefulWidget {
   final _DiagnosticsSnapshot initial;
@@ -1551,8 +1966,17 @@ class _InstanceDiagnosticsScreenState
     final s = Strings.of(context);
     final colors = Theme.of(context).hermes;
     return Scaffold(
-      appBar: HermesAppBar(title: Text(s.ieConnectionCheckTitle)),
+      appBar: HermesAppBar(
+        title: Text(s.ieConnectionCheckTitle),
+        actions: [
+          ScreenHelpButton(
+            title: s.ieConnectionCheckTitle,
+            paragraphs: [s.ieNetworkNote],
+          ),
+        ],
+      ),
       body: ListView(
+        clipBehavior: hermesUnderHeader,
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
         children: [
           _DiagnosticsOverviewCard(
@@ -1586,11 +2010,6 @@ class _InstanceDiagnosticsScreenState
                 icon: Icons.admin_panel_settings_outlined,
                 results: _snapshot.dashboard,
               ),
-              _DiagnosticServiceRow(
-                title: 'Mobile Bridge',
-                icon: Icons.hub_outlined,
-                results: _snapshot.bridge,
-              ),
             ],
           ),
           if (_snapshot.error != null) ...[
@@ -1623,8 +2042,6 @@ class _InstanceDiagnosticsScreenState
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          HermesInfoBanner(s.ieNetworkNote, icon: Icons.vpn_lock_outlined),
         ],
       ),
     );
@@ -1652,34 +2069,34 @@ class _DiagnosticsOverviewCard extends StatelessWidget {
         !snapshot.hasAnyResults &&
         snapshot.matrix?.checkedAtMs != null;
     final (title, body, tone) = switch (mood) {
-      HermesSparkMood.connecting || HermesSparkMood.thinking => (
+      CompanionMood.connecting || CompanionMood.thinking => (
         s.ieConnectionCheckingTitle,
         scope == _DiagnosticScope.all
             ? s.ieConnectionCheckRunning
             : s.ieConnectionCheckingService(_scopeLabel(scope)),
         colors.accent,
       ),
-      HermesSparkMood.success => (
+      CompanionMood.success => (
         s.ieConnectionReadyTitle,
         s.ieConnectionCheckReadySummary,
         colors.success,
       ),
-      HermesSparkMood.offline => (
+      CompanionMood.offline => (
         s.ieConnectionOfflineTitle,
         s.ieConnectionCheckOfflineSummary,
         colors.error,
       ),
-      HermesSparkMood.error => (
+      CompanionMood.error => (
         s.ieConnectionIssuesTitle,
         s.ieConnectionCheckIssuesSummary,
         colors.warning,
       ),
-      HermesSparkMood.waiting || HermesSparkMood.jump => (
+      CompanionMood.waiting || CompanionMood.jump => (
         s.ieConnectionPartialTitle,
         s.ieConnectionCheckPartialSummary,
         colors.warning,
       ),
-      HermesSparkMood.idle => (
+      CompanionMood.idle => (
         savedOnly ? s.ieConnectionSavedTitle : s.ieConnectionUncheckedTitle,
         savedOnly ? s.ieConnectionSavedSummary : s.ieConnectionCheckSubtitle,
         colors.textSecondary,
@@ -1693,11 +2110,11 @@ class _DiagnosticsOverviewCard extends StatelessWidget {
           children: [
             Semantics(
               label: switch (mood) {
-                HermesSparkMood.connecting ||
-                HermesSparkMood.thinking => s.ieDiagA11yChecking,
-                HermesSparkMood.success => s.ieDiagA11ySuccess,
-                HermesSparkMood.error => s.ieDiagA11yError,
-                HermesSparkMood.offline => s.ieDiagA11yOffline,
+                CompanionMood.connecting ||
+                CompanionMood.thinking => s.ieDiagA11yChecking,
+                CompanionMood.success => s.ieDiagA11ySuccess,
+                CompanionMood.error => s.ieDiagA11yError,
+                CompanionMood.offline => s.ieDiagA11yOffline,
                 _ => s.ieDiagA11yUnchecked,
               },
               image: true,
@@ -1739,7 +2156,7 @@ class _DiagnosticsOverviewCard extends StatelessWidget {
   String _scopeLabel(_DiagnosticScope scope) => switch (scope) {
     _DiagnosticScope.gateway => 'Gateway',
     _DiagnosticScope.dashboard => 'Dashboard',
-    _DiagnosticScope.bridge => 'Mobile Bridge',
+
     _DiagnosticScope.all => '',
   };
 }
@@ -1761,7 +2178,10 @@ class _DiagnosticServiceRow extends StatelessWidget {
     final colors = Theme.of(context).hermes;
     final state = _surfaceState(results);
     final checked = (results ?? const <ProbeResult>[])
-        .where((result) => result.status != ProbeStatus.skipped)
+        .where(
+          (result) =>
+              result.status != ProbeStatus.skipped && !result.absentOptional,
+        )
         .toList();
     final passed = checked
         .where((result) => result.status == ProbeStatus.ok)
@@ -1775,7 +2195,7 @@ class _DiagnosticServiceRow extends StatelessWidget {
       _DiagnosticSurfaceState.offline => (s.ieServiceOffline, colors.error),
       _DiagnosticSurfaceState.unchecked => (
         s.diagStatusSkipped,
-        colors.textDisabled,
+        colors.textTertiary,
       ),
     };
     return Padding(
@@ -1871,15 +2291,6 @@ class _TechnicalDiagnosticsDisclosure extends StatelessWidget {
                 onTap: running ? null : () => onRun(_DiagnosticScope.dashboard),
               ),
             ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: HermesSecondaryButton(
-                key: const ValueKey('diagnostics-run-bridge'),
-                label: 'Bridge',
-                icon: Icons.hub_outlined,
-                onTap: running ? null : () => onRun(_DiagnosticScope.bridge),
-              ),
-            ),
           ],
         ),
         if (snapshot.gateway != null) ...[
@@ -1893,10 +2304,7 @@ class _TechnicalDiagnosticsDisclosure extends StatelessWidget {
             results: snapshot.dashboard!,
           ),
         ],
-        if (snapshot.bridge != null) ...[
-          const SizedBox(height: 10),
-          _ProbeResultCard(title: 'Mobile Bridge', results: snapshot.bridge!),
-        ],
+
         if (snapshot.serverCapabilities != null) ...[
           const SizedBox(height: 10),
           _ServerCapsCard(caps: snapshot.serverCapabilities!),
@@ -1918,7 +2326,7 @@ class _TechnicalDiagnosticsDisclosure extends StatelessWidget {
                       snapshot.report!.ranAt,
                     ).format(context),
                   ),
-                  style: TextStyle(fontSize: 10.5, color: colors.textDisabled),
+                  style: TextStyle(fontSize: 10.5, color: colors.textTertiary),
                 ),
               ),
               HermesSecondaryButton(
@@ -1926,11 +2334,13 @@ class _TechnicalDiagnosticsDisclosure extends StatelessWidget {
                 icon: Icons.copy_outlined,
                 onTap: () {
                   Clipboard.setData(
-                    ClipboardData(text: snapshot.report!.toCopyText(s)),
+                    ClipboardData(
+                      text: _safeDiagnosticCopy(snapshot.report!, s),
+                    ),
                   );
-                  ScaffoldMessenger.of(
+                  AppFeedback.of(
                     context,
-                  ).showSnackBar(SnackBar(content: Text(s.ieDiagCopied)));
+                  ).notify(FeedbackKind.routine, s.ieDiagCopied);
                 },
               ),
             ],
@@ -1940,38 +2350,6 @@ class _TechnicalDiagnosticsDisclosure extends StatelessWidget {
     );
   }
 }
-
-/// Aviso sobre la URL del gateway según su privacidad de transporte
-/// ([TransportPrivacy]): silencioso si es https/wss, nota suave si es
-/// cleartext en red privada, banner persistente si es cleartext hacia un
-/// host público (no bloquea guardar: self-hosted manda, solo avisa claro).
-class _TransportPrivacyNote extends StatelessWidget {
-  final TransportPrivacyClass transport;
-
-  const _TransportPrivacyNote({required this.transport});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).hermes;
-    switch (transport) {
-      case TransportPrivacyClass.secure:
-        return const SizedBox.shrink();
-      case TransportPrivacyClass.privateCleartext:
-        return HermesInfoBanner(
-          Strings.of(context).commonCleartextPrivate,
-          icon: Icons.lock_open_outlined,
-        );
-      case TransportPrivacyClass.publicCleartext:
-        return HermesInfoBanner(
-          Strings.of(context).commonCleartextPublic,
-          icon: Icons.warning_amber_outlined,
-          tone: colors.warning,
-        );
-    }
-  }
-}
-
-// ── Cards de resultados ─────────────────────────────────────────────────
 
 class _ProbeResultCard extends StatelessWidget {
   final String title;
@@ -2016,7 +2394,7 @@ class _ProbeResultCard extends StatelessWidget {
                         '${r.latencyMs}ms',
                         style: TextStyle(
                           fontSize: 10,
-                          color: colors.textDisabled,
+                          color: colors.textTertiary,
                         ),
                       ),
                     ),
@@ -2030,13 +2408,13 @@ class _ProbeResultCard extends StatelessWidget {
             ),
           // Detalles de los fallos, debajo de la lista.
           for (final r in results.where(
-            (r) => !r.status.isOk && r.detail.isNotEmpty,
+            (r) => !r.status.isOk && !r.absentOptional && r.detail.isNotEmpty,
           ))
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: Text(
                 '${r.localizedName(s)}: ${r.localizedDetail(s)}',
-                style: TextStyle(fontSize: 10.5, color: colors.textDisabled),
+                style: TextStyle(fontSize: 10.5, color: colors.textTertiary),
               ),
             ),
         ],
@@ -2047,7 +2425,7 @@ class _ProbeResultCard extends StatelessWidget {
   static Color _statusColor(ProbeStatus s, HermesThemeColors c) => switch (s) {
     ProbeStatus.ok => c.success,
     ProbeStatus.notFound || ProbeStatus.methodNotAllowed => c.textSecondary,
-    ProbeStatus.skipped => c.textDisabled,
+    ProbeStatus.skipped => c.textTertiary,
     ProbeStatus.authInvalid || ProbeStatus.authRequired => c.warning,
     _ => c.error,
   };
@@ -2192,7 +2570,7 @@ class _CapabilitySummaryCard extends StatelessWidget {
               final color = state.isYes
                   ? colors.success
                   : state.isNo
-                  ? colors.textDisabled
+                  ? colors.textTertiary
                   : colors.warning;
               return HermesBadge(
                 // '·srv' = lo declaró /v1/capabilities; sin marca = probe.
@@ -2209,7 +2587,7 @@ class _CapabilitySummaryCard extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             Strings.of(context).ieDiagSrvNote,
-            style: TextStyle(fontSize: 9.5, color: colors.textDisabled),
+            style: TextStyle(fontSize: 9.5, color: colors.textTertiary),
           ),
         ],
       ),
