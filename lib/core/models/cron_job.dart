@@ -1,3 +1,4 @@
+import '../services/profile_chat_mode.dart';
 import 'model_provider.dart';
 import 'session.dart';
 
@@ -36,9 +37,15 @@ class CronJob {
   final String model;
   final String provider;
   final String profile;
+
+  /// Profile this job was fetched from (the store that holds it), recorded
+  /// when listing. Null when the listing could not tell (an aggregated read
+  /// without the server's per-job `profile`).
+  final String? sourceProfile;
   final String scheduleExpression;
   final String scheduleDisplay;
   final String? lastError;
+  final String lastStatus;
   final Object? lastRunAt;
   final Object? nextRunAt;
   final bool enabled;
@@ -55,9 +62,11 @@ class CronJob {
     required this.model,
     required this.provider,
     required this.profile,
+    this.sourceProfile,
     required this.scheduleExpression,
     required this.scheduleDisplay,
     required this.lastError,
+    required this.lastStatus,
     required this.lastRunAt,
     required this.nextRunAt,
     required this.enabled,
@@ -72,8 +81,17 @@ class CronJob {
         ? schedule.cast<Object?, Object?>()
         : const <Object?, Object?>{};
     final enabled = json['enabled'] != false;
+    final kind = _text(scheduleMap['kind']);
+    final minutes = scheduleMap['minutes'];
+    // The canonical Hermes schedule string: cron `expr`, the native interval
+    // (`every 60m`) or the one-shot instant — never the English `display`
+    // when the structured value exists.
     final expression =
         _text(scheduleMap['expr']) ??
+        (kind == 'interval' && minutes is num && minutes > 0
+            ? 'every ${minutes.round()}m'
+            : null) ??
+        (kind == 'once' ? _text(scheduleMap['run_at']) : null) ??
         (schedule is String ? _text(schedule) : null) ??
         _text(json['schedule_display']) ??
         '';
@@ -81,6 +99,15 @@ class CronJob {
         _text(json['schedule_display']) ??
         _text(scheduleMap['display']) ??
         expression;
+
+    final lastStatus = _text(json['last_status']) ?? '';
+    // The scheduler separates execution and delivery failures. Prefer the
+    // fire error, then delivery error, so the operator sees a failing route
+    // instead of a falsely healthy cron row.
+    final lastError =
+        _text(json['last_fire_error']) ??
+        _text(json['last_delivery_error']) ??
+        _text(json['last_error']);
 
     return CronJob(
       id: _text(json['id']) ?? '',
@@ -91,9 +118,13 @@ class CronJob {
       model: _text(json['model']) ?? '',
       provider: _text(json['provider']) ?? '',
       profile: _text(json['profile']) ?? '',
+      // The Dashboard annotates every listed job with the profile it read
+      // it from (`_annotate_cron_job`).
+      sourceProfile: _text(json['profile']),
       scheduleExpression: expression,
       scheduleDisplay: display,
-      lastError: _text(json['last_error']),
+      lastError: lastError,
+      lastStatus: lastStatus,
       lastRunAt: json['last_run_at'],
       nextRunAt: json['next_run_at'],
       enabled: enabled,
@@ -103,6 +134,45 @@ class CronJob {
     );
   }
 
+  /// Profile every action on this job must target: where it was fetched
+  /// from, else the bot owner from the `[bot:<name>]` prefix. Null when
+  /// neither is known; callers must refuse instead of defaulting.
+  String? get targetProfile => _profileName(sourceProfile) ?? ownerBot;
+
+  /// Same job with [sourceProfile] recorded. A value already recorded is
+  /// kept: the server's own per-job `profile` beats the listing's guess.
+  CronJob withSourceProfile(String? listed) {
+    final recorded = _profileName(sourceProfile);
+    final next = recorded ?? _profileName(listed);
+    if (next == sourceProfile) return this;
+    return CronJob(
+      id: id,
+      name: name,
+      prompt: prompt,
+      script: script,
+      deliver: deliver,
+      model: model,
+      provider: provider,
+      profile: profile,
+      sourceProfile: next,
+      scheduleExpression: scheduleExpression,
+      scheduleDisplay: scheduleDisplay,
+      lastError: lastError,
+      lastStatus: lastStatus,
+      lastRunAt: lastRunAt,
+      nextRunAt: nextRunAt,
+      enabled: enabled,
+      noAgent: noAgent,
+      state: state,
+      raw: raw,
+    );
+  }
+
+  static String? _profileName(String? value) {
+    final text = value?.trim() ?? '';
+    return text.isEmpty ? null : text;
+  }
+
   bool get isScriptOnly => noAgent && script.isNotEmpty;
 
   /// Desktop treats the legacy `enabled: false` fallback (`disabled`) as a
@@ -110,9 +180,23 @@ class CronJob {
   bool get isPaused =>
       state == CronJobState.paused || state == CronJobState.disabled;
 
-  /// Misma prioridad que `jobTitle()` de Hermes Desktop.
+  static final RegExp _botPrefix = RegExp(
+    r'^\[bot:([a-z0-9][a-z0-9_-]{0,63})\]\s*',
+  );
+
+  /// [raw] job name without the technical `[bot:<name>]` prefix.
+  static String displayName(String raw) =>
+      raw.replaceFirst(_botPrefix, '').trim();
+
+  /// Profile of the bot that owns this routine, from the `[bot:<name>]`
+  /// prefix Bot Mode stores in the name; null for ordinary jobs.
+  String? get ownerBot => _botPrefix.firstMatch(name)?.group(1);
+
+  /// Misma prioridad que `jobTitle()` de Hermes Desktop, sin el prefijo
+  /// técnico `[bot:<name>]` (el dueño se muestra aparte).
   String get title {
-    if (name.isNotEmpty) return name;
+    final clean = displayName(name);
+    if (clean.isNotEmpty) return clean;
     if (prompt.isNotEmpty) return _clip(prompt);
     if (script.isNotEmpty) return _clip(script);
     return id.isEmpty ? 'Cron job' : id;
@@ -122,6 +206,16 @@ class CronJob {
 
   static String _clip(String value) =>
       value.length > 60 ? '${value.substring(0, 60)}…' : value;
+}
+
+/// The job's owning profile is unknown, so no action is sent: guessing a
+/// profile would act on (or report success for) the wrong store.
+class CronJobOwnerUnknownException implements Exception {
+  final String jobId;
+  const CronJobOwnerUnknownException(this.jobId);
+
+  @override
+  String toString() => 'cron_job_owner_unknown';
 }
 
 class CronDeliveryTarget {
@@ -269,4 +363,27 @@ String? _text(Object? value) {
   if (value == null) return null;
   final text = value.toString().trim();
   return text.isEmpty ? null : text;
+}
+
+const String cronJobIdPattern = r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$';
+
+/// Valida y normaliza un ID de cron antes de cualquier acceso a red.
+///
+/// Shared by the official ConnectionManager and Dashboard client. El primer
+/// carácter alfanumérico impide que el CLI lo interprete como una opción.
+String validateCronJobId(String jobId) {
+  final id = jobId.trim();
+  if (!RegExp(cronJobIdPattern).hasMatch(id)) {
+    throw ArgumentError.value(jobId, 'jobId');
+  }
+  return id;
+}
+
+String? validateCronProfile(String? profile) {
+  final value = profile?.trim() ?? '';
+  if (value.isEmpty || value == 'default') return null;
+  if (!isValidProfileName(value)) {
+    throw ArgumentError.value(profile, 'profile');
+  }
+  return value;
 }

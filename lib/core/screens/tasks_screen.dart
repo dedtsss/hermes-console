@@ -8,23 +8,61 @@
 // Sin dependencias nuevas — drag & drop con LongPressDraggable + DragTarget;
 // tiempo real con dart:io WebSocket dentro de KanbanClient.
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../main.dart';
 import '../models/agent_profile.dart';
 import '../models/connection.dart';
+import '../models/dock_config.dart' show DockItemId;
 import '../models/kanban.dart';
+import '../models/kanban_orchestration.dart';
 import '../services/kanban_client.dart';
-import '../services/connection_manager.dart' show DashboardHttpException;
+import '../services/kanban_watch_board.dart';
+import '../services/launcher_widget_tasks.dart';
+import '../services/connection_manager.dart'
+    show ConnectionManager, DashboardHttpException;
+import '../design/content.dart' show HermesLogPage, HermesToggleRow;
+import '../design/edges.dart'
+    show HermesBottomFade, HermesOpenTopClip, HermesStickyControls;
+import '../design/floating.dart' show HermesFloatingIconButton;
+import '../design/modal.dart'
+    show
+        HermesAction,
+        HermesDialogAction,
+        HermesDialogActionStyle,
+        HermesMenuButton,
+        HermesModelChoice,
+        HermesModelGroup,
+        hermesOriginOf,
+        showHermesDialog,
+        showHermesMenu,
+        showHermesModelPicker;
 import '../theme/app_theme.dart';
-import '../widgets/accent_card.dart';
+import '../utils/relative_time.dart';
+import '../widgets/dock_anchored_popover.dart';
+import '../widgets/general_dock_shell.dart';
 import '../widgets/hermes_app_bar.dart';
+import '../widgets/hermes_notice.dart';
+import '../widgets/form_page.dart';
 import '../widgets/hermes_premium_ui.dart';
+import '../widgets/hermes_ui.dart' show HermesField;
 import '../widgets/kanban_task_detail_surface.dart';
 import 'lock_screen.dart';
+import '../widgets/console_loader.dart';
+import '../feedback/feedback_policy.dart';
+
+/// Las dos formas de mirar el mismo board: bandeja agrupada (una columna,
+/// prioriza atención) o tablero por columnas (para arrastrar entre estados).
+/// "Consola" del mockup no es una tercera pestaña: en el diseño real es el
+/// selector de tablero que ya existe en la AppBar (icono de Kanban), así que
+/// no se reproduce aquí para no duplicar esa función con otro aspecto.
+enum _TasksView { list, board }
 
 class TasksScreen extends StatefulWidget {
   final SavedConnection connection;
@@ -34,8 +72,16 @@ class TasksScreen extends StatefulWidget {
   final String? initialTaskId;
   final String? initialAssignee;
 
+  /// Cuando no es null, envuelve esta pantalla con [GeneralDockShell] (mismo
+  /// dock flotante de Ajustes/Sesiones), con el "+" contextual abriendo una
+  /// creación rápida anclada al propio botón. Null en call sites sin un
+  /// `ConnectionManager` a mano (p.ej. dentro de una conversación abierta):
+  /// la pantalla funciona igual, solo sin el dock.
+  final ConnectionManager? connManager;
+
   const TasksScreen({
     required this.connection,
+    this.connManager,
     this.clientOverride,
     this.eventStreamOverride,
     this.initialBoard,
@@ -57,9 +103,11 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
   KanbanMobileGroup? _taskFilter;
   String? _assigneeFilter;
   bool _includeArchived = false;
+  _TasksView _view = _TasksView.list;
 
   List<KanbanBoardRef> _boards = const [];
   late String? _selectedBoard;
+  bool _watchedBoardRestored = false;
   bool _boardCapabilityChecked = false;
   bool _initialTaskOpened = false;
 
@@ -67,6 +115,7 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
   Timer? _refreshDebounce;
   Timer? _reconnectTimer;
   bool _disposed = false;
+  int _readGeneration = 0;
 
   // Backoff de reconexión del WS (3s→60s). Sin esto, con el dashboard caído
   // la pantalla reintentaba cada 3s para siempre (reload + ticket + connect
@@ -182,14 +231,30 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  // Both visible and silent reads share publication authority. A late result
+  // must not overwrite a newer board, error, loading state or selection.
+  bool _ownsRead(int generation, String? board, bool includeArchived) =>
+      mounted &&
+      !_disposed &&
+      generation == _readGeneration &&
+      board == _selectedBoard &&
+      includeArchived == _includeArchived;
+
   Future<void> _load() async {
+    if (_disposed || !mounted) return;
+    final generation = ++_readGeneration;
     if (!_loading) setState(() => _loading = true);
+    await _restoreWatchedBoard();
+    if (!mounted || _disposed || generation != _readGeneration) return;
+    final selectedBoard = _selectedBoard;
+    final includeArchived = _includeArchived;
     try {
       final board = await _client.getBoard(
-        includeArchived: _includeArchived,
-        board: _selectedBoard,
+        includeArchived: includeArchived,
+        board: selectedBoard,
       );
-      if (!mounted) return;
+      if (!_ownsRead(generation, selectedBoard, includeArchived)) return;
+      _offerToLauncherWidget(board);
       setState(() {
         _board = board;
         _error = null;
@@ -197,10 +262,11 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       });
       // Cookie ya establecida por getBoard: descubrir capacidades y perfiles
       // secuencialmente para no disparar logins paralelos que se pisen.
-      await _discoverBoards();
+      await _discoverBoards(generation);
+      if (!mounted || _disposed || generation != _readGeneration) return;
       await _ensureProfiles();
     } catch (e) {
-      if (!mounted) return;
+      if (!_ownsRead(generation, selectedBoard, includeArchived)) return;
       setState(() {
         _error = _humanError(e);
         _loading = false;
@@ -208,11 +274,49 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _discoverBoards() async {
+  /// Opens on the board picked last (the one background notifications
+  /// watch) unless the caller asked for a specific board.
+  /// The Tareas launcher widget shows this same board (no request of its
+  /// own): the one picked here is the one the background listener reads.
+  void _offerToLauncherWidget(KanbanBoard board) {
+    unawaited(
+      LauncherWidgetTasksPublisher.instance.offer(
+        connectionId: widget.connection.id,
+        tasks: [for (final column in board.columns) ...column.tasks],
+      ),
+    );
+  }
+
+  Future<void> _restoreWatchedBoard() async {
+    if (_watchedBoardRestored) return;
+    _watchedBoardRestored = true;
+    if (_selectedBoard != null) return;
+    try {
+      // Bounded: a preferences store that never answers must not keep the
+      // board from loading.
+      final prefs = await SharedPreferences.getInstance().timeout(
+        const Duration(seconds: 1),
+      );
+      _selectedBoard ??= KanbanWatchBoard.read(prefs, widget.connection.id);
+    } catch (_) {
+      // Without preferences the server's current board is the default.
+    }
+  }
+
+  Future<void> _rememberWatchedBoard(String slug) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await KanbanWatchBoard.write(prefs, widget.connection.id, slug);
+    } catch (_) {
+      // Best effort: the board still opens; notifications keep the old one.
+    }
+  }
+
+  Future<void> _discoverBoards(int generation) async {
     if (_boardCapabilityChecked) return;
     try {
       final catalog = await _client.getBoardsIfSupported();
-      if (!mounted) return;
+      if (!mounted || _disposed || generation != _readGeneration) return;
       if (catalog == null) {
         _boardCapabilityChecked = true;
         return;
@@ -283,18 +387,27 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _silentReload() async {
+    if (_disposed || !mounted) return;
+    final generation = ++_readGeneration;
+    final selectedBoard = _selectedBoard;
+    final includeArchived = _includeArchived;
     try {
       final board = await _client.getBoard(
-        includeArchived: _includeArchived,
-        board: _selectedBoard,
+        includeArchived: includeArchived,
+        board: selectedBoard,
       );
-      if (!mounted) return;
+      if (!_ownsRead(generation, selectedBoard, includeArchived)) return;
+      _offerToLauncherWidget(board);
       setState(() {
         _board = board;
         _error = null;
+        _loading = false;
       });
     } catch (_) {
       // Mantiene el board actual si un refresco puntual falla.
+      if (_ownsRead(generation, selectedBoard, includeArchived) && _loading) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -351,28 +464,23 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
   /// historial sigue en el servidor; solo desaparecen del tablero.
   Future<void> _confirmClearDone(List<KanbanTask> done) async {
     if (done.isEmpty) return;
-    final colors = Theme.of(context).hermes;
     final s = Strings.of(context);
-    final ok = await showDialog<bool>(
+    final ok = await showHermesDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: colors.surface,
-        title: Text(s.kanbanClearDoneTitle),
-        content: Text(s.kanbanClearDoneConfirm(done.length)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(false),
-            child: Text(s.kanbanCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(true),
-            child: Text(
-              s.kanbanClearDone,
-              style: TextStyle(color: colors.accent),
-            ),
-          ),
-        ],
-      ),
+      title: s.kanbanClearDoneTitle,
+      message: s.kanbanClearDoneConfirm(done.length),
+      actions: [
+        HermesDialogAction(
+          label: s.kanbanCancel,
+          value: false,
+          style: HermesDialogActionStyle.cancel,
+        ),
+        HermesDialogAction(
+          key: const ValueKey('kanban-clear-done-confirm'),
+          label: s.kanbanClearDone,
+          value: true,
+        ),
+      ],
     );
     if (ok != true) return;
     if (!await _verifyAppLock(s.kanbanClearDoneTitle) || !mounted) return;
@@ -400,7 +508,7 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
         }
       }
       if (!mounted) return;
-      _snack(s.kanbanCleared);
+      _snack(s.kanbanCleared, FeedbackKind.routine);
       _scheduleRefresh();
     } catch (e) {
       if (!mounted) return;
@@ -485,6 +593,8 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
     String? body,
     String? priority,
     String? assignee,
+    _KanbanModelChoice? model,
+    String? reasoningEffort,
   ) async {
     try {
       await _client.createTask(
@@ -493,6 +603,9 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
         priority: priority,
         assignee: assignee,
         board: _selectedBoard,
+        modelOverride: model?.model,
+        providerOverride: model?.provider,
+        reasoningEffort: reasoningEffort,
       );
       if (!mounted) return;
       _scheduleRefresh();
@@ -526,11 +639,12 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
     }
   }
 
-  void _snack(String msg) {
+  void _snack(String msg, [FeedbackKind kind = FeedbackKind.error]) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(msg)));
+    if (FeedbackPolicy.isVisual(kind)) {
+      HermesNotice.of(context).clearSnackBars();
+    }
+    AppFeedback.notify(context, kind, msg);
   }
 
   String _humanError(Object e) {
@@ -566,42 +680,34 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
           ),
         ),
         actions: [
+          // This screen's own way to add a task lives up here, with the
+          // dock on, off or hidden (the dock's "+" is a new chat). It comes
+          // first so it is the one that stays when the rest go behind "more".
+          if (_board != null &&
+              _error == null &&
+              !widget.connection.readOnly &&
+              _taskFilter != KanbanMobileGroup.archived)
+            IconButton(
+              key: const ValueKey('kanban-create'),
+              tooltip: s.kanbanNewTask,
+              icon: const Icon(Icons.add_rounded),
+              onPressed: () => _openTaskForm(),
+            ),
           if (_boards.length > 1)
-            PopupMenuButton<String>(
+            HermesMenuButton<String>(
               key: const ValueKey('kanban-board-selector'),
               tooltip: s.kanbanBoardLabel,
-              initialValue: _selectedBoard,
               onSelected: _selectBoard,
               icon: const Icon(Icons.view_kanban_outlined),
-              itemBuilder: (context) => [
+              actions: (context) => [
                 for (final board in _boards)
-                  PopupMenuItem<String>(
+                  HermesAction(
                     value: board.slug,
-                    child: Row(
-                      children: [
-                        Expanded(child: Text(board.name)),
-                        if (board.slug == _selectedBoard)
-                          Icon(
-                            Icons.check_rounded,
-                            size: 18,
-                            color: colors.accent,
-                          ),
-                      ],
-                    ),
+                    label: board.name,
+                    selected: board.slug == _selectedBoard,
                   ),
               ],
             ),
-          IconButton(
-            key: const ValueKey('kanban-filter-button'),
-            tooltip: s.kanbanFilterTitle,
-            icon: Icon(
-              _hasActiveFilters
-                  ? Icons.filter_alt_rounded
-                  : Icons.filter_alt_outlined,
-              color: _hasActiveFilters ? colors.accent : null,
-            ),
-            onPressed: _openFilters,
-          ),
           IconButton(
             tooltip: s.kanbanHelpTooltip,
             icon: const Icon(Icons.help_outline_rounded),
@@ -614,22 +720,21 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
           ),
         ],
       ),
-      // FAB circular simple: el botón extendido se recortaba contra el borde.
-      // Sólo cuando hay tareas (con el board vacío ya está el CTA grande).
-      floatingActionButton:
-          (_board != null &&
-              _error == null &&
-              _board!.taskCount > 0 &&
-              !widget.connection.readOnly &&
-              _taskFilter != KanbanMobileGroup.archived)
-          ? FloatingActionButton(
-              backgroundColor: colors.accent,
-              tooltip: s.kanbanNewTask,
-              onPressed: () => _openTaskForm(),
-              child: Icon(Icons.add, color: colors.onAccent),
-            )
-          : null,
-      body: _buildBody(colors),
+      body: _wrapWithDock(_buildBody(colors)),
+    );
+  }
+
+  Widget _wrapWithDock(Widget body) {
+    final connManager = widget.connManager;
+    if (connManager == null) return body;
+    return GeneralDockShell(
+      connection: widget.connection,
+      connManager: connManager,
+      onCreateAnchored: widget.connection.readOnly
+          ? null
+          : _showAnchoredQuickCreate,
+      currentDestination: DockItemId.tasks,
+      body: body,
     );
   }
 
@@ -652,6 +757,7 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       _taskFilter = null;
       _includeArchived = false;
     });
+    unawaited(_rememberWatchedBoard(slug));
     await _load();
     if (mounted) _subscribeEvents();
   }
@@ -664,72 +770,74 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       context: context,
       surfaceKey: const ValueKey('kanban-filter-surface'),
       maxWidth: 560,
-      builder: (sheetCtx) => StatefulBuilder(
-        builder: (sheetCtx, setSheet) => SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                s.kanbanFilterTitle,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: colors.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                key: const ValueKey('kanban-search-field'),
-                controller: queryCtrl,
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  labelText: s.kanbanSearch,
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: queryCtrl.text.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: s.kanbanClearFilters,
-                          onPressed: () {
-                            queryCtrl.clear();
-                            setState(() => _searchQuery = '');
-                            setSheet(() {});
-                          },
-                          icon: const Icon(Icons.close_rounded),
-                        ),
-                ),
-                onChanged: (value) {
-                  setState(() => _searchQuery = value);
-                  setSheet(() {});
-                },
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _filterChip(
-                    sheetCtx,
-                    key: 'all',
-                    label: s.kanbanFilterAll,
-                    selected: _taskFilter == null,
+      builder: (sheetCtx) => DisposeControllersOnUnmount(
+        controllers: [queryCtrl],
+        child: StatefulBuilder(
+          builder: (sheetCtx, setSheet) => SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  s.kanbanFilterTitle,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: colors.textPrimary,
                   ),
-                  for (final group in KanbanMobileGroup.values)
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  key: const ValueKey('kanban-search-field'),
+                  controller: queryCtrl,
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    labelText: s.kanbanSearch,
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    suffixIcon: queryCtrl.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: s.kanbanClearFilters,
+                            onPressed: () {
+                              queryCtrl.clear();
+                              setState(() => _searchQuery = '');
+                              setSheet(() {});
+                            },
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                  ),
+                  onChanged: (value) {
+                    setState(() => _searchQuery = value);
+                    setSheet(() {});
+                  },
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
                     _filterChip(
                       sheetCtx,
-                      key: group.name,
-                      label: _filterLabel(s, group),
-                      selected: _taskFilter == group,
+                      key: 'all',
+                      label: s.kanbanFilterAll,
+                      selected: _taskFilter == null,
                     ),
-                ],
-              ),
-            ],
+                    for (final group in KanbanMobileGroup.values)
+                      _filterChip(
+                        sheetCtx,
+                        key: group.name,
+                        label: _filterLabel(s, group),
+                        selected: _taskFilter == group,
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
-    Future.delayed(const Duration(milliseconds: 400), queryCtrl.dispose);
     if (selected == null || !mounted) return;
     await _applyTaskFilter(selected);
   }
@@ -756,9 +864,13 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
               .firstOrNull;
     final needsArchiveFetch =
         filter == KanbanMobileGroup.archived && !_includeArchived;
+    final leavingArchive =
+        _includeArchived && filter != KanbanMobileGroup.archived;
+    if (leavingArchive) ++_readGeneration;
     setState(() {
       _taskFilter = filter;
       _includeArchived = filter == KanbanMobileGroup.archived;
+      if (leavingArchive) _loading = false;
     });
     if (needsArchiveFetch) await _load();
   }
@@ -795,6 +907,19 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
   Future<void> _showHelp() async {
     final colors = Theme.of(context).hermes;
     final s = Strings.of(context);
+    KanbanOrchestration? orchestration;
+    List<AgentProfile> profiles = _profiles;
+    try {
+      orchestration = await _client.getOrchestration();
+    } catch (_) {
+      orchestration = null;
+    }
+    try {
+      profiles = await _client.getProfilesAuthoritative();
+    } catch (_) {
+      // Keep the already loaded roster; help itself remains available.
+    }
+    if (!mounted) return;
     await showHermesFloatingSurface<void>(
       context: context,
       surfaceKey: const ValueKey('kanban-help-surface'),
@@ -832,38 +957,477 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
                 color: colors.textSecondary,
               ),
             ),
+            if (orchestration != null) ...[
+              const SizedBox(height: 14),
+              HermesListRow(
+                key: const ValueKey('kanban-orchestration-row'),
+                icon: Icons.account_tree_outlined,
+                title: s.kanbanOrchestrationTitle,
+                subtitle: s.kanbanOrchestrationSubtitle,
+                onTap: () =>
+                    unawaited(_showOrchestration(orchestration!, profiles)),
+              ),
+            ],
           ],
         ),
       ),
     );
   }
 
-  Widget _buildBody(HermesThemeColors colors) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_error != null) {
-      return _ErrorState(colors: colors, message: _error!, onRetry: _load);
-    }
-    final board = _board;
+  Future<void> _showOrchestration(
+    KanbanOrchestration initial,
+    List<AgentProfile> profiles,
+  ) async {
     final s = Strings.of(context);
-    if (board == null || (board.taskCount == 0 && !_hasActiveFilters)) {
-      return _EmptyState(
+    final readOnly = widget.connection.readOnly;
+    var state = initial;
+    final baselines = {
+      for (final profile in profiles) profile.name: profile.description.trim(),
+    };
+    final controllers = {
+      for (final profile in profiles)
+        profile.name: TextEditingController(text: profile.description),
+    };
+    final busy = <String>{};
+    // Every PUT answers with the whole orchestration, so writes to different
+    // fields run one at a time: an older reply landing after a newer one
+    // would otherwise revert the newer field on screen.
+    Future<void> writes = Future<void>.value();
+
+    await showHermesFloatingSurface<void>(
+      context: context,
+      surfaceKey: const ValueKey('kanban-orchestration-surface'),
+      maxWidth: 620,
+      maxHeightFactor: 0.9,
+      builder: (sheetCtx) => DisposeControllersOnUnmount(
+        controllers: controllers.values.toList(growable: false),
+        child: StatefulBuilder(
+          builder: (sheetCtx, setSheet) {
+            Future<void> runWrite(
+              String field,
+              Future<KanbanOrchestration> Function() write,
+            ) async {
+              try {
+                final next = await write();
+                if (sheetCtx.mounted) setSheet(() => state = next);
+              } on DashboardHttpException catch (error) {
+                if (!sheetCtx.mounted) return;
+                _snack(_dashboardDetail(error));
+                if (error.statusCode == 400) {
+                  final refreshed = await _client.getOrchestration();
+                  if (sheetCtx.mounted && refreshed != null) {
+                    setSheet(() => state = refreshed);
+                  }
+                }
+              } catch (error) {
+                if (sheetCtx.mounted) _snack(_humanError(error));
+              } finally {
+                if (sheetCtx.mounted) setSheet(() => busy.remove(field));
+              }
+            }
+
+            Future<void> updateState(
+              String field,
+              Future<KanbanOrchestration> Function() write,
+            ) {
+              if (busy.contains(field)) return Future<void>.value();
+              setSheet(() => busy.add(field));
+              final run = writes.then((_) => runWrite(field, write));
+              // A failed write must not stall the ones queued behind it, nor
+              // escape to the unawaited tap handlers; runWrite has already
+              // reported it.
+              writes = run.then((_) {}, onError: (_) {});
+              return writes;
+            }
+
+            Future<void> pickProfile({required bool orchestrator}) async {
+              final field = orchestrator ? 'orchestrator' : 'assignee';
+              if (busy.contains(field) || readOnly) return;
+              final current = orchestrator
+                  ? state.orchestratorProfile ?? ''
+                  : state.defaultAssignee ?? '';
+              final picked = await _pickOption(
+                title: orchestrator
+                    ? s.kanbanOrchestratorProfile
+                    : s.kanbanDefaultAssignee,
+                current: current,
+                options: [
+                  (value: '', label: s.kanbanOrchestrationDefault),
+                  for (final profile in profiles)
+                    (value: profile.name, label: profile.name),
+                ],
+              );
+              if (picked == null || !sheetCtx.mounted) return;
+              await updateState(
+                field,
+                () => orchestrator
+                    ? _client.setOrchestration(orchestratorProfile: picked)
+                    : _client.setOrchestration(defaultAssignee: picked),
+              );
+            }
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    s.kanbanOrchestrationTitle,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Theme.of(sheetCtx).hermes.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  HermesListRow(
+                    key: const ValueKey('kanban-orchestrator-profile'),
+                    icon: Icons.account_tree_outlined,
+                    title: s.kanbanOrchestratorProfile,
+                    subtitle:
+                        state.orchestratorProfile ??
+                        s.kanbanOrchestrationDefault,
+                    onTap: readOnly || busy.contains('orchestrator')
+                        ? null
+                        : () => unawaited(pickProfile(orchestrator: true)),
+                  ),
+                  HermesListRow(
+                    key: const ValueKey('kanban-default-assignee'),
+                    icon: Icons.person_outline_rounded,
+                    title: s.kanbanDefaultAssignee,
+                    subtitle:
+                        state.defaultAssignee ?? s.kanbanOrchestrationDefault,
+                    onTap: readOnly || busy.contains('assignee')
+                        ? null
+                        : () => unawaited(pickProfile(orchestrator: false)),
+                  ),
+                  HermesToggleRow(
+                    key: const ValueKey('kanban-auto-decompose'),
+                    icon: Icons.call_split_rounded,
+                    title: s.kanbanAutoDecompose,
+                    subtitle: s.kanbanAutoDecomposeSubtitle,
+                    value: state.autoDecompose,
+                    onChanged: readOnly || busy.contains('auto_decompose')
+                        ? null
+                        : (value) => unawaited(
+                            updateState(
+                              'auto_decompose',
+                              () => _client.setOrchestration(
+                                autoDecompose: value,
+                              ),
+                            ),
+                          ),
+                  ),
+                  if (profiles.isNotEmpty) ...[
+                    const SizedBox(height: 18),
+                    Text(
+                      s.kanbanProfileDescriptions,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Theme.of(sheetCtx).hermes.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    for (final profile in profiles)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                key: ValueKey(
+                                  'kanban-profile-description-${profile.name}',
+                                ),
+                                controller: controllers[profile.name],
+                                enabled: !readOnly,
+                                minLines: 1,
+                                maxLines: 3,
+                                onChanged: (_) => setSheet(() {}),
+                                decoration: InputDecoration(
+                                  labelText: profile.name,
+                                  helperText: [
+                                    profile.provider,
+                                    profile.model,
+                                  ].where((v) => v.isNotEmpty).join(' · '),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            if (!readOnly) ...[
+                              TextButton(
+                                key: ValueKey(
+                                  'kanban-profile-description-save-${profile.name}',
+                                ),
+                                onPressed:
+                                    busy.contains(
+                                          'description-${profile.name}',
+                                        ) ||
+                                        controllers[profile.name]!.text
+                                                .trim() ==
+                                            baselines[profile.name]
+                                    ? null
+                                    : () => unawaited(
+                                        _saveProfileDescription(
+                                          sheetCtx,
+                                          setSheet,
+                                          profile.name,
+                                          controllers[profile.name]!,
+                                          baselines,
+                                          busy,
+                                        ),
+                                      ),
+                                child: Text(s.kanbanDescriptionSave),
+                              ),
+                              Builder(
+                                builder: (anchorContext) => IconButton(
+                                  key: ValueKey(
+                                    'kanban-profile-description-menu-${profile.name}',
+                                  ),
+                                  tooltip: s.kanbanDescriptionAuto,
+                                  onPressed:
+                                      busy.contains(
+                                        'description-${profile.name}',
+                                      )
+                                      ? null
+                                      : () async {
+                                          final action =
+                                              await showHermesMenu<String>(
+                                                context: sheetCtx,
+                                                originRect: hermesOriginOf(
+                                                  anchorContext,
+                                                ),
+                                                surfaceKey: ValueKey(
+                                                  'kanban-profile-description-menu-surface-${profile.name}',
+                                                ),
+                                                actions: [
+                                                  HermesAction(
+                                                    value: 'auto',
+                                                    icon: Icons.auto_awesome,
+                                                    label:
+                                                        s.kanbanDescriptionAuto,
+                                                  ),
+                                                ],
+                                              );
+                                          if (action != 'auto' ||
+                                              !sheetCtx.mounted) {
+                                            return;
+                                          }
+                                          unawaited(
+                                            _autoDescribeProfile(
+                                              sheetCtx,
+                                              setSheet,
+                                              profile.name,
+                                              controllers[profile.name]!,
+                                              baselines,
+                                              busy,
+                                            ),
+                                          );
+                                        },
+                                  icon: const Icon(Icons.more_vert_rounded),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveProfileDescription(
+    BuildContext sheetContext,
+    StateSetter setSheet,
+    String profile,
+    TextEditingController controller,
+    Map<String, String> baselines,
+    Set<String> busy,
+  ) async {
+    final field = 'description-$profile';
+    if (busy.contains(field)) return;
+    setSheet(() => busy.add(field));
+    try {
+      final result = await _client.setProfileDescription(
+        profile,
+        controller.text,
+      );
+      if (!sheetContext.mounted) return;
+      setSheet(() {
+        controller.text = result.description;
+        baselines[profile] = result.description.trim();
+      });
+    } on DashboardHttpException catch (error) {
+      if (sheetContext.mounted) _snack(_dashboardDetail(error));
+    } catch (error) {
+      if (sheetContext.mounted) _snack(_humanError(error));
+    } finally {
+      if (sheetContext.mounted) setSheet(() => busy.remove(field));
+    }
+  }
+
+  Future<void> _autoDescribeProfile(
+    BuildContext sheetContext,
+    StateSetter setSheet,
+    String profile,
+    TextEditingController controller,
+    Map<String, String> baselines,
+    Set<String> busy,
+  ) async {
+    final s = Strings.of(sheetContext);
+    final confirmed = await showHermesConfirmDialog(
+      context: sheetContext,
+      title: s.kanbanDescriptionAutoConfirmTitle,
+      message: s.kanbanDescriptionAutoConfirmBody(profile),
+      confirmLabel: s.kanbanDescriptionAuto,
+      cancelLabel: s.roomCancel,
+    );
+    if (!confirmed || !sheetContext.mounted) return;
+    final field = 'description-$profile';
+    if (busy.contains(field)) return;
+    setSheet(() => busy.add(field));
+    try {
+      final result = await _client.autoDescribeProfile(profile);
+      if (!sheetContext.mounted) return;
+      if (!result.ok) {
+        AppFeedback.of(sheetContext).notify(
+          FeedbackKind.error,
+          result.reason ?? s.kanbanDescriptionAutoFailed,
+          warning: true,
+        );
+        return;
+      }
+      setSheet(() {
+        controller.text = result.description;
+        baselines[profile] = result.description.trim();
+      });
+    } on DashboardHttpException catch (error) {
+      if (sheetContext.mounted) _snack(_dashboardDetail(error));
+    } catch (error) {
+      if (sheetContext.mounted) _snack(_humanError(error));
+    } finally {
+      if (sheetContext.mounted) setSheet(() => busy.remove(field));
+    }
+  }
+
+  String _dashboardDetail(DashboardHttpException error) {
+    try {
+      final decoded = jsonDecode(error.body);
+      if (decoded is Map && decoded['detail'] is String) {
+        final detail = (decoded['detail'] as String).trim();
+        if (detail.isNotEmpty) return detail;
+      }
+    } catch (_) {
+      // Fall through to the stable status text.
+    }
+    return error.toString();
+  }
+
+  Widget _buildBody(HermesThemeColors colors) {
+    final s = Strings.of(context);
+    final board = _board;
+    final Widget state;
+    List<_TaskGroup>? groups;
+    if (_loading) {
+      state = const Center(child: ConsoleLoader.large());
+    } else if (_error != null) {
+      state = _ErrorState(colors: colors, message: _error!, onRetry: _load);
+    } else if (board == null || (board.taskCount == 0 && !_hasActiveFilters)) {
+      state = _EmptyState(
         colors: colors,
         readOnly: widget.connection.readOnly,
         onCreate: () => _openTaskForm(),
         onHelp: _showHelp,
       );
+    } else {
+      // Bandeja agrupada: los 8 estados técnicos del motor de Hermes se
+      // proyectan a 5 grupos que un humano entiende; las secciones vacías no
+      // se muestran. La "Lista" prioriza atención (una columna); el "Tablero"
+      // muestra los mismos grupos como columnas horizontales, con arrastre
+      // opcional entre ellas. Mover/reasignar también sigue disponible
+      // tocando la tarjeta (hoja de detalle) en ambas vistas.
+      groups = _buildGroups(board, s);
+      state = _view == _TasksView.list
+          ? _buildListView(colors, s, groups)
+          : _buildBoardView(colors, s, groups);
     }
-    // Bandeja agrupada: una sola lista vertical con secciones humanas. Los 8
-    // estados técnicos del motor de Hermes se proyectan a 5 grupos que un
-    // humano entiende; las secciones vacías no se muestran. Mover/reasignar
-    // se hace tocando la tarjeta (hoja de detalle), no con drag.
-    final groups = _buildGroups(board, s);
+    // The view switch and the filter float in place; the list scrolls under
+    // them and under the header. The filter lives here, not in the top bar,
+    // so its tint (a filter is on) is always in sight, with one board or
+    // with several, and it is there in every state of the page.
+    return HermesStickyControls(
+      controls: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (groups != null) ...[
+            Flexible(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 240),
+                child: HermesSegmentedControl<_TasksView>(
+                  floating: true,
+                  value: _view,
+                  semanticLabel: s.kanbanTitle,
+                  onChanged: (v) => setState(() => _view = v),
+                  segments: [
+                    HermesSegment(
+                      key: const ValueKey('kanban-view-list'),
+                      value: _TasksView.list,
+                      label: s.kanbanViewList,
+                    ),
+                    HermesSegment(
+                      key: const ValueKey('kanban-view-board'),
+                      value: _TasksView.board,
+                      label: s.kanbanViewBoard,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
+          HermesFloatingIconButton(
+            key: const ValueKey('kanban-filter-button'),
+            tooltip: s.kanbanFilterTitle,
+            icon: _hasActiveFilters
+                ? Icons.filter_alt_rounded
+                : Icons.filter_alt_outlined,
+            color: _hasActiveFilters ? colors.accent : null,
+            onPressed: _openFilters,
+          ),
+        ],
+      ),
+      child: groups != null
+          ? state
+          : Padding(
+              padding: const EdgeInsets.only(top: HermesStickyControls.extent),
+              child: state,
+            ),
+    );
+  }
+
+  Widget _buildListView(
+    HermesThemeColors colors,
+    Strings s,
+    List<_TaskGroup> groups,
+  ) {
     return RefreshIndicator(
+      edgeOffset: HermesStickyControls.extent,
       onRefresh: _silentReload,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 100),
+        clipBehavior: hermesUnderHeader,
+        padding: const EdgeInsets.fromLTRB(
+          14,
+          6 + HermesStickyControls.extent,
+          14,
+          100,
+        ),
         children: [
           if (_hasActiveFilters) ...[
             _FilterSummary(
@@ -899,22 +1463,122 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
               clearLabel: s.kanbanClearDone,
             ),
             const SizedBox(height: 8),
-            for (final t in g.tasks)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _TaskCard(
-                  colors: colors,
-                  task: t,
-                  statusColor: g.color,
-                  onTap: () => _openTaskSheet(t),
-                ),
-              ),
-            const SizedBox(height: 10),
+            _TaskListGroupCard(
+              colors: colors,
+              group: g,
+              trailingFor: (t) => _cardTrailing(s, g, t),
+              trailingColor: _cardTrailingColor(colors, g),
+              onTapTask: (t) => _openTaskSheet(t),
+            ),
+            const SizedBox(height: 14),
           ],
         ],
       ),
     );
   }
+
+  Widget _buildBoardView(
+    HermesThemeColors colors,
+    Strings s,
+    List<_TaskGroup> groups,
+  ) {
+    if (groups.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: HermesStickyControls.extent),
+        child: Center(
+          child: Text(
+            s.kanbanNoMatches,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: colors.textSecondary),
+          ),
+        ),
+      );
+    }
+    // The board takes the whole page, like the list: every column is a list
+    // that scrolls under the floating controls and under the header, its
+    // name the first row of it. Sideways the board ends at its own edges
+    // (a rail beside it stays clean); upwards it is open.
+    return HermesOpenTopClip(
+      child: ListView.builder(
+        key: const ValueKey('kanban-board-columns'),
+        scrollDirection: Axis.horizontal,
+        clipBehavior: Clip.none,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        itemCount: groups.length,
+        itemBuilder: (context, index) {
+          final group = groups[index];
+          return Padding(
+            padding: EdgeInsets.only(
+              right: index == groups.length - 1 ? 0 : 12,
+            ),
+            child: _BoardColumn(
+              colors: colors,
+              group: group,
+              canDrop: !widget.connection.readOnly,
+              trailingFor: (t) => _cardTrailing(s, group, t),
+              trailingColor: _cardTrailingColor(colors, group),
+              onTapTask: (t) => _openTaskSheet(t),
+              onDropTask: (t) => _handleBoardDrop(t, group),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Arrastrar una tarjeta a otra columna reutiliza exactamente [_move]: no
+  /// hay una ruta de movimiento nueva, solo un disparador visual más para la
+  /// que ya existe (la misma que usa la hoja "mover" del detalle).
+  void _handleBoardDrop(KanbanTask task, _TaskGroup targetGroup) {
+    final target = _boardDropStatus(targetGroup.key);
+    if (target == null || target == task.status) return;
+    _move(task, target);
+  }
+
+  /// Cada grupo móvil agrega varios estados reales; al soltar una tarjeta se
+  /// necesita UN estado destino concreto. Se elige el más representativo de
+  /// cada columna; "Trabajando ahora" apunta a 'running', que el propio
+  /// [_move] ya rechaza con el aviso existente ("lo gestiona el agente"),
+  /// así que soltar ahí no inventa un estado nuevo, solo confirma que no se
+  /// puede.
+  String? _boardDropStatus(String groupKey) {
+    switch (groupKey) {
+      case 'attention':
+        return 'blocked';
+      case 'working':
+        return 'running';
+      case 'queued':
+      case 'notes':
+        return 'todo';
+      case 'done':
+        return 'done';
+    }
+    return null;
+  }
+
+  /// Texto secundario de cada tarjeta: estado si necesita atención, progreso
+  /// si lo tiene, si no la fecha relativa más reciente disponible, y como
+  /// último recurso la etiqueta corta del grupo.
+  String _cardTrailing(Strings s, _TaskGroup group, KanbanTask task) {
+    if (group.key == 'attention') return _colLabel(s, task.status);
+    if (task.hasProgress) {
+      return s.kanbanCardProgress(task.progressDone, task.progressTotal);
+    }
+    final ts =
+        task.completedAt ??
+        task.lastHeartbeatAt ??
+        task.startedAt ??
+        task.createdAt;
+    if (ts != null && ts > 0) {
+      final lang = Localizations.localeOf(context).languageCode;
+      final rel = relativeTime(ts.toDouble(), languageCode: lang);
+      if (rel.isNotEmpty) return rel;
+    }
+    return group.shortLabel;
+  }
+
+  Color _cardTrailingColor(HermesThemeColors colors, _TaskGroup group) =>
+      group.key == 'attention' ? colors.error : colors.textSecondary;
 
   /// Proyecta los estados del board a grupos humanos, en orden de prioridad de
   /// atención. Sólo devuelve grupos no vacíos.
@@ -1092,6 +1756,112 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
   /// Formulario de tarea: crea ([existing]==null) o edita una tarjeta. Al crear
   /// ofrece plantillas rápidas (bug/feature/investigar) que rellenan título y
   /// descripción.
+  /// Creación rápida anclada al "+" del dock: formulario mínimo (título +
+  /// prioridad) en vez del sheet completo de `_openTaskForm` (con
+  /// plantillas y selector de asignado) — el usuario que quiera esas
+  /// opciones sigue teniendo el FAB/CTA de la pantalla cuando no hay dock,
+  /// o puede abrir la tarea recién creada para completarla. Reutiliza
+  /// `_create` (misma llamada a `_client.createTask`) que ya usa el sheet
+  /// completo.
+  Future<void> _showAnchoredQuickCreate(GlobalKey anchorKey) async {
+    await _ensureProfiles();
+    if (!mounted) return;
+    final titleCtrl = TextEditingController();
+    var priority = 'normal';
+    await showDockAnchoredPopover<void>(
+      context: context,
+      anchorKey: anchorKey,
+      maxWidth: 320,
+      builder: (popoverContext) => DisposeControllersOnUnmount(
+        controllers: [titleCtrl],
+        child: StatefulBuilder(
+          builder: (popoverContext, setPopover) {
+            final colors = Theme.of(popoverContext).hermes;
+            final s = Strings.of(popoverContext);
+            void submit() {
+              final title = titleCtrl.text.trim();
+              if (title.isEmpty) return;
+              Navigator.of(popoverContext).pop();
+              _create(title, null, priority, _defaultAssignee(), null, null);
+            }
+
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    s.kanbanNewTask,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: colors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: titleCtrl,
+                    autofocus: true,
+                    decoration: InputDecoration(labelText: s.kanbanFieldTitle),
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => submit(),
+                  ),
+                  const SizedBox(height: 12),
+                  SegmentedButton<String>(
+                    segments: [
+                      ButtonSegment(
+                        value: 'low',
+                        label: Text(s.kanbanPriorityLow),
+                      ),
+                      ButtonSegment(
+                        value: 'normal',
+                        label: Text(s.kanbanPriorityNormal),
+                      ),
+                      ButtonSegment(
+                        value: 'high',
+                        label: Text(s.kanbanPriorityHigh),
+                      ),
+                    ],
+                    selected: {priority},
+                    showSelectedIcon: false,
+                    onSelectionChanged: (selection) =>
+                        setPopover(() => priority = selection.first),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(popoverContext).pop(),
+                        child: Text(
+                          MaterialLocalizations.of(
+                            popoverContext,
+                          ).cancelButtonLabel,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: colors.accent,
+                        ),
+                        onPressed: submit,
+                        child: Text(
+                          s.kanbanCreate,
+                          style: TextStyle(color: colors.onAccent),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   Future<void> _openTaskForm({KanbanTask? existing}) async {
     // Red de seguridad: asegura los perfiles antes de calcular el sugerido.
     await _ensureProfiles();
@@ -1105,6 +1875,11 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
     // assignee = perfil que EJECUTA la tarea. Al crear se sugiere el activo
     // para que la tarea se trabaje sola; '' = sin asignar (sólo anotación).
     String assignee = existing?.assignee ?? _defaultAssignee();
+    _KanbanModelChoice? createModel;
+    String createEffort = '';
+    KanbanModelOptions? createModelOptions;
+    var modelOptionsSupported = true;
+    var modelOptionsLoading = false;
 
     void applyTemplate(String title, String body) {
       titleCtrl.text = title;
@@ -1112,156 +1887,228 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       bodyCtrl.text = body;
     }
 
-    await showHermesFloatingSurface<void>(
-      context: context,
-      surfaceKey: const ValueKey('kanban-task-form-surface'),
-      maxWidth: 620,
-      maxHeightFactor: 0.9,
-      builder: (sheetCtx) => Padding(
-        padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+    final initialTitle = titleCtrl.text;
+    final initialBody = bodyCtrl.text;
+    final initialPriority = priority;
+    final initialAssignee = assignee;
+
+    void submit(BuildContext sheetCtx) {
+      final title = titleCtrl.text.trim();
+      if (title.isEmpty) return;
+      Navigator.of(sheetCtx).pop();
+      final body = bodyCtrl.text.trim().isEmpty ? null : bodyCtrl.text.trim();
+      if (editing) {
+        _update(existing.id, title, body, priority, assignee);
+      } else {
+        _create(
+          title,
+          body,
+          priority,
+          assignee,
+          createModel,
+          createEffort.isEmpty ? null : createEffort,
+        );
+      }
+    }
+
+    await pushHermesFormPage<void>(
+      context,
+      name: 'kanban-task-form',
+      builder: (sheetCtx) => DisposeControllersOnUnmount(
+        controllers: [titleCtrl, bodyCtrl],
         child: StatefulBuilder(
-          builder: (sheetCtx, setSheet) => SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  editing ? s.kanbanEditTask : s.kanbanNewTask,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: colors.textPrimary,
-                  ),
-                ),
-                if (!editing) ...[
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _taskTemplateChip(
-                        colors,
-                        Icons.bug_report_outlined,
-                        s.kanbanTplBugName,
-                        () {
-                          applyTemplate(s.kanbanTplBugName, s.kanbanTplBugBody);
-                          setSheet(() {});
-                        },
-                      ),
-                      _taskTemplateChip(
-                        colors,
-                        Icons.auto_awesome_outlined,
-                        s.kanbanTplFeatureName,
-                        () {
-                          applyTemplate(
-                            s.kanbanTplFeatureName,
-                            s.kanbanTplFeatureBody,
-                          );
-                          setSheet(() {});
-                        },
-                      ),
-                      _taskTemplateChip(
-                        colors,
-                        Icons.search,
-                        s.kanbanTplResearchName,
-                        () {
-                          applyTemplate(s.kanbanTplResearchName, '');
-                          setSheet(() {});
-                        },
-                      ),
-                    ],
-                  ),
-                ],
-                const SizedBox(height: 14),
-                TextField(
-                  controller: titleCtrl,
-                  autofocus: !editing,
-                  decoration: InputDecoration(labelText: s.kanbanFieldTitle),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: bodyCtrl,
-                  maxLines: 4,
-                  minLines: 3,
-                  decoration: InputDecoration(labelText: s.kanbanFieldDesc),
-                ),
-                const SizedBox(height: 12),
-                _formSelector(
-                  colors: colors,
-                  label: s.kanbanFieldPriority,
-                  valueText: _priorityLabel(s, priority),
-                  onTap: () async {
-                    final v = await _pickOption(
-                      title: s.kanbanFieldPriority,
-                      current: priority,
-                      options: [
-                        (value: 'low', label: s.kanbanPriorityLow),
-                        (value: 'normal', label: s.kanbanPriorityNormal),
-                        (value: 'high', label: s.kanbanPriorityHigh),
-                      ],
-                    );
-                    if (v != null) setSheet(() => priority = v);
-                  },
-                ),
-                const SizedBox(height: 12),
-                _formSelector(
-                  colors: colors,
-                  label: s.kanbanFieldAssignee,
-                  valueText: assignee.isEmpty ? s.kanbanAssigneeNone : assignee,
-                  valueColor: assignee.isEmpty
-                      ? colors.textSecondary
-                      : colors.accent,
-                  onTap: () async {
-                    final v = await _pickOption(
-                      title: s.kanbanFieldAssignee,
-                      current: assignee,
-                      options: [
-                        (value: '', label: s.kanbanAssigneeNone),
-                        for (final p in _profiles)
-                          (value: p.name, label: p.name),
-                      ],
-                    );
-                    if (v != null) setSheet(() => assignee = v);
-                  },
-                ),
-                const SizedBox(height: 8),
-                _assigneeHint(colors, s, assignee.isNotEmpty),
-                const SizedBox(height: 18),
-                FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: colors.accent),
-                  onPressed: () {
-                    final title = titleCtrl.text.trim();
-                    if (title.isEmpty) return;
-                    Navigator.of(sheetCtx).pop();
-                    final body = bodyCtrl.text.trim().isEmpty
-                        ? null
-                        : bodyCtrl.text.trim();
-                    if (editing) {
-                      _update(existing.id, title, body, priority, assignee);
-                    } else {
-                      _create(title, body, priority, assignee);
-                    }
-                  },
-                  child: Text(
-                    editing ? s.kanbanSave : s.kanbanCreate,
-                    style: TextStyle(color: colors.onAccent),
-                  ),
+          builder: (sheetCtx, setSheet) => HermesFormPage(
+            bodyKey: const ValueKey('kanban-task-form-surface'),
+            title: editing ? s.kanbanEditTask : s.kanbanNewTask,
+            submitLabel: editing ? s.kanbanSave : s.kanbanCreate,
+            submitKey: const ValueKey('kanban-task-form-submit'),
+            onSubmit: titleCtrl.text.trim().isEmpty
+                ? null
+                : () => submit(sheetCtx),
+            dirty:
+                titleCtrl.text.trim() != initialTitle.trim() ||
+                bodyCtrl.text.trim() != initialBody.trim() ||
+                priority != initialPriority ||
+                assignee != initialAssignee ||
+                createModel != null,
+            children: [
+              if (!editing) ...[
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _taskTemplateChip(
+                      colors,
+                      Icons.bug_report_outlined,
+                      s.kanbanTplBugName,
+                      () {
+                        applyTemplate(s.kanbanTplBugName, s.kanbanTplBugBody);
+                        setSheet(() {});
+                      },
+                    ),
+                    _taskTemplateChip(
+                      colors,
+                      Icons.auto_awesome_outlined,
+                      s.kanbanTplFeatureName,
+                      () {
+                        applyTemplate(
+                          s.kanbanTplFeatureName,
+                          s.kanbanTplFeatureBody,
+                        );
+                        setSheet(() {});
+                      },
+                    ),
+                    _taskTemplateChip(
+                      colors,
+                      Icons.search,
+                      s.kanbanTplResearchName,
+                      () {
+                        applyTemplate(s.kanbanTplResearchName, '');
+                        setSheet(() {});
+                      },
+                    ),
+                  ],
                 ),
               ],
-            ),
+              const SizedBox(height: 18),
+              HermesField(
+                fieldKey: const ValueKey('kanban-task-form-title'),
+                controller: titleCtrl,
+                label: s.kanbanFieldTitle,
+                autofocus: !editing,
+                onChanged: (_) => setSheet(() {}),
+              ),
+              const SizedBox(height: 16),
+              HermesField(
+                fieldKey: const ValueKey('kanban-task-form-body'),
+                controller: bodyCtrl,
+                label: s.kanbanFieldDesc,
+                keyboardType: TextInputType.multiline,
+                minLines: 5,
+                maxLines: null,
+                onChanged: (_) => setSheet(() {}),
+              ),
+              const SizedBox(height: 16),
+              _formSelector(
+                colors: colors,
+                label: s.kanbanFieldPriority,
+                valueText: _priorityLabel(s, priority),
+                onTap: () async {
+                  final v = await _pickOption(
+                    title: s.kanbanFieldPriority,
+                    current: priority,
+                    options: [
+                      (value: 'low', label: s.kanbanPriorityLow),
+                      (value: 'normal', label: s.kanbanPriorityNormal),
+                      (value: 'high', label: s.kanbanPriorityHigh),
+                    ],
+                  );
+                  if (v != null) setSheet(() => priority = v);
+                },
+              ),
+              const SizedBox(height: 12),
+              _formSelector(
+                colors: colors,
+                label: s.kanbanFieldAssignee,
+                valueText: assignee.isEmpty ? s.kanbanAssigneeNone : assignee,
+                valueColor: assignee.isEmpty
+                    ? colors.textSecondary
+                    : colors.accent,
+                onTap: () async {
+                  final v = await _pickOption(
+                    title: s.kanbanFieldAssignee,
+                    current: assignee,
+                    options: [
+                      (value: '', label: s.kanbanAssigneeNone),
+                      for (final p in _profiles) (value: p.name, label: p.name),
+                    ],
+                  );
+                  if (v != null) setSheet(() => assignee = v);
+                },
+              ),
+              const SizedBox(height: 8),
+              _assigneeHint(colors, s, assignee.isNotEmpty),
+              if (!editing && modelOptionsSupported) ...[
+                const SizedBox(height: 12),
+                HermesListRow(
+                  key: const ValueKey('kanban-create-model'),
+                  icon: Icons.memory_rounded,
+                  title: s.kanbanCreateModel,
+                  subtitle: createModel?.model.isNotEmpty == true
+                      ? '${createModel!.provider}: ${createModel!.model}'
+                      : s.kanbanProfileDefault,
+                  onTap: modelOptionsLoading
+                      ? null
+                      : () async {
+                          setSheet(() => modelOptionsLoading = true);
+                          try {
+                            createModelOptions ??= await _client
+                                .getModelOptions();
+                          } on DashboardHttpException catch (error) {
+                            if (error.statusCode == 404 ||
+                                error.statusCode == 405) {
+                              if (sheetCtx.mounted) {
+                                setSheet(() => modelOptionsSupported = false);
+                              }
+                              return;
+                            }
+                            rethrow;
+                          } finally {
+                            if (sheetCtx.mounted) {
+                              setSheet(() => modelOptionsLoading = false);
+                            }
+                          }
+                          if (!sheetCtx.mounted) return;
+                          final options = createModelOptions!;
+                          final picked = await showHermesModelPicker(
+                            context: sheetCtx,
+                            surfaceKey: const ValueKey(
+                              'kanban-create-model-options-surface',
+                            ),
+                            keyPrefix: 'kanban-create-model',
+                            title: s.kanbanCreateModel,
+                            defaultLabel: s.kanbanProfileDefault,
+                            current: createModel == null
+                                ? const HermesModelChoice.defaultModel()
+                                : HermesModelChoice(
+                                    createModel!.provider,
+                                    createModel!.model,
+                                  ),
+                            groups: [
+                              for (final provider in options.providers)
+                                HermesModelGroup(
+                                  slug: provider.slug,
+                                  name: provider.label,
+                                  models: provider.models,
+                                ),
+                            ],
+                          );
+                          if (picked == null || !sheetCtx.mounted) return;
+                          final effort = await _pickOption(
+                            title: s.kanbanCreateReasoning,
+                            current: createEffort,
+                            options: [
+                              (value: '', label: s.kanbanProfileDefault),
+                              for (final value in kKanbanReasoningEfforts)
+                                (value: value, label: value),
+                            ],
+                          );
+                          if (effort == null || !sheetCtx.mounted) return;
+                          setSheet(() {
+                            createModel = _KanbanModelChoice(
+                              provider: picked.provider,
+                              model: picked.model,
+                            );
+                            createEffort = effort;
+                          });
+                        },
+                ),
+              ],
+            ],
           ),
         ),
       ),
     );
-    // Libera los controllers DESPUÉS de la animación de cierre del sheet.
-    // Liberarlos de inmediato (con la hoja aún cerrándose) hacía que el TextField
-    // re-escuchara un TextEditingController ya destruido en el siguiente frame
-    // → crash en cascada `_dependents.isEmpty`. Son variables locales: la closure
-    // sigue siendo válida aunque la pantalla se cierre antes.
-    Future.delayed(const Duration(milliseconds: 400), () {
-      titleCtrl.dispose();
-      bodyCtrl.dispose();
-    });
   }
 
   String _priorityLabel(Strings s, String value) {
@@ -1418,187 +2265,245 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       task.id,
       board: _selectedBoard,
     );
-    await showHermesFloatingSurface<void>(
-      context: context,
-      surfaceKey: const ValueKey('kanban-task-detail-surface'),
-      maxWidth: 580,
-      maxHeightFactor: 0.88,
-      builder: (sheetCtx) => StatefulBuilder(
-        builder: (sheetCtx, setSheet) => FutureBuilder<KanbanTaskDetail>(
-          future: detailFuture,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const SizedBox(
-                key: ValueKey('kanban-task-detail-loading'),
-                height: 220,
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-            if (snapshot.hasError || snapshot.data == null) {
-              return _TaskDetailError(
-                colors: colors,
-                message: _humanError(snapshot.error ?? 'invalid task'),
-                onRetry: () {
+    // Spec 080: the task detail is a full page with ONE scroll (the rich
+    // content owns it), not a floating surface with nested scrolls.
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (sheetCtx) => Scaffold(
+          key: const ValueKey('kanban-task-detail-surface'),
+          appBar: HermesAppBar(
+            centerTitle: false,
+            title: Text(Strings.of(sheetCtx).kanbanUiTaskTitle),
+          ),
+          body: StatefulBuilder(
+            builder: (sheetCtx, setSheet) => FutureBuilder<KanbanTaskDetail>(
+              future: detailFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const SizedBox(
+                    key: ValueKey('kanban-task-detail-loading'),
+                    height: 220,
+                    child: Center(child: ConsoleLoader.medium(showLabel: true)),
+                  );
+                }
+                if (snapshot.hasError || snapshot.data == null) {
+                  return _TaskDetailError(
+                    colors: colors,
+                    message: _humanError(snapshot.error ?? 'invalid task'),
+                    onRetry: () {
+                      setSheet(() {
+                        detailFuture = _client.getTaskDetail(
+                          task.id,
+                          board: _selectedBoard,
+                        );
+                      });
+                    },
+                  );
+                }
+                final detail = snapshot.data!;
+
+                void refreshDetail() {
+                  if (!sheetCtx.mounted) return;
                   setSheet(() {
                     detailFuture = _client.getTaskDetail(
-                      task.id,
+                      detail.task.id,
                       board: _selectedBoard,
                     );
                   });
-                },
-              );
-            }
-            final detail = snapshot.data!;
-
-            void refreshDetail() {
-              if (!sheetCtx.mounted) return;
-              setSheet(() {
-                detailFuture = _client.getTaskDetail(
-                  detail.task.id,
-                  board: _selectedBoard,
-                );
-              });
-            }
-
-            Future<void> mutate(Future<void> Function() action) async {
-              try {
-                await action();
-                _scheduleRefresh();
-                refreshDetail();
-              } catch (error) {
-                if (!mounted) return;
-                _snack(_humanError(error));
-                if (error is DashboardHttpException &&
-                    error.statusCode == 409) {
-                  refreshDetail();
                 }
-              }
-            }
 
-            Future<void> guarded(Future<void> Function() action) async {
-              try {
-                await action();
-              } catch (error) {
-                if (mounted) _snack(_humanError(error));
-              }
-            }
+                Future<void> mutate(Future<void> Function() action) async {
+                  try {
+                    await action();
+                    _scheduleRefresh();
+                    refreshDetail();
+                  } catch (error) {
+                    if (!mounted) return;
+                    _snack(_humanError(error));
+                    if (error is DashboardHttpException &&
+                        error.statusCode == 409) {
+                      refreshDetail();
+                    }
+                  }
+                }
 
-            final hydratedTask = detail.task;
-            return KanbanTaskDetailSurface(
-              detail: detail,
-              readOnly: widget.connection.readOnly,
-              onAddComment: widget.connection.readOnly
-                  ? null
-                  : (body) => mutate(
-                      () => _client.addComment(
-                        hydratedTask.id,
-                        body,
-                        board: _selectedBoard,
-                      ),
-                    ),
-              onUploadAttachment: widget.connection.readOnly
-                  ? null
-                  : () => mutate(() => _uploadTaskAttachment(hydratedTask.id)),
-              onDownloadAttachment: (attachment) =>
-                  guarded(() => _downloadTaskAttachment(attachment)),
-              onDeleteAttachment: widget.connection.readOnly
-                  ? null
-                  : (attachment) =>
-                        mutate(() => _deleteTaskAttachment(attachment)),
-              onInspectRun: (run) => guarded(() => _showRunInspection(run)),
-              onTerminateRun: widget.connection.readOnly
-                  ? null
-                  : (run) => mutate(() => _terminateRun(run)),
-              onShowLog: () => guarded(() => _showTaskLog(hydratedTask.id)),
-              onReclaim: widget.connection.readOnly
-                  ? null
-                  : () => mutate(() => _reclaimTask(hydratedTask)),
-              onReassign: widget.connection.readOnly
-                  ? null
-                  : () => mutate(() => _reassignTask(hydratedTask)),
-              onSpecify: widget.connection.readOnly
-                  ? null
-                  : () => mutate(() async {
-                      if (!await _confirm020(
-                        title: copy.specifyTitle,
-                        body: copy.specifyBody,
-                        confirmLabel: copy.specify,
-                      )) {
-                        return;
-                      }
-                      if (!await _verifyAppLock(copy.specifyTitle)) return;
-                      final result = await _client.specifyTask(
-                        hydratedTask.id,
-                        author: 'mobile',
-                        board: _selectedBoard,
-                      );
-                      if (!mounted) return;
-                      _snack(
-                        result.ok
-                            ? copy.specifyStarted
-                            : (result.reason ?? copy.actionUnavailable),
-                      );
-                    }),
-              onDecompose: widget.connection.readOnly
-                  ? null
-                  : () => mutate(() async {
-                      if (!await _confirm020(
-                        title: copy.decomposeTitle,
-                        body: copy.decomposeBody,
-                        confirmLabel: copy.decompose,
-                      )) {
-                        return;
-                      }
-                      if (!await _verifyAppLock(copy.decomposeTitle)) return;
-                      final result = await _client.decomposeTask(
-                        hydratedTask.id,
-                        author: 'mobile',
-                        board: _selectedBoard,
-                      );
-                      if (!mounted) return;
-                      _snack(
-                        result.ok
-                            ? copy.decomposeResult(result.childIds.length)
-                            : (result.reason ?? copy.actionUnavailable),
-                      );
-                    }),
-              onConfigureModel: detail.capabilities.isEmpty
-                  ? null
-                  : () => mutate(() => _configureTaskModel(hydratedTask)),
-              onOpenLinkedTask: (id) async {
-                Navigator.of(sheetCtx).pop();
-                await Future<void>.delayed(const Duration(milliseconds: 350));
-                if (!mounted) return;
-                await _openTaskSheet(
-                  KanbanTask(id: id, title: id, body: '', status: 'todo'),
+                Future<void> guarded(Future<void> Function() action) async {
+                  try {
+                    await action();
+                  } catch (error) {
+                    if (mounted) _snack(_humanError(error));
+                  }
+                }
+
+                final hydratedTask = detail.task;
+                final notif = context
+                    .findAncestorStateOfType<HermesAppState>()
+                    ?.notifications;
+                return KanbanTaskDetailSurface(
+                  detail: detail,
+                  readOnly: widget.connection.readOnly,
+                  onAddComment: widget.connection.readOnly
+                      ? null
+                      : (body) => mutate(
+                          () => _client.addComment(
+                            hydratedTask.id,
+                            body,
+                            board: _selectedBoard,
+                          ),
+                        ),
+                  onUploadAttachment: widget.connection.readOnly
+                      ? null
+                      : () => mutate(
+                          () => _uploadTaskAttachment(hydratedTask.id),
+                        ),
+                  onDownloadAttachment: (attachment) =>
+                      guarded(() => _downloadTaskAttachment(attachment)),
+                  onDeleteAttachment: widget.connection.readOnly
+                      ? null
+                      : (attachment) =>
+                            mutate(() => _deleteTaskAttachment(attachment)),
+                  onInspectRun: (run) => guarded(() => _showRunInspection(run)),
+                  onTerminateRun: widget.connection.readOnly
+                      ? null
+                      : (run) => mutate(() => _terminateRun(run)),
+                  onShowLog: () => guarded(() => _showTaskLog(hydratedTask.id)),
+                  onReclaim: widget.connection.readOnly
+                      ? null
+                      : () => mutate(() => _reclaimTask(hydratedTask)),
+                  onReassign: widget.connection.readOnly
+                      ? null
+                      : () => mutate(() => _reassignTask(hydratedTask)),
+                  onSpecify: widget.connection.readOnly
+                      ? null
+                      : () => mutate(() async {
+                          if (!await _confirm020(
+                            title: copy.specifyTitle,
+                            body: copy.specifyBody,
+                            confirmLabel: copy.specify,
+                          )) {
+                            return;
+                          }
+                          if (!await _verifyAppLock(copy.specifyTitle)) return;
+                          final result = await _client.specifyTask(
+                            hydratedTask.id,
+                            author: 'mobile',
+                            board: _selectedBoard,
+                          );
+                          if (!mounted) return;
+                          _snack(
+                            result.ok
+                                ? copy.specifyStarted
+                                : (result.reason ?? copy.actionUnavailable),
+                            result.ok
+                                ? FeedbackKind.routine
+                                : FeedbackKind.error,
+                          );
+                        }),
+                  onDecompose: widget.connection.readOnly
+                      ? null
+                      : () => mutate(() async {
+                          if (!await _confirm020(
+                            title: copy.decomposeTitle,
+                            body: copy.decomposeBody,
+                            confirmLabel: copy.decompose,
+                          )) {
+                            return;
+                          }
+                          if (!await _verifyAppLock(copy.decomposeTitle)) {
+                            return;
+                          }
+                          final result = await _client.decomposeTask(
+                            hydratedTask.id,
+                            author: 'mobile',
+                            board: _selectedBoard,
+                          );
+                          if (!mounted) return;
+                          _snack(
+                            result.ok
+                                ? copy.decomposeResult(result.childIds.length)
+                                : (result.reason ?? copy.actionUnavailable),
+                            result.ok
+                                ? FeedbackKind.routine
+                                : FeedbackKind.error,
+                          );
+                        }),
+                  onConfigureModel: detail.capabilities.isEmpty
+                      ? null
+                      : () => mutate(() => _configureTaskModel(hydratedTask)),
+                  onOpenLinkedTask: (id) async {
+                    Navigator.of(sheetCtx).pop();
+                    await Future<void>.delayed(
+                      const Duration(milliseconds: 350),
+                    );
+                    if (!mounted) return;
+                    await _openTaskSheet(
+                      KanbanTask(id: id, title: id, body: '', status: 'todo'),
+                    );
+                  },
+                  onArchive: widget.connection.readOnly
+                      ? null
+                      : () async {
+                          if (await _confirmArchive(hydratedTask) &&
+                              sheetCtx.mounted) {
+                            Navigator.of(sheetCtx).pop();
+                          }
+                        },
+                  onDelete: widget.connection.readOnly
+                      ? null
+                      : () async {
+                          if (await _confirmDelete(hydratedTask) &&
+                              sheetCtx.mounted) {
+                            Navigator.of(sheetCtx).pop();
+                          }
+                        },
+                  onMove: widget.connection.readOnly
+                      ? null
+                      : () {
+                          Navigator.of(sheetCtx).pop();
+                          _pickMove(hydratedTask);
+                        },
+                  onEdit: widget.connection.readOnly
+                      ? null
+                      : () {
+                          Navigator.of(sheetCtx).pop();
+                          _openTaskForm(existing: hydratedTask);
+                        },
+                  notificationsMuted:
+                      notif?.muteStore.kanbanMuted(
+                        connId: widget.connection.id,
+                        taskId: hydratedTask.id,
+                      ) ??
+                      false,
+                  onToggleNotificationsMuted: notif == null
+                      ? null
+                      : (muted) async {
+                          await notif.muteStore.setKanbanMuted(
+                            connId: widget.connection.id,
+                            taskId: hydratedTask.id,
+                            muted: muted,
+                          );
+                          if (sheetCtx.mounted) setSheet(() {});
+                        },
+                  notifyWhenDone:
+                      notif?.muteStore.kanbanNotifyDone(
+                        connId: widget.connection.id,
+                        taskId: hydratedTask.id,
+                      ) ??
+                      false,
+                  onToggleNotifyWhenDone: notif == null
+                      ? null
+                      : (value) async {
+                          await notif.muteStore.setKanbanNotifyDone(
+                            connId: widget.connection.id,
+                            taskId: hydratedTask.id,
+                            value: value,
+                          );
+                          if (sheetCtx.mounted) setSheet(() {});
+                        },
                 );
               },
-              onArchive: widget.connection.readOnly
-                  ? null
-                  : () {
-                      Navigator.of(sheetCtx).pop();
-                      _confirmArchive(hydratedTask);
-                    },
-              onDelete: widget.connection.readOnly
-                  ? null
-                  : () {
-                      Navigator.of(sheetCtx).pop();
-                      _confirmDelete(hydratedTask);
-                    },
-              onMove: widget.connection.readOnly
-                  ? null
-                  : () {
-                      Navigator.of(sheetCtx).pop();
-                      _pickMove(hydratedTask);
-                    },
-              onEdit: widget.connection.readOnly
-                  ? null
-                  : () {
-                      Navigator.of(sheetCtx).pop();
-                      _openTaskForm(existing: hydratedTask);
-                    },
-            );
-          },
+            ),
+          ),
         ),
       ),
     );
@@ -1609,33 +2514,19 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
     required String body,
     required String confirmLabel,
     bool destructive = false,
-  }) async {
-    final colors = Theme.of(context).hermes;
+  }) {
     final s = Strings.of(context);
-    final result = await showDialog<bool>(
+    // Shared floating dialog shell (see hermes_premium_ui.dart) instead of a
+    // raw AlertDialog: opaque surface, radius 22, no divider above the
+    // actions, destructive action as a filled red pill.
+    return showHermesConfirmDialog(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: colors.surface,
-        title: Text(title),
-        content: Text(body),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(false),
-            child: Text(s.kanbanCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(true),
-            child: Text(
-              confirmLabel,
-              style: TextStyle(
-                color: destructive ? colors.error : colors.accent,
-              ),
-            ),
-          ),
-        ],
-      ),
+      title: title,
+      message: body,
+      confirmLabel: confirmLabel,
+      cancelLabel: s.kanbanCancel,
+      destructive: destructive,
     );
-    return result == true;
   }
 
   Future<void> _uploadTaskAttachment(String taskId) async {
@@ -1662,7 +2553,7 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       uploadedBy: 'mobile',
       board: _selectedBoard,
     );
-    if (mounted) _snack(copy.attachmentUploaded);
+    if (mounted) _snack(copy.attachmentUploaded, FeedbackKind.routine);
   }
 
   Future<void> _downloadTaskAttachment(KanbanAttachment attachment) async {
@@ -1676,7 +2567,9 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       fileName: attachment.safeFilename,
       bytes: download.bytes,
     );
-    if (path != null && mounted) _snack(copy.attachmentSaved);
+    if (path != null && mounted) {
+      _snack(copy.attachmentSaved, FeedbackKind.routine);
+    }
   }
 
   Future<void> _deleteTaskAttachment(KanbanAttachment attachment) async {
@@ -1690,82 +2583,49 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
     if (!confirmed) return;
     if (!await _verifyAppLock(copy.deleteAttachment)) return;
     await _client.deleteAttachment(attachment.id, board: _selectedBoard);
-    if (mounted) _snack(copy.attachmentDeleted);
+    if (mounted) _snack(copy.attachmentDeleted, FeedbackKind.routine);
   }
 
   Future<void> _showTaskLog(String taskId) async {
-    final colors = Theme.of(context).hermes;
     final copy = _Kanban020Copy.forContext(context);
     final future = _client.getTaskLog(
       taskId,
       tailBytes: 65536,
       board: _selectedBoard,
     );
-    await showHermesFloatingSurface<void>(
-      context: context,
-      surfaceKey: const ValueKey('kanban-log-surface'),
-      maxWidth: 620,
-      maxHeightFactor: 0.82,
-      builder: (_) => FutureBuilder<KanbanTaskLog>(
-        future: future,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const SizedBox(
-              height: 220,
-              child: Center(child: CircularProgressIndicator()),
-            );
-          }
-          if (snapshot.hasError || snapshot.data == null) {
-            return Padding(
-              padding: const EdgeInsets.all(22),
-              child: Text(
-                _humanError(snapshot.error ?? copy.actionUnavailable),
-              ),
-            );
-          }
-          final log = snapshot.data!;
-          return Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  copy.workerLog,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: colors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 420),
-                  child: SingleChildScrollView(
-                    child: SelectableText(
-                      log.exists && log.content.isNotEmpty
-                          ? log.content
-                          : copy.noLog,
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 11.5,
-                        height: 1.35,
-                        color: colors.textSecondary,
-                      ),
-                    ),
-                  ),
-                ),
-                if (log.truncated) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    copy.logTruncated,
-                    style: TextStyle(fontSize: 11, color: colors.textSecondary),
-                  ),
-                ],
-              ],
-            ),
-          );
-        },
+    // Spec 080: the worker log is a full page (HermesLogPage) with ONE
+    // scroll, never a capped pane inside a floating surface.
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => KeyedSubtree(
+          key: const ValueKey('kanban-log-surface'),
+          child: FutureBuilder<KanbanTaskLog>(
+            future: future,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return Scaffold(
+                  appBar: HermesAppBar(title: Text(copy.workerLog)),
+                  body: const Center(child: ConsoleLoader.large()),
+                );
+              }
+              if (snapshot.hasError || snapshot.data == null) {
+                return HermesLogPage(
+                  title: copy.workerLog,
+                  mono: false,
+                  text: _humanError(snapshot.error ?? copy.actionUnavailable),
+                );
+              }
+              final log = snapshot.data!;
+              final hasLog = log.exists && log.content.isNotEmpty;
+              return HermesLogPage(
+                title: copy.workerLog,
+                mono: hasLog,
+                notice: log.truncated ? copy.logTruncated : null,
+                text: hasLog ? log.content : copy.noLog,
+              );
+            },
+          ),
+        ),
       ),
     );
   }
@@ -1784,7 +2644,7 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
           if (snapshot.connectionState != ConnectionState.done) {
             return const SizedBox(
               height: 180,
-              child: Center(child: CircularProgressIndicator()),
+              child: Center(child: ConsoleLoader.medium(showLabel: true)),
             );
           }
           if (snapshot.hasError || snapshot.data == null) {
@@ -1870,7 +2730,7 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       reason: 'Terminated from Hermes Console',
       board: _selectedBoard,
     );
-    if (mounted) _snack(copy.runTerminated);
+    if (mounted) _snack(copy.runTerminated, FeedbackKind.routine);
   }
 
   Future<void> _reclaimTask(KanbanTask task) async {
@@ -1889,7 +2749,7 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       reason: 'Reclaimed from Hermes Console',
       board: _selectedBoard,
     );
-    if (mounted) _snack(copy.taskReclaimed);
+    if (mounted) _snack(copy.taskReclaimed, FeedbackKind.routine);
   }
 
   Future<void> _reassignTask(KanbanTask task) async {
@@ -1924,7 +2784,7 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       reason: 'Reassigned from Hermes Console',
       board: _selectedBoard,
     );
-    if (mounted) _snack(copy.taskReassigned);
+    if (mounted) _snack(copy.taskReassigned, FeedbackKind.routine);
   }
 
   Future<void> _configureTaskModel(KanbanTask task) async {
@@ -1944,62 +2804,27 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       _snack(copy.modelOptionsUnavailable);
       return;
     }
-    final selection = await showHermesFloatingSurface<_KanbanModelChoice>(
+    final picked = await showHermesModelPicker(
       context: context,
       surfaceKey: const ValueKey('kanban-model-options-surface'),
-      maxWidth: 560,
-      maxHeightFactor: 0.82,
-      builder: (surfaceCtx) => ListView(
-        shrinkWrap: true,
-        padding: const EdgeInsets.fromLTRB(12, 14, 12, 18),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-            child: Text(
-              copy.chooseModel,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
+      keyPrefix: 'kanban-model',
+      title: copy.chooseModel,
+      defaultLabel: copy.inheritModel,
+      current: task.modelOverride?.isNotEmpty == true
+          ? HermesModelChoice(task.providerOverride ?? '', task.modelOverride!)
+          : const HermesModelChoice.defaultModel(),
+      groups: [
+        for (final provider in options.providers)
+          HermesModelGroup(
+            slug: provider.slug,
+            name: provider.label,
+            models: provider.models,
           ),
-          ListTile(
-            key: const ValueKey('kanban-model-inherit'),
-            leading: const Icon(Icons.call_merge_rounded),
-            title: Text(copy.inheritModel),
-            onTap: () => Navigator.of(
-              surfaceCtx,
-            ).pop(const _KanbanModelChoice(provider: '', model: '')),
-          ),
-          for (final provider in options.providers) ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 12, 8, 4),
-              child: Text(
-                provider.label,
-                style: const TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            for (final model in provider.models)
-              ListTile(
-                dense: true,
-                title: Text(
-                  model,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing:
-                    provider.slug == task.providerOverride &&
-                        model == task.modelOverride
-                    ? const Icon(Icons.check_rounded)
-                    : null,
-                onTap: () => Navigator.of(surfaceCtx).pop(
-                  _KanbanModelChoice(provider: provider.slug, model: model),
-                ),
-              ),
-          ],
-        ],
-      ),
+      ],
     );
+    final selection = picked == null
+        ? null
+        : _KanbanModelChoice(provider: picked.provider, model: picked.model);
     if (selection == null || !mounted) return;
     final effort = await _pickOption(
       title: copy.reasoningEffort,
@@ -2031,7 +2856,7 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
       clearReasoningEffort: effort.isEmpty,
       board: _selectedBoard,
     );
-    if (mounted) _snack(copy.modelApplied);
+    if (mounted) _snack(copy.modelApplied, FeedbackKind.routine);
   }
 
   String _formatBytes020(int bytes) {
@@ -2040,67 +2865,64 @@ class _TasksScreenState extends State<TasksScreen> with WidgetsBindingObserver {
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MiB';
   }
 
-  Future<void> _confirmArchive(KanbanTask task) async {
-    final colors = Theme.of(context).hermes;
+  Future<bool> _confirmArchive(KanbanTask task) async {
     final s = Strings.of(context);
-    final ok = await showDialog<bool>(
+    final ok = await showHermesDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: colors.surface,
-        title: Text(s.kanbanArchiveTitle),
-        content: Text(s.kanbanArchiveConfirm(task.title)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(false),
-            child: Text(s.kanbanCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(true),
-            child: Text(s.kanbanArchive),
-          ),
-        ],
-      ),
+      title: s.kanbanArchiveTitle,
+      message: s.kanbanArchiveConfirm(task.title),
+      actions: [
+        HermesDialogAction(
+          label: s.kanbanCancel,
+          value: false,
+          style: HermesDialogActionStyle.cancel,
+        ),
+        HermesDialogAction(
+          key: const ValueKey('kanban-archive-confirm'),
+          label: s.kanbanArchive,
+          value: true,
+        ),
+      ],
     );
-    if (ok != true) return;
-    if (!await _verifyAppLock(s.kanbanArchiveTitle) || !mounted) return;
+    if (ok != true || !mounted) return false;
+    if (!await _verifyAppLock(s.kanbanArchiveTitle) || !mounted) return false;
     try {
       await _client.archiveTask(task.id, board: _selectedBoard);
-      if (!mounted) return;
-      _snack(s.kanbanArchived);
+      if (!mounted) return true;
+      _snack(s.kanbanArchived, FeedbackKind.routine);
       _scheduleRefresh();
+      return true;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return false;
       _snack(_humanError(e));
+      return false;
     }
   }
 
-  Future<void> _confirmDelete(KanbanTask task) async {
-    final colors = Theme.of(context).hermes;
+  Future<bool> _confirmDelete(KanbanTask task) async {
     final s = Strings.of(context);
-    final ok = await showDialog<bool>(
+    final ok = await showHermesDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: colors.surface,
-        title: Text(s.kanbanDeleteTitle),
-        content: Text(s.kanbanDeletePermanentConfirm(task.title)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(false),
-            child: Text(s.kanbanCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(true),
-            child: Text(
-              s.kanbanDeletePermanent,
-              style: TextStyle(color: colors.error),
-            ),
-          ),
-        ],
-      ),
+      title: s.kanbanDeleteTitle,
+      message: s.kanbanDeletePermanentConfirm(task.title),
+      actions: [
+        HermesDialogAction(
+          label: s.kanbanCancel,
+          value: false,
+          style: HermesDialogActionStyle.cancel,
+        ),
+        HermesDialogAction(
+          key: const ValueKey('kanban-delete-confirm'),
+          label: s.kanbanDeletePermanent,
+          value: true,
+          style: HermesDialogActionStyle.destructive,
+        ),
+      ],
     );
-    if (ok != true) return;
-    if (!await _verifyAppLock(s.kanbanDeleteTitle) || !mounted) return;
+    if (ok != true || !mounted) return false;
+    if (!await _verifyAppLock(s.kanbanDeleteTitle) || !mounted) return false;
     await _delete(task);
+    return true;
   }
 }
 
@@ -2227,6 +3049,8 @@ class _TaskDetailError extends StatelessWidget {
 
 /// Cabecera de sección de la bandeja: icono + nombre + recuento. Opcionalmente
 /// una acción "Limpiar" a la derecha (solo en Hechas).
+/// Cabecera de sección: nombre + recuento, sin caja. Opcionalmente una
+/// acción "Limpiar" a la derecha (solo en Hechas).
 class _GroupHeader extends StatelessWidget {
   final HermesThemeColors colors;
   final _TaskGroup group;
@@ -2243,38 +3067,31 @@ class _GroupHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 4, left: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
         children: [
-          Icon(group.icon, size: 16, color: group.color),
-          const SizedBox(width: 7),
           Expanded(
             child: Text(
               group.label.toUpperCase(),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.6,
-                color: colors.textPrimary,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.4,
+                color: colors.textSecondary,
               ),
             ),
           ),
-          const SizedBox(width: 7),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            decoration: BoxDecoration(
-              color: group.color.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              '${group.tasks.length}',
-              style: TextStyle(
-                fontSize: 10.5,
-                fontWeight: FontWeight.w700,
-                color: group.color,
-              ),
+          const SizedBox(width: 8),
+          Text(
+            '${group.tasks.length}',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: colors.textSecondary.withValues(alpha: 0.75),
             ),
           ),
           if (onClear != null) ...[
@@ -2305,147 +3122,377 @@ class _GroupHeader extends StatelessWidget {
   }
 }
 
-class _TaskCard extends StatelessWidget {
+/// Círculo con la inicial de quien lleva la tarea (perfil/bot). Sin avatar
+/// real: es una etiqueta visual ligera, no una carga de imagen de perfil.
+class _TaskAvatar extends StatelessWidget {
+  final HermesThemeColors colors;
+  final String assignee;
+
+  const _TaskAvatar({required this.colors, required this.assignee});
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = assignee.isNotEmpty ? assignee[0].toUpperCase() : '';
+    return Container(
+      width: 20,
+      height: 20,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: colors.textPrimary.withValues(alpha: 0.10),
+        shape: BoxShape.circle,
+      ),
+      child: initial.isEmpty
+          ? Icon(
+              Icons.sticky_note_2_outlined,
+              size: 11,
+              color: colors.textSecondary,
+            )
+          : Text(
+              initial,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: colors.textPrimary,
+              ),
+            ),
+    );
+  }
+}
+
+/// Contenido de una fila de tarea (título + quién la lleva + estado/tiempo).
+/// Se reutiliza tal cual dentro de la tarjeta agrupada de "Lista" y dentro de
+/// la tarjeta suelta de "Tablero"; sólo cambia lo que la envuelve por fuera.
+class _TaskRowTile extends StatelessWidget {
   final HermesThemeColors colors;
   final KanbanTask task;
-  final Color statusColor;
+  final String trailing;
+  final Color trailingColor;
   final VoidCallback onTap;
 
-  const _TaskCard({
+  const _TaskRowTile({
     required this.colors,
     required this.task,
-    required this.statusColor,
+    required this.trailing,
+    required this.trailingColor,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final s = Strings.of(context);
-    final assignee = task.assignee ?? '';
+    final assignee = (task.assignee ?? '').trim();
     final hasAssignee = assignee.isNotEmpty;
-    final highPrio = (task.priority == 'high');
-    return AccentCard(
+    final highPrio = task.priority == 'high';
+    return InkWell(
       key: ValueKey('kanban-task-${task.id}'),
-      background: colors.surface,
-      borderColor: statusColor.withValues(alpha: 0.30),
-      accent: statusColor,
-      accentWidth: 3,
-      borderRadius: const BorderRadius.all(Radius.circular(12)),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: const BorderRadius.all(Radius.circular(12)),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                task.title,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w600,
-                  color: colors.textPrimary,
-                ),
-              ),
-              if (task.body.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  task.body,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.3,
-                    color: colors.textSecondary,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 13, 16, 13),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    task.title,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      height: 1.35,
+                      letterSpacing: -0.1,
+                      color: colors.textPrimary,
+                    ),
                   ),
                 ),
+                if (highPrio) ...[
+                  const SizedBox(width: 6),
+                  Icon(
+                    Icons.priority_high_rounded,
+                    size: 14,
+                    color: colors.error,
+                  ),
+                ],
               ],
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  // Perfil ejecutor: lo más importante para entender si la
-                  // tarea se trabajará o es solo una nota.
-                  _Chip(
-                    colors: colors,
-                    icon: hasAssignee
-                        ? Icons.person_outline
-                        : Icons.sticky_note_2_outlined,
-                    label: hasAssignee ? assignee : s.kanbanUnassigned,
-                    color: hasAssignee ? colors.accent : colors.textSecondary,
-                  ),
-                  if (highPrio)
-                    _Chip(
-                      colors: colors,
-                      icon: Icons.priority_high_rounded,
-                      label: s.kanbanPriorityHigh,
-                      color: colors.error,
-                    ),
-                  if (task.hasProgress)
-                    _Chip(
-                      colors: colors,
-                      icon: Icons.donut_large_rounded,
-                      label: '${task.progressDone}/${task.progressTotal}',
-                      color: statusColor,
-                    ),
-                  if (task.commentCount > 0)
-                    _Chip(
-                      colors: colors,
-                      icon: Icons.mode_comment_outlined,
-                      label: '${task.commentCount}',
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                _TaskAvatar(colors: colors, assignee: assignee),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    hasAssignee ? '@$assignee' : s.kanbanUnassigned,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12.5,
                       color: colors.textSecondary,
                     ),
+                  ),
+                ),
+                if (task.commentCount > 0) ...[
+                  Icon(
+                    Icons.mode_comment_outlined,
+                    size: 12,
+                    color: colors.textSecondary,
+                  ),
+                  const SizedBox(width: 2),
+                  Text(
+                    '${task.commentCount}',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: colors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                 ],
-              ),
-            ],
-          ),
+                Text(
+                  trailing,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12.5, color: trailingColor),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-/// Chip compacto (icono + texto) para metadatos de una tarjeta: perfil
-/// ejecutor, prioridad alta, progreso, comentarios.
-class _Chip extends StatelessWidget {
+/// Vista "Lista": un grupo entero es una única superficie redondeada con las
+/// tareas separadas por líneas finas, en vez de tarjetas sueltas.
+class _TaskListGroupCard extends StatelessWidget {
   final HermesThemeColors colors;
-  final IconData icon;
-  final String label;
-  final Color color;
+  final _TaskGroup group;
+  final String Function(KanbanTask) trailingFor;
+  final Color trailingColor;
+  final ValueChanged<KanbanTask> onTapTask;
 
-  const _Chip({
+  const _TaskListGroupCard({
     required this.colors,
-    required this.icon,
-    required this.label,
-    required this.color,
+    required this.group,
+    required this.trailingFor,
+    required this.trailingColor,
+    required this.onTapTask,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    return DecoratedBox(
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.13),
-        borderRadius: BorderRadius.circular(8),
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(20),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: color),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10.5,
-              fontWeight: FontWeight.w600,
-              color: color,
-            ),
-          ),
-        ],
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < group.tasks.length; i++) ...[
+              if (i > 0)
+                Padding(
+                  padding: const EdgeInsets.only(left: 16),
+                  child: Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: colors.divider.withValues(alpha: 0.5),
+                  ),
+                ),
+              _TaskRowTile(
+                colors: colors,
+                task: group.tasks[i],
+                trailing: trailingFor(group.tasks[i]),
+                trailingColor: trailingColor,
+                onTap: () => onTapTask(group.tasks[i]),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Tarjeta suelta de "Tablero": mismo contenido que en Lista, pero cada
+/// tarea es su propia superficie redondeada (columnas, no secciones).
+class _BoardTaskCard extends StatelessWidget {
+  final HermesThemeColors colors;
+  final KanbanTask task;
+  final String trailing;
+  final Color trailingColor;
+  final VoidCallback onTap;
+  final bool elevated;
+
+  const _BoardTaskCard({
+    required this.colors,
+    required this.task,
+    required this.trailing,
+    required this.trailingColor,
+    required this.onTap,
+    this.elevated = false,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: elevated ? colors.surfaceVariant : colors.surface,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: elevated
+            ? [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  blurRadius: 28,
+                  offset: const Offset(0, 14),
+                ),
+              ]
+            : null,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: _TaskRowTile(
+          colors: colors,
+          task: task,
+          trailing: trailing,
+          trailingColor: trailingColor,
+          onTap: onTap,
+        ),
+      ),
+    );
+  }
+}
+
+/// Placeholder que deja una tarjeta en su columna de origen mientras se
+/// arrastra a otra (mismo hueco discreto del mockup "Tablero · arrastrando").
+class _BoardDragPlaceholder extends StatelessWidget {
+  const _BoardDragPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 76,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.035),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+    );
+  }
+}
+
+/// Una columna del tablero: cabecera + tarjetas arrastrables + zona de
+/// destino. El arrastre reutiliza [onDropTask] (que en la pantalla llama al
+/// mismo [_TasksScreenState._move] de siempre); esta clase sólo dibuja.
+class _BoardColumn extends StatelessWidget {
+  final HermesThemeColors colors;
+  final _TaskGroup group;
+  final bool canDrop;
+  final String Function(KanbanTask) trailingFor;
+  final Color trailingColor;
+  final ValueChanged<KanbanTask> onTapTask;
+  final ValueChanged<KanbanTask> onDropTask;
+
+  const _BoardColumn({
+    required this.colors,
+    required this.group,
+    required this.canDrop,
+    required this.trailingFor,
+    required this.trailingColor,
+    required this.onTapTask,
+    required this.onDropTask,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // The column's name is its first row, plain, as a section of the Lista:
+    // it rests below the floating controls and scrolls away with its cards.
+    const top = HermesStickyControls.extent + 6;
+    // The last one ends clear of the fade before the dock, or of the system
+    // bar when there is no dock.
+    final bottom =
+        HermesBottomFade.defaultExtent +
+        12 +
+        MediaQuery.paddingOf(context).bottom;
+    return SizedBox(
+      width: 260,
+      child: DragTarget<KanbanTask>(
+        onWillAcceptWithDetails: (_) => canDrop,
+        onAcceptWithDetails: (details) => onDropTask(details.data),
+        builder: (context, candidateData, rejectedData) {
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              if (candidateData.isNotEmpty)
+                Positioned.fill(
+                  top: top - 4,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.03),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                  ),
+                ),
+              ListView.separated(
+                key: ValueKey('kanban-board-column-${group.key}'),
+                clipBehavior: hermesUnderHeader,
+                padding: EdgeInsets.only(top: top, bottom: bottom),
+                itemCount: group.tasks.length + 1,
+                separatorBuilder: (_, _) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return Padding(
+                      key: ValueKey('kanban-board-header-${group.key}'),
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: _GroupHeader(colors: colors, group: group),
+                    );
+                  }
+                  final task = group.tasks[index - 1];
+                  final card = _BoardTaskCard(
+                    key: ValueKey('kanban-board-task-${task.id}'),
+                    colors: colors,
+                    task: task,
+                    trailing: trailingFor(task),
+                    trailingColor: trailingColor,
+                    onTap: () => onTapTask(task),
+                  );
+                  if (!canDrop) return card;
+                  return LongPressDraggable<KanbanTask>(
+                    data: task,
+                    childWhenDragging: const _BoardDragPlaceholder(),
+                    feedback: Material(
+                      color: Colors.transparent,
+                      child: Transform.rotate(
+                        angle: -2.5 * math.pi / 180,
+                        child: Transform.scale(
+                          scale: 1.04,
+                          child: SizedBox(
+                            width: 260,
+                            child: _BoardTaskCard(
+                              colors: colors,
+                              task: task,
+                              trailing: trailingFor(task),
+                              trailingColor: trailingColor,
+                              onTap: () {},
+                              elevated: true,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    child: card,
+                  );
+                },
+              ),
+            ],
+          );
+        },
       ),
     );
   }

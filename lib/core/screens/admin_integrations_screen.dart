@@ -6,11 +6,23 @@ import '../../main.dart';
 import '../models/admin_integrations.dart';
 import '../services/desktop_control_gateway.dart';
 import '../theme/app_theme.dart';
+import '../widgets/form_page.dart';
+import '../widgets/hermes_app_bar.dart';
 import '../widgets/hermes_premium_ui.dart';
 import '../widgets/mcp_provisioning_surface.dart';
 import '../widgets/webhook_admin_surfaces.dart';
 import 'admin_integrations_copy.dart';
 import 'lock_screen.dart';
+import '../widgets/console_loader.dart';
+import '../design/hermes_design.dart'
+    show
+        HermesAction,
+        HermesDialogAction,
+        HermesDialogActionStyle,
+        HermesMenuButton,
+        HermesStickyControls,
+        showHermesDialog;
+import '../feedback/feedback_policy.dart';
 
 enum AdminIntegrationsSection { mcp, webhooks, server }
 
@@ -108,39 +120,32 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
     required String action,
     bool destructive = false,
   }) async {
-    final colors = Theme.of(context).hermes;
     final copy = AdminIntegrationsCopy.of(context);
-    final approved = await showDialog<bool>(
+    final approved = await showHermesDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: Text(body),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(copy.cancel),
-          ),
-          FilledButton(
-            style: destructive
-                ? FilledButton.styleFrom(
-                    backgroundColor: colors.error,
-                    foregroundColor: Colors.white,
-                  )
-                : null,
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(action),
-          ),
-        ],
-      ),
+      title: title,
+      message: body,
+      actions: [
+        HermesDialogAction(
+          label: copy.cancel,
+          value: false,
+          style: HermesDialogActionStyle.cancel,
+        ),
+        HermesDialogAction(
+          label: action,
+          value: true,
+          style: destructive
+              ? HermesDialogActionStyle.destructive
+              : HermesDialogActionStyle.primary,
+        ),
+      ],
     );
     return approved == true;
   }
 
-  void _showNotice(String message) {
+  void _showNotice(String message, [FeedbackKind kind = FeedbackKind.error]) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    AppFeedback.notify(context, kind, message);
   }
 
   void _showFailure(Object error) {
@@ -150,11 +155,9 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
   Future<void> _addMcp() async {
     final gateway = _mcpGateway;
     if (gateway == null || widget.readOnly || _addingMcp) return;
-    final draft = await showHermesFloatingSurface<McpServerDraft>(
-      context: context,
-      surfaceKey: const ValueKey('mcp-manual-create-surface'),
-      maxWidth: 620,
-      maxHeightFactor: 0.9,
+    final draft = await pushHermesFormPage<McpServerDraft>(
+      context,
+      name: 'mcp-manual-create',
       builder: (_) => const McpServerDraftSurface(),
     );
     if (!mounted || draft == null) return;
@@ -166,7 +169,7 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
     try {
       await gateway.addMcpServer(draft);
       created = true;
-      if (mounted) _showNotice(copy.mcpCreated);
+      if (mounted) _showNotice(copy.mcpCreated, FeedbackKind.routine);
     } catch (error) {
       if (mounted) _showFailure(error);
     }
@@ -232,6 +235,9 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
             : result.needsRestart
             ? copy.webhooksNeedRestart
             : copy.webhooksEnabled,
+        result.restartStarted || result.needsRestart
+            ? FeedbackKind.critical
+            : FeedbackKind.routine,
       );
       await _loadWebhooks(force: true);
     } catch (error) {
@@ -244,11 +250,9 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
   Future<void> _createWebhook() async {
     final gateway = _webhookGateway;
     if (gateway == null || widget.readOnly || _creatingWebhook) return;
-    final draft = await showHermesFloatingSurface<WebhookDraft>(
-      context: context,
-      surfaceKey: const ValueKey('webhook-create-surface'),
-      maxWidth: 620,
-      maxHeightFactor: 0.9,
+    final draft = await pushHermesFormPage<WebhookDraft>(
+      context,
+      name: 'webhook-create',
       builder: (_) => const WebhookDraftSurface(),
     );
     if (!mounted || draft == null) return;
@@ -284,7 +288,7 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
         builder: (_) => WebhookReceiptSurface(receipt: oneShotReceipt),
       );
       if (!mounted) return;
-      _showNotice(copy.webhookCreated);
+      _showNotice(copy.webhookCreated, FeedbackKind.routine);
       await _loadWebhooks(force: true);
     } finally {
       if (mounted && _creatingWebhook) {
@@ -337,7 +341,7 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
     setState(() => _busyWebhooks.add(actionId));
     try {
       await gateway.removeWebhook(route.name);
-      if (mounted) _showNotice(copy.webhookDeleted);
+      if (mounted) _showNotice(copy.webhookDeleted, FeedbackKind.routine);
       await _loadWebhooks(force: true);
     } catch (error) {
       if (mounted) _showFailure(error);
@@ -374,7 +378,7 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
     final copy = AdminIntegrationsCopy.of(context);
     final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     return Scaffold(
-      appBar: AppBar(
+      appBar: HermesAppBar(
         centerTitle: false,
         title: Text(copy.screenTitle),
         actions: [
@@ -388,31 +392,6 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-              child: HermesSegmentedControl<AdminIntegrationsSection>(
-                value: _section,
-                semanticLabel: copy.sectionLabel,
-                onChanged: _selectSection,
-                segments: [
-                  HermesSegment(
-                    key: const ValueKey('admin-integrations-mcp'),
-                    value: AdminIntegrationsSection.mcp,
-                    label: copy.mcpTab,
-                  ),
-                  HermesSegment(
-                    key: const ValueKey('admin-integrations-webhooks'),
-                    value: AdminIntegrationsSection.webhooks,
-                    label: copy.webhooksTab,
-                  ),
-                  HermesSegment(
-                    key: const ValueKey('admin-integrations-server'),
-                    value: AdminIntegrationsSection.server,
-                    label: copy.serverTab,
-                  ),
-                ],
-              ),
-            ),
             if (widget.readOnly)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
@@ -422,17 +401,47 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
                 ),
               ),
             Expanded(
-              child: AnimatedSwitcher(
-                duration: reduceMotion
-                    ? Duration.zero
-                    : const Duration(milliseconds: 170),
-                child: KeyedSubtree(
-                  key: ValueKey(_section),
-                  child: switch (_section) {
-                    AdminIntegrationsSection.mcp => _buildMcp(copy),
-                    AdminIntegrationsSection.webhooks => _buildWebhooks(copy),
-                    AdminIntegrationsSection.server => _buildServer(copy),
-                  },
+              // The section switch floats in place; each section's list
+              // scrolls under it and under the header.
+              child: HermesStickyControls(
+                controls: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: HermesSegmentedControl<AdminIntegrationsSection>(
+                    floating: true,
+                    value: _section,
+                    semanticLabel: copy.sectionLabel,
+                    onChanged: _selectSection,
+                    segments: [
+                      HermesSegment(
+                        key: const ValueKey('admin-integrations-mcp'),
+                        value: AdminIntegrationsSection.mcp,
+                        label: copy.mcpTab,
+                      ),
+                      HermesSegment(
+                        key: const ValueKey('admin-integrations-webhooks'),
+                        value: AdminIntegrationsSection.webhooks,
+                        label: copy.webhooksTab,
+                      ),
+                      HermesSegment(
+                        key: const ValueKey('admin-integrations-server'),
+                        value: AdminIntegrationsSection.server,
+                        label: copy.serverTab,
+                      ),
+                    ],
+                  ),
+                ),
+                child: AnimatedSwitcher(
+                  duration: reduceMotion
+                      ? Duration.zero
+                      : const Duration(milliseconds: 170),
+                  child: KeyedSubtree(
+                    key: ValueKey(_section),
+                    child: switch (_section) {
+                      AdminIntegrationsSection.mcp => _buildMcp(copy),
+                      AdminIntegrationsSection.webhooks => _buildWebhooks(copy),
+                      AdminIntegrationsSection.server => _buildServer(copy),
+                    },
+                  ),
                 ),
               ),
             ),
@@ -442,8 +451,18 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
     );
   }
 
+  /// With the read-only notice above them the lists end at their own edge;
+  /// otherwise they scroll under the floating switch and the header.
+  Clip get _listClip => widget.readOnly ? Clip.hardEdge : hermesUnderHeader;
+
   Widget _buildMcp(AdminIntegrationsCopy copy) => ListView(
-    padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+    clipBehavior: _listClip,
+    padding: const EdgeInsets.fromLTRB(
+      16,
+      8 + HermesStickyControls.extent,
+      16,
+      28,
+    ),
     children: [
       _IntroText(text: copy.mcpIntro),
       const SizedBox(height: 12),
@@ -482,7 +501,13 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
     final gateway = _webhookGateway;
     if (gateway == null) {
       return ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+        clipBehavior: _listClip,
+        padding: const EdgeInsets.fromLTRB(
+          16,
+          8 + HermesStickyControls.extent,
+          16,
+          28,
+        ),
         children: [
           _IntroText(text: copy.webhooksIntro),
           HermesEmptyState(
@@ -495,7 +520,7 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
       );
     }
     if (_loadingWebhooks && _webhooks == null) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: ConsoleLoader.large());
     }
     final failure = _webhooksFailure;
     if (failure != null && _webhooks == null) {
@@ -510,13 +535,20 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
     }
     final snapshot = _webhooks;
     if (snapshot == null) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: ConsoleLoader.large());
     }
     return RefreshIndicator(
+      edgeOffset: HermesStickyControls.extent,
       onRefresh: () => _loadWebhooks(force: true),
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+        clipBehavior: _listClip,
+        padding: const EdgeInsets.fromLTRB(
+          16,
+          8 + HermesStickyControls.extent,
+          16,
+          28,
+        ),
         children: [
           _IntroText(text: copy.webhooksIntro),
           if (failure != null) ...[
@@ -600,7 +632,13 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
     final gateway = _platformGateway;
     if (gateway == null) {
       return ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+        clipBehavior: _listClip,
+        padding: const EdgeInsets.fromLTRB(
+          16,
+          8 + HermesStickyControls.extent,
+          16,
+          28,
+        ),
         children: [
           _IntroText(text: copy.a2aIntro),
           HermesEmptyState(
@@ -613,7 +651,7 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
       );
     }
     if (_loadingA2a && _a2a == null) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: ConsoleLoader.large());
     }
     final failure = _a2aFailure;
     if (failure != null && _a2a == null) {
@@ -628,10 +666,17 @@ class _AdminIntegrationsScreenState extends State<AdminIntegrationsScreen> {
     }
     final capability = _a2a;
     return RefreshIndicator(
+      edgeOffset: HermesStickyControls.extent,
       onRefresh: () => _loadA2a(force: true),
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+        clipBehavior: _listClip,
+        padding: const EdgeInsets.fromLTRB(
+          16,
+          8 + HermesStickyControls.extent,
+          16,
+          28,
+        ),
         children: [
           _IntroText(text: copy.a2aIntro),
           if (capability == null)
@@ -719,13 +764,17 @@ class _WebhookRow extends StatelessWidget {
                 onChanged: readOnly ? null : onChanged,
               ),
               if (!readOnly)
-                PopupMenuButton<String>(
+                HermesMenuButton<String>(
                   tooltip: copy.moreOptions,
                   onSelected: (action) {
                     if (action == 'delete') onDelete();
                   },
-                  itemBuilder: (_) => [
-                    PopupMenuItem(value: 'delete', child: Text(copy.delete)),
+                  actions: (_) => [
+                    HermesAction(
+                      value: 'delete',
+                      label: copy.delete,
+                      destructive: true,
+                    ),
                   ],
                 ),
             ],

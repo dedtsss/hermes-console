@@ -1,7 +1,11 @@
+import '../utils/bot_mention_text.dart';
 import 'package:flutter/foundation.dart';
 
-import '../utils/markdown_clipboard.dart';
+import '../utils/chat_turn.dart';
+import '../utils/plain_preview.dart';
 import '../utils/session_timestamp.dart';
+import 'reference_directive.dart';
+import 'session_category.dart';
 
 /// Derived lifecycle state for a session.
 ///
@@ -32,6 +36,9 @@ enum SessionState {
   };
 }
 
+/// Generic title used when a session has no readable title of its own.
+enum SessionGenericTitle { kanbanTask, scheduledTask, conversation }
+
 /// Session model matching the Gateway API Server response format
 /// (`_session_response` en api_server.py del upstream — campos client-safe).
 class Session implements SessionSortKey {
@@ -61,13 +68,54 @@ class Session implements SessionSortKey {
   /// Sesión origen cuando esta es resultado de un fork.
   final String? parentSessionId;
 
+  /// `_branched_from`: set only by a genuine `/branch` fork.
+  final String? branchedFromId;
+
+  /// `_reset_from`: set by `/new` and idle/daily rotation, which start a new
+  /// conversation rather than a fork.
+  final String? resetFromId;
+
   /// Stable compression lineage identity advertised by Dashboard 0.19.
   final String? lineageRootId;
+
+  /// Every session id of the compression chain projected onto this row
+  /// (`_lineage_ids`, root first). A page can name the same conversation by
+  /// its root, a middle segment or a later tip.
+  final List<String> lineageIds;
+
+  /// The server's `is_internal_child`: a delegate run Desktop folds under its
+  /// parent whatever its source. Null when an older server omits it.
+  final bool? isInternalChild;
+
+  /// The server's `scheduler_owned` (cron run rows and session detail): the
+  /// scheduler still holds this run's in-flight execution. Null when an
+  /// older server omits it.
+  final bool? schedulerOwned;
+
+  /// Whether the server published `is_active` itself. [isActive] falls back
+  /// to `ended_at == null` when it is absent, which is not liveness.
+  final bool isActivePublished;
   final String? cwd;
   final String? gitRepoRoot;
   final String? gitBranch;
   final bool archived;
   final bool? pinned;
+
+  /// The server's `hidden` flag (kept off the default sidebar listing on
+  /// every surface). Null when the server does not publish it.
+  final bool? hidden;
+
+  /// The server's derived read state (`last_read_at` watermark against the
+  /// latest activity). Null when the server does not publish it.
+  final bool? unread;
+
+  /// The server's `last_read_at` watermark (seconds). Null when the server
+  /// does not publish it or never tracked the session (NULL = read there).
+  final double? lastReadAt;
+
+  /// A search hit's FTS snippet as the server sent it, with the `>>>`/`<<<`
+  /// match delimiters ([preview] has them stripped). Null for list rows.
+  final String? searchSnippet;
   final String? profile;
   final bool? isDefaultProfile;
   final String? handoffPlatform;
@@ -109,12 +157,22 @@ class Session implements SessionSortKey {
     this.updatedAt,
     this.endReason,
     this.parentSessionId,
+    this.branchedFromId,
+    this.resetFromId,
     this.lineageRootId,
+    this.lineageIds = const [],
+    this.isInternalChild,
+    this.schedulerOwned,
+    this.isActivePublished = false,
     this.cwd,
     this.gitRepoRoot,
     this.gitBranch,
     this.archived = false,
     this.pinned,
+    this.hidden,
+    this.unread,
+    this.lastReadAt,
+    this.searchSnippet,
     this.profile,
     this.isDefaultProfile,
     this.handoffPlatform,
@@ -142,6 +200,12 @@ class Session implements SessionSortKey {
   /// un resume permite que el Gateway use el perfil global que esté activo en
   /// ese instante. Los borradores antiguos sin sello capturan una sola vez el
   /// fallback recibido y desde entonces el binding conserva este valor.
+  /// Someone read this session on the server after its latest activity:
+  /// it is not unread and carries a real watermark. A NULL watermark means
+  /// "never tracked" (Hermes reads it as read), which says nothing about
+  /// whether anyone saw the latest reply.
+  bool get readOnServer => unread == false && (lastReadAt ?? 0) > 0;
+
   static String profileOwner(String? profile, {String? fallback}) {
     final owner = profile?.trim();
     if (owner != null && owner.isNotEmpty) return owner;
@@ -150,6 +214,11 @@ class Session implements SessionSortKey {
   }
 
   String get logicalId => lineageRootId ?? id;
+
+  /// Every id this row answers to: its live id, its lineage root and each
+  /// compression segment (Desktop's `tombstoneRowIds`).
+  Set<String> get identityIds =>
+      {id, ?lineageRootId, ...lineageIds}..remove('');
 
   /// Chat que todavía existe únicamente como borrador cifrado en el móvil.
   bool get isDraftOnly => source == 'mobile-draft';
@@ -160,8 +229,14 @@ class Session implements SessionSortKey {
   /// las rutas actuales crean un id provisional `mob-*` con `source: mobile`.
   /// En ambos casos abrir el composer no debe pagar un `session.resume`/REST
   /// destinado a fallar: la sesión se crea de forma nativa en el primer envío.
+  ///
+  /// Compartir desde Android (`source: android-share`) sella el texto recibido
+  /// en `preview` antes de que exista ningún turno, así que ahí la única
+  /// evidencia durable posible es `messageCount`: exigir un preview vacío o un
+  /// id `mob-*` dejaría el caso común (compartir texto) pagando el 4007.
   bool get isUnpersistedMobileDraft =>
       isDraftOnly ||
+      (source == 'android-share' && messageCount == 0) ||
       ((source == 'mobile' ||
               source == 'mobile-room' ||
               source == 'mobile-bot') &&
@@ -173,11 +248,27 @@ class Session implements SessionSortKey {
   /// de las primeras palabras del primer mensaje ([preview]) cuando el servidor
   /// devuelve un placeholder ("Untitled"/"New Chat"/vacío). Los overrides
   /// locales (renombrado manual) los aplica `SessionArchive.titleFor` por encima.
-  String get displayTitle {
+  ///
+  /// Generic fallbacks are in Spanish here (the source language) for callers
+  /// without a locale; UI surfaces use `localizedSessionTitle`.
+  String get displayTitle => titleWith(
+    (kind) => switch (kind) {
+      SessionGenericTitle.kanbanTask => 'Tarea del Kanban',
+      SessionGenericTitle.scheduledTask => 'Tarea programada',
+      SessionGenericTitle.conversation => 'Conversación',
+    },
+  );
+
+  /// [displayTitle] with the generic fallback titles supplied by [generic],
+  /// so the UI can localize them.
+  String titleWith(String Function(SessionGenericTitle kind) generic) {
     // Worker del Kanban: el dispatcher la nombra/arranca con "work kanban
     // task t_<id>" (id crudo, no dice de qué tarea vino). Título humano.
-    if (isKanbanJob) return 'Tarea del Kanban';
-    final humanizedTitle = _humanizeTitle(title);
+    if (isKanbanJob) return generic(SessionGenericTitle.kanbanTask);
+    // Bot routines store their owner as a technical `[bot:<name>]` prefix.
+    final humanizedTitle = _humanizeTitle(
+      stripBotMentionNote(title),
+    ).replaceFirst(_botRoutinePrefix, '');
     final syntheticTodoTitle = _looksSyntheticTodoTitle(
       humanizedTitle,
       preview,
@@ -195,9 +286,9 @@ class Session implements SessionSortKey {
     if (generated.isNotEmpty) return generated;
     // Job/skill sin contenido legible (preview = solo preámbulo, a veces
     // truncado por el servidor): título genérico, no el preámbulo crudo.
-    if (isJob) return 'Tarea programada';
+    if (isJob) return generic(SessionGenericTitle.scheduledTask);
     if (_looksInternalTitle(humanizedTitle) || syntheticTodoTitle) {
-      return 'Conversación';
+      return generic(SessionGenericTitle.conversation);
     }
     return title;
   }
@@ -205,6 +296,37 @@ class Session implements SessionSortKey {
   /// ¿Es una sesión de job/cron/skill programada? El servidor las marca con
   /// `source: "cron"` y/o las nombra `cron_<jobid>_<timestamp>` (009-jobs).
   bool get isJob => id.startsWith('cron_') || source == 'cron';
+
+  /// Automation run (Cron, Kanban worker, tool, subagent, webhook, one-shot…)
+  /// versus a normal chat. Decided ONLY by the server's `source`, as Desktop's
+  /// sidebar does (`SIDEBAR_EXCLUDED_SOURCES`): the same field the library's
+  /// `sources`/`exclude_sources` query filters on, so Home, the drawer, the
+  /// Chats/Automation tabs and the history cleanup can never disagree.
+  bool get isAutomation => AutomationSessionSources.contains(source);
+
+  /// Whether this row is its own entry in a session list (Home recents,
+  /// Conversations, drawer), one rule for every screen.
+  ///
+  /// The server's `is_internal_child` decides first, as in the Desktop
+  /// sidebar (store/session.ts): an internal child (a delegate run, whatever
+  /// its source) is always folded under its parent. Otherwise a root always
+  /// is its own row, and a child (`parent_session_id`) is when a person
+  /// chats in it: Hermes lists `/branch` and reset children as their own
+  /// rows and Desktop shows them. Automation children (cron, Kanban) stay
+  /// folded. Only when an older server omits `is_internal_child` does the
+  /// source tell a chat child from a delegate run (`subagent`), a tool
+  /// session or an unclassified child, which stay folded. Compression
+  /// continuations never arrive as separate rows: the server projects them
+  /// onto one row carrying `_lineage_root_id`.
+  bool get listsAsOwnRow {
+    if (isInternalChild == true) return false;
+    final parent = parentSessionId?.trim();
+    if (parent == null || parent.isEmpty) return true;
+    if (isJob || isKanbanJob) return false;
+    if (isInternalChild == false) return true;
+    final kind = source.trim();
+    return kind.isNotEmpty && SessionCategory.chats.includesSource(kind);
+  }
 
   /// Identificador del cron que originó esta sesión.
   ///
@@ -240,8 +362,21 @@ class Session implements SessionSortKey {
 
   /// Preview SIN preámbulos internos ni sintaxis Markdown visible.
   /// Para sesiones del Kanban, el preview es el prompt interno crudo: se oculta.
-  String get cleanPreview =>
-      isKanbanJob ? '' : markdownToCompactText(stripCronPreamble(preview));
+  String get cleanPreview {
+    if (isKanbanJob ||
+        _looksAsyncDelegationCarrier(preview) ||
+        isBackgroundProcessBackendPreview(preview) ||
+        isBackgroundProcessFlattenedPreview(preview)) {
+      return '';
+    }
+    return plainPreview(
+      plainReferencePreview(
+        stripCronPreamble(
+          stripBackgroundProcessCarrier(stripBotMentionNote(preview)),
+        ),
+      ),
+    );
+  }
 
   /// Removes Hermes' synthetic todo handoff from user-visible projections.
   ///
@@ -254,6 +389,12 @@ class Session implements SessionSortKey {
   // SessionDB selects 63 chars, then _shape_preview caps them to 60 + `...`.
   static const _todoContinuationBackendPreview =
       '[Your active task list was preserved across context compress...';
+  static final RegExp _asyncDelegationCarrier = RegExp(
+    r'^\[ASYNC DELEGATION (?:BATCH )?COMPLETE — deleg_[0-9a-f]{8}\](?:\r?\n|$|\.\.\.$)',
+  );
+
+  static bool _looksAsyncDelegationCarrier(String raw) =>
+      _asyncDelegationCarrier.hasMatch(raw);
 
   static String stripTodoContinuation(String raw) {
     var from = 0;
@@ -262,12 +403,9 @@ class Session implements SessionSortKey {
       if (index < 0) return raw;
       final prefix = raw.substring(0, index);
       final atBoundary =
-          index == 0 ||
-          prefix.endsWith('\n\n') ||
-          prefix.endsWith('\r\n\r\n');
+          index == 0 || prefix.endsWith('\n\n') || prefix.endsWith('\r\n\r\n');
       final suffix = raw.substring(index + _todoContinuationHeader.length);
-      if (atBoundary &&
-          RegExp(r'^(?:\r?\n| )- \[(?: |>)\]').hasMatch(suffix)) {
+      if (atBoundary && RegExp(r'^(?:\r?\n| )- \[(?: |>)\]').hasMatch(suffix)) {
         return raw.substring(0, index).trimRight();
       }
       from = index + _todoContinuationHeader.length;
@@ -325,6 +463,10 @@ class Session implements SessionSortKey {
   /// y se vería con los `%20` literales en la lista. Solo decodifica si hay
   /// secuencias `%XX` válidas y la decodificación no falla; en cualquier otro
   /// caso devuelve el texto tal cual (no toca títulos que usan `%` legítimo).
+  static final RegExp _botRoutinePrefix = RegExp(
+    r'^\[bot:[a-z0-9][a-z0-9_-]{0,63}\]\s*',
+  );
+
   static String _humanizeTitle(String title) {
     if (!title.contains('%') || !RegExp(r'%[0-9A-Fa-f]{2}').hasMatch(title)) {
       return title;
@@ -351,7 +493,8 @@ class Session implements SessionSortKey {
 
   static bool _looksInternalTitle(String title) {
     final normalized = title.trimLeft().toLowerCase();
-    return normalized.startsWith('[context compaction') ||
+    return _looksAsyncDelegationCarrier(title) ||
+        normalized.startsWith('[context compaction') ||
         normalized.startsWith('[important:') ||
         normalized.startsWith('operation interrupted:') ||
         normalized == 'operation interrupted.';
@@ -360,7 +503,7 @@ class Session implements SessionSortKey {
   /// Primeras ~6 palabras de [text], limpiadas de puntuación de borde. Base del
   /// título autogenerado.
   static String titleFromText(String text) {
-    return text
+    return stripBotMentionNote(text)
         .split(RegExp(r'\s+'))
         .map((w) => w.replaceAll(RegExp(r"^[^\wÀ-ÿ]+|[^\wÀ-ÿ]+$"), ''))
         .where((w) => w.isNotEmpty)
@@ -438,12 +581,24 @@ class Session implements SessionSortKey {
     double? updatedAt,
     String? endReason,
     String? parentSessionId,
+    String? branchedFromId,
+    String? resetFromId,
     String? lineageRootId,
+    List<String>? lineageIds,
+    bool? isInternalChild,
+    bool? schedulerOwned,
+    bool? isActivePublished,
     String? cwd,
     String? gitRepoRoot,
+    bool clearGitRepoRoot = false,
     String? gitBranch,
+    bool clearGitBranch = false,
     bool? archived,
     bool? pinned,
+    bool? hidden,
+    bool? unread,
+    double? lastReadAt,
+    String? searchSnippet,
     String? profile,
     bool? isDefaultProfile,
     String? handoffPlatform,
@@ -467,12 +622,22 @@ class Session implements SessionSortKey {
     updatedAt: normalizeEpochTimestamp(updatedAt) ?? this.updatedAt,
     endReason: endReason ?? this.endReason,
     parentSessionId: parentSessionId ?? this.parentSessionId,
+    branchedFromId: branchedFromId ?? this.branchedFromId,
+    resetFromId: resetFromId ?? this.resetFromId,
     lineageRootId: lineageRootId ?? this.lineageRootId,
+    lineageIds: lineageIds ?? this.lineageIds,
+    isInternalChild: isInternalChild ?? this.isInternalChild,
+    schedulerOwned: schedulerOwned ?? this.schedulerOwned,
+    isActivePublished: isActivePublished ?? this.isActivePublished,
     cwd: cwd ?? this.cwd,
-    gitRepoRoot: gitRepoRoot ?? this.gitRepoRoot,
-    gitBranch: gitBranch ?? this.gitBranch,
+    gitRepoRoot: clearGitRepoRoot ? null : gitRepoRoot ?? this.gitRepoRoot,
+    gitBranch: clearGitBranch ? null : gitBranch ?? this.gitBranch,
     archived: archived ?? this.archived,
     pinned: pinned ?? this.pinned,
+    hidden: hidden ?? this.hidden,
+    unread: unread ?? this.unread,
+    lastReadAt: lastReadAt ?? this.lastReadAt,
+    searchSnippet: searchSnippet ?? this.searchSnippet,
     profile: profile ?? this.profile,
     isDefaultProfile: isDefaultProfile ?? this.isDefaultProfile,
     handoffPlatform: handoffPlatform ?? this.handoffPlatform,
@@ -502,14 +667,17 @@ class Session implements SessionSortKey {
     final explicitActive = json['is_active'];
     return Session(
       id: _opaqueId(json['id']) ?? '',
-      title: _boundedText(json['title'], 512) ?? 'Untitled',
+      title:
+          _boundedText(_mentionDisplayValue(json['title']), 512) ?? 'Untitled',
       model: _boundedText(json['model'], 256) ?? 'Default',
       source: _boundedText(json['source'], 128) ?? '',
       messageCount: _nonNegativeInt(json['message_count']) ?? 0,
       isActive: explicitActive is bool ? explicitActive : endedAt == null,
-      preview: _boundedText(json['preview'], 2048) ?? '',
+      preview: _boundedText(_mentionDisplayValue(json['preview']), 2048) ?? '',
       lastUserPreview: _boundedText(
-        json['last_user_preview'] ?? json['lastUserPreview'],
+        _mentionDisplayValue(
+          json['last_user_preview'] ?? json['lastUserPreview'],
+        ),
         2048,
       ),
       lastAssistantPreview: _boundedText(
@@ -521,14 +689,29 @@ class Session implements SessionSortKey {
       updatedAt: lastActive,
       endReason: _boundedText(json['end_reason'], 256),
       parentSessionId: _opaqueId(json['parent_session_id']),
+      branchedFromId: _opaqueId(json['_branched_from']),
+      resetFromId: _opaqueId(json['_reset_from']),
       lineageRootId: _opaqueId(
         json['_lineage_root_id'] ?? json['lineage_root'],
       ),
+      lineageIds: _opaqueIds(json['_lineage_ids']),
+      isInternalChild: json['is_internal_child'] is bool
+          ? json['is_internal_child'] as bool
+          : null,
+      schedulerOwned: json['scheduler_owned'] is bool
+          ? json['scheduler_owned'] as bool
+          : null,
+      isActivePublished: explicitActive is bool,
       cwd: _boundedText(json['cwd'], 1024),
       gitRepoRoot: _boundedText(json['git_repo_root'], 1024),
       gitBranch: _boundedText(json['git_branch'], 512),
       archived: json['archived'] == true,
       pinned: json['pinned'] is bool ? json['pinned'] as bool : null,
+      hidden: _flag(json['hidden']),
+      unread: json['unread'] is bool ? json['unread'] as bool : null,
+      lastReadAt: json['last_read_at'] is num
+          ? (json['last_read_at'] as num).toDouble()
+          : null,
       profile: _boundedText(json['profile'], 256),
       isDefaultProfile: json['is_default_profile'] is bool
           ? json['is_default_profile'] as bool
@@ -550,6 +733,15 @@ class Session implements SessionSortKey {
       actualCostUsd: _nonNegativeDouble(json['actual_cost_usd']),
       hasSystemPrompt: json['has_system_prompt'] == true,
     );
+  }
+
+  /// A SQLite flag column: JSON bool, or the raw 0/1 integer the list
+  /// endpoints leave unconverted. Anything else is "not published".
+  static bool? _flag(Object? value) {
+    if (value is bool) return value;
+    if (value == 0) return false;
+    if (value == 1) return true;
+    return null;
   }
 
   static Session? tryParse(Object? value) {
@@ -585,6 +777,11 @@ class Session implements SessionSortKey {
   }
 }
 
+List<String> _opaqueIds(Object? value) {
+  if (value is! List) return const [];
+  return List<String>.unmodifiable(value.map(_opaqueId).whereType<String>());
+}
+
 String? _opaqueId(Object? value) {
   if (value is! String) return null;
   final trimmed = value.trim();
@@ -611,3 +808,6 @@ double? _nonNegativeDouble(Object? value) {
   if (value is! num || !value.isFinite || value < 0) return null;
   return value.toDouble();
 }
+
+Object? _mentionDisplayValue(Object? value) =>
+    value is String ? stripBotMentionNote(value) : value;

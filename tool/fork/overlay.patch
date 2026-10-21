@@ -1,0 +1,897 @@
+diff --git a/.github/workflows/pr-quality.yml b/.github/workflows/pr-quality.yml
+index 3abb7f3..dca8620 100644
+--- a/.github/workflows/pr-quality.yml
++++ b/.github/workflows/pr-quality.yml
+@@ -1,6 +1,8 @@
+ name: Code Quality Checks
+ 
+ on:
++  workflow_dispatch:
++  # Manual fallback for fork CI diagnostics.
+   pull_request:
+     # Also the 1.2.15 integration and review-only bases, so reviewers see CI.
+     branches: [main, 'feat/**', 'review/**']
+@@ -26,6 +28,12 @@ jobs:
+           fetch-depth: 0
+           persist-credentials: false
+ 
++      - name: Verify RU translation and stable overlay
++        run: |
++          python3 tool/fork/localization.py check
++          python3 tool/fork/sync.py check-overlay
++          python3 tool/fork/check_identity.py
++
+       - name: Set up Flutter
+         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+         with:
+diff --git a/.github/workflows/review-core-label.yml b/.github/workflows/review-core-label.yml
+index 9687614..6b086d1 100644
+--- a/.github/workflows/review-core-label.yml
++++ b/.github/workflows/review-core-label.yml
+@@ -18,6 +18,7 @@ concurrency:
+ 
+ jobs:
+   classify:
++    if: github.repository == 'xP3ta/hermes-console'
+     name: Classify core paths
+     runs-on: ubuntu-24.04
+     timeout-minutes: 5
+diff --git a/AGENTS.md b/AGENTS.md
+index f770764..b958721 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -3,6 +3,8 @@
+ Read `docs/PROJECT_BRIEF.md`, `docs/SECURITY_POLICY.md` and
+ `docs/RELEASE_DISTRIBUTION.md` before changing release or distribution files.
+ 
++For this user-owned localization fork, also read `docs/FORK_POLICY.md` before changing package identity, localization, pairing/deep links, distribution, or upstream-sync behavior.
++
+ ## Non-negotiable channel separation
+ 
+ - Google Play accepts only the signed `play` AAB. Never commit it, attach it to
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+index fd99311..8e8725a 100644
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -25,10 +25,8 @@ android {
+    }
+ 
+    defaultConfig {
+-       // Identidad pública en Play (inmutable tras la primera publicación).
+-       // Propia de XPeta Lab para no colisionar con el package de Nous/Hermes.
+-       // El namespace interno no cambia: las clases Kotlin siguen donde están.
+-       applicationId = "dev.xpetalab.hermesconsole"
++       // Existing RU package: preserves updates and coexists with upstream.
++       applicationId = "io.github.dedtsss.hermesconsole"
+        minSdk = 24
+        targetSdk = 36
+        versionCode = flutter.versionCode
+diff --git a/android/app/src/full/AndroidManifest.xml b/android/app/src/full/AndroidManifest.xml
+index 45306d0..f279d3b 100644
+--- a/android/app/src/full/AndroidManifest.xml
++++ b/android/app/src/full/AndroidManifest.xml
+@@ -1,3 +1,16 @@
+ <!-- SPDX-License-Identifier: GPL-3.0-only -->
+ <!-- SPDX-FileCopyrightText: Copyright (c) 2026 XPeta Lab -->
+-<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
++<manifest xmlns:android="http://schemas.android.com/apk/res/android">
++    <!-- Direct/full self-updates only, always through the user's system installer. -->
++    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
++    <application>
++        <provider
++            android:name="com.hermesagent.hermes_android.HermesAppUpdateFileProvider"
++            android:authorities="${applicationId}.app_update_provider"
++            android:exported="false"
++            android:grantUriPermissions="true">
++            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
++                android:resource="@xml/app_update_paths" />
++        </provider>
++    </application>
++</manifest>
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index 9a7341e..d65dcc9 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -75,7 +75,7 @@
+         tools:node="remove" />
+     <application
+         android:name=".HermesApplication"
+-        android:label="Console"
++        android:label="@string/app_name"
+         android:icon="@mipmap/ic_launcher"
+         android:roundIcon="@mipmap/ic_launcher_round"
+         android:allowBackup="false"
+@@ -153,13 +153,13 @@
+              permiten proyectar un glifo limpio para el trabajo en segundo plano
+              y un orbe específico para la conversación de voz. -->
+         <meta-data
+-            android:name="dev.xpetalab.hermesconsole.service.NOTIFICATION_ICON"
++            android:name="io.github.dedtsss.hermesconsole.service.NOTIFICATION_ICON"
+             android:resource="@drawable/ic_stat_hermes" />
+         <meta-data
+-            android:name="dev.xpetalab.hermesconsole.voice.NOTIFICATION_ICON_ACTIVE"
++            android:name="io.github.dedtsss.hermesconsole.voice.NOTIFICATION_ICON_ACTIVE"
+             android:resource="@drawable/ic_stat_voice_orb_active" />
+         <meta-data
+-            android:name="dev.xpetalab.hermesconsole.voice.NOTIFICATION_ICON_PAUSED"
++            android:name="io.github.dedtsss.hermesconsole.voice.NOTIFICATION_ICON_PAUSED"
+             android:resource="@drawable/ic_stat_voice_orb_paused" />
+         <!-- Servicio Flutter de automatización y audio. La escucha usa
+              remoteMessaging en API >=35 y dataSync en API <=34;
+diff --git a/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesExternalDataSyncService.kt b/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesExternalDataSyncService.kt
+index 9977b19..9839d61 100644
+--- a/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesExternalDataSyncService.kt
++++ b/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesExternalDataSyncService.kt
+@@ -135,11 +135,11 @@ class HermesExternalDataSyncService : Service() {
+ 
+     companion object {
+         private const val ACTION_START =
+-            "dev.xpetalab.hermesconsole.action.START_EXTERNAL_DATA_SYNC"
++            "io.github.dedtsss.hermesconsole.action.START_EXTERNAL_DATA_SYNC"
+         private const val ACTION_STOP_REQUESTED =
+-            "dev.xpetalab.hermesconsole.action.STOP_EXTERNAL_DATA_SYNC"
++            "io.github.dedtsss.hermesconsole.action.STOP_EXTERNAL_DATA_SYNC"
+         const val ACTION_OWNER_STOP_REQUIRED =
+-            "dev.xpetalab.hermesconsole.action.EXTERNAL_DATA_SYNC_OWNER_STOP_REQUIRED"
++            "io.github.dedtsss.hermesconsole.action.EXTERNAL_DATA_SYNC_OWNER_STOP_REQUIRED"
+         private const val CHANNEL_ID = "hermes_external_data_sync"
+         private const val NOTIFICATION_ID = 257
+         private const val CONTROL_PREFS = "hermes_external_data_sync_control"
+diff --git a/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesRichNotifications.kt b/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesRichNotifications.kt
+index 65b485e..b5f204c 100644
+--- a/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesRichNotifications.kt
++++ b/android/app/src/main/kotlin/com/hermesagent/hermes_android/HermesRichNotifications.kt
+@@ -1898,7 +1898,7 @@ internal object HermesNotificationActionInbox {
+  */
+ class HermesNotificationActionReceiver : BroadcastReceiver() {
+     companion object {
+-        const val ACTION = "dev.xpetalab.hermesconsole.action.RICH_NOTIFICATION"
++        const val ACTION = "io.github.dedtsss.hermesconsole.action.RICH_NOTIFICATION"
+         const val EXTRA_ACTION_ID = "rich_action_id"
+         const val EXTRA_PAYLOAD = "rich_payload"
+         const val EXTRA_NOTIFICATION_ID = "rich_notification_id"
+diff --git a/android/app/src/main/kotlin/com/hermesagent/hermes_android/MainActivity.kt b/android/app/src/main/kotlin/com/hermesagent/hermes_android/MainActivity.kt
+index 8cd6768..e03be3c 100644
+--- a/android/app/src/main/kotlin/com/hermesagent/hermes_android/MainActivity.kt
++++ b/android/app/src/main/kotlin/com/hermesagent/hermes_android/MainActivity.kt
+@@ -61,6 +61,7 @@ class MainActivity : FlutterFragmentActivity() {
+     private var fullDuplexCaptureHandler: HermesFullDuplexCaptureHandler? = null
+     private var documentPreviewHandler: HermesDocumentPreviewHandler? = null
+     private var clipboardImageHandler: HermesClipboardImageHandler? = null
++    private var appUpdateHandler: HermesAppUpdateHandler? = null
+     private var pendingShare: Map<String, Any?>? = null
+     private var pendingNewSessionLaunch: Map<String, Any?>? = null
+     private var pendingExternalDataSyncStop = false
+@@ -156,6 +157,11 @@ class MainActivity : FlutterFragmentActivity() {
+ 
+     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+         super.configureFlutterEngine(flutterEngine)
++        appUpdateHandler?.close()
++        appUpdateHandler = HermesAppUpdateHandler(this).also { handler ->
++            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HermesAppUpdateHandler.CHANNEL)
++                .setMethodCallHandler(handler)
++        }
+         DurableSecretWriter.attach(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+         clipboardImageHandler?.close()
+         clipboardImageHandler = HermesClipboardImageHandler(applicationContext).also { handler ->
+@@ -462,7 +468,14 @@ class MainActivity : FlutterFragmentActivity() {
+             }
+     }
+ 
++    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
++        super.onActivityResult(requestCode, resultCode, data)
++        appUpdateHandler?.onActivityResult(requestCode, resultCode)
++    }
++
+     override fun onDestroy() {
++        appUpdateHandler?.close()
++        appUpdateHandler = null
+         richNotificationsChannel?.let { HermesRichNotifications.detach(it) }
+         richNotificationsChannel = null
+         if (externalDataSyncStopReceiverRegistered) {
+diff --git a/android/app/src/main/kotlin/com/hermesagent/hermes_android/NewSessionLaunchContract.kt b/android/app/src/main/kotlin/com/hermesagent/hermes_android/NewSessionLaunchContract.kt
+index 014ae74..425ee12 100644
+--- a/android/app/src/main/kotlin/com/hermesagent/hermes_android/NewSessionLaunchContract.kt
++++ b/android/app/src/main/kotlin/com/hermesagent/hermes_android/NewSessionLaunchContract.kt
+@@ -28,13 +28,13 @@ internal fun parseNewSessionLaunchTarget(raw: String?): NewSessionLaunchTarget?
+  * fields.
+  */
+ object NewSessionLaunchContract {
+-    const val ACTION_NEW_SESSION = "dev.xpetalab.hermesconsole.action.NEW_SESSION"
+-    const val ACTION_NEW_SESSION_CAMERA = "dev.xpetalab.hermesconsole.action.NEW_SESSION_CAMERA"
+-    const val ACTION_NEW_SESSION_GALLERY = "dev.xpetalab.hermesconsole.action.NEW_SESSION_GALLERY"
+-    const val ACTION_NEW_SESSION_VOICE = "dev.xpetalab.hermesconsole.action.NEW_SESSION_VOICE"
+-    const val ACTION_OPEN_APP = "dev.xpetalab.hermesconsole.action.OPEN_APP"
+-    const val ACTION_OPEN_SESSION = "dev.xpetalab.hermesconsole.action.OPEN_SESSION"
+-    const val ACTION_OPEN_SETUP = "dev.xpetalab.hermesconsole.action.OPEN_SETUP"
++    const val ACTION_NEW_SESSION = "io.github.dedtsss.hermesconsole.action.NEW_SESSION"
++    const val ACTION_NEW_SESSION_CAMERA = "io.github.dedtsss.hermesconsole.action.NEW_SESSION_CAMERA"
++    const val ACTION_NEW_SESSION_GALLERY = "io.github.dedtsss.hermesconsole.action.NEW_SESSION_GALLERY"
++    const val ACTION_NEW_SESSION_VOICE = "io.github.dedtsss.hermesconsole.action.NEW_SESSION_VOICE"
++    const val ACTION_OPEN_APP = "io.github.dedtsss.hermesconsole.action.OPEN_APP"
++    const val ACTION_OPEN_SESSION = "io.github.dedtsss.hermesconsole.action.OPEN_SESSION"
++    const val ACTION_OPEN_SETUP = "io.github.dedtsss.hermesconsole.action.OPEN_SETUP"
+     const val CHANNEL_NAME = "hermes/new_session_launch"
+     const val CONTRACT_VERSION = 1
+ 
+diff --git a/android/app/src/main/res/values/new_session_widget.xml b/android/app/src/main/res/values/new_session_widget.xml
+index 020f2b1..eb8f8f9 100644
+--- a/android/app/src/main/res/values/new_session_widget.xml
++++ b/android/app/src/main/res/values/new_session_widget.xml
+@@ -6,5 +6,5 @@
+     <string name="new_session_shortcut_long_label">Start a new Hermes conversation</string>
+     <string name="hermes_widget_not_configured">Not configured</string>
+     <string name="hermes_widget_setup_action">Set up Hermes</string>
+-    <string name="new_session_target_package" translatable="false">dev.xpetalab.hermesconsole</string>
++    <string name="new_session_target_package" translatable="false">io.github.dedtsss.hermesconsole</string>
+ </resources>
+diff --git a/android/app/src/main/res/values/strings.xml b/android/app/src/main/res/values/strings.xml
+index ad4b891..7131b63 100644
+--- a/android/app/src/main/res/values/strings.xml
++++ b/android/app/src/main/res/values/strings.xml
+@@ -1,5 +1,6 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
++    <string name="app_name">Hermes Console RU</string>
+     <string name="voice_notification_title">Hermes Voice</string>
+     <string name="voice_notification_active">Listening</string>
+     <string name="voice_notification_paused">Paused</string>
+diff --git a/android/app/src/main/res/xml/shortcuts.xml b/android/app/src/main/res/xml/shortcuts.xml
+index 4cb43d1..eb90b4b 100644
+--- a/android/app/src/main/res/xml/shortcuts.xml
++++ b/android/app/src/main/res/xml/shortcuts.xml
+@@ -7,7 +7,7 @@
+         android:shortcutLongLabel="@string/new_session_shortcut_long_label"
+         android:shortcutShortLabel="@string/new_session_shortcut_short_label">
+         <intent
+-            android:action="dev.xpetalab.hermesconsole.action.NEW_SESSION"
++            android:action="io.github.dedtsss.hermesconsole.action.NEW_SESSION"
+             android:targetClass="com.hermesagent.hermes_android.MainActivity"
+             android:targetPackage="@string/new_session_target_package">
+             <extra
+diff --git a/android/app/src/qa/AndroidManifest.xml b/android/app/src/qa/AndroidManifest.xml
+index 485f791..d416952 100644
+--- a/android/app/src/qa/AndroidManifest.xml
++++ b/android/app/src/qa/AndroidManifest.xml
+@@ -1,7 +1,7 @@
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:tools="http://schemas.android.com/tools">
+     <application
+-        android:label="Console QA"
++        android:label="@string/app_name_qa"
+         tools:replace="android:label">
+         <!-- QA-only: renders the real launcher widgets with sample data to PNG. -->
+         <activity
+diff --git a/android/app/src/qa/res/values/new_session_widget.xml b/android/app/src/qa/res/values/new_session_widget.xml
+index 3b759d3..ff1f933 100644
+--- a/android/app/src/qa/res/values/new_session_widget.xml
++++ b/android/app/src/qa/res/values/new_session_widget.xml
+@@ -1,4 +1,5 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
+-    <string name="new_session_target_package" translatable="false">dev.xpetalab.hermesconsole.qa</string>
++    <string name="app_name_qa">Hermes Console RU QA</string>
++    <string name="new_session_target_package" translatable="false">io.github.dedtsss.hermesconsole.qa</string>
+ </resources>
+diff --git a/docs/PLAY_PERMISSIONS.md b/docs/PLAY_PERMISSIONS.md
+index 20ed170..ae03a15 100644
+--- a/docs/PLAY_PERMISSIONS.md
++++ b/docs/PLAY_PERMISSIONS.md
+@@ -3,7 +3,7 @@
+ Justification of each permission for Google Play review. The table is the
+ merged manifest of `1.2.15 (9540)`: the app's own
+ `android/app/src/main/AndroidManifest.xml` (shared by the `play` and `full`
+-flavors; `android/app/src/full/AndroidManifest.xml` declares nothing extra) plus
++flavors) plus
+ what its dependencies add. It is enforced as an exact set by
+ `tool/release/full_release_policy.json` (APKs: `inspect_public_apk.py`; any
+ manifest text, AAB included: `check_manifest_policy.py`) and by
+@@ -16,6 +16,14 @@ repeat the check on the exact AAB selected:
+ `java -jar bundletool.jar dump manifest --bundle=<aab> > manifest.xml` and then
+ `python3 tool/release/check_manifest_policy.py --manifest manifest.xml --pubspec pubspec.yaml`.
+ 
++RU fork exception: `full` additionally declares `REQUEST_INSTALL_PACKAGES`,
++solely for user-requested app updates through the system Package Installer.
++It grants no silent install, storage access or package enumeration. `play` and
++`qa` do not declare it. The fork's `full_release_policy.json` includes this
++direct-only permission and must not be used as a Play AAB expectation. The
++historical measurements above are not measurements of the new RU build;
++inspect the final signed APK. See [APP_UPDATES.md](APP_UPDATES.md).
++
+ ## Permissions of the Play build
+ 
+ | Permission | Used for | Justification |
+diff --git a/docs/RELEASE_DISTRIBUTION.md b/docs/RELEASE_DISTRIBUTION.md
+index 7f1e71d..401a36a 100644
+--- a/docs/RELEASE_DISTRIBUTION.md
++++ b/docs/RELEASE_DISTRIBUTION.md
+@@ -1,5 +1,16 @@
+ # Release and distribution
+ 
++> RU fork: this document and `tool/release/release_contract.json` describe the
++> upstream release policy. Upstream certificate, source actor and Play anchors
++> are not authority for `io.github.dedtsss.hermesconsole`. Preserve the existing
++> RU signer/alias and follow [STABLE_UPSTREAM_SYNC.md](STABLE_UPSTREAM_SYNC.md)
++> for fork CI and the separate owner-approved release boundary.
++>
++> RU in-app update assets follow [APP_UPDATES.md](APP_UPDATES.md): fork-only
++> version/tag namespace, exact ARM64 APK name, manifest and SHA-256. The fork's
++> `full_release_policy.json` includes direct-only `REQUEST_INSTALL_PACKAGES`;
++> it is not a Play permission expectation. No signed RU release is asserted here.
++
+ Hermes Console has three Android flavors built from one reviewed source commit.
+ A flavor name is a security boundary, not a rename operation.
+ 
+@@ -20,15 +31,21 @@ Play inspection-tool digests, and the GitHub CLI verifier digest.
+ ## Public-repository CI is verification-only
+ 
+ GitHub Actions artifacts are public-repository downloads for readers of this
+-repository. They must never carry a signed APK, AAB, keystore, mapping, private
+-comparison result, or pre-publication candidate. Cross-job artifact transfer is
+-therefore prohibited for release candidates.
++repository. The sole permitted APK artifact is the unsigned ARM64 `fullRelease`
++candidate produced by `.github/workflows/fork-android-check.yml` for the
++owner-controlled signing route described in `docs/APP_UPDATES.md`. It contains
++only that APK, expires after seven days, and is verified as unsigned and
++non-debuggable before upload. No other workflow may upload artifacts. Signed
++APKs, AABs, keystores, mappings, private comparison results, QA/debug/profile
++or Play binaries, and release evidence remain prohibited as Actions artifacts.
++Cross-job artifact transfer remains prohibited for release candidates.
+ 
+ `.github/workflows/build-apk.yml` is CI verification only. It checks the exact
+ tag/commit, authorized forge actor, lock, checked-in SBOMs, licenses, scanners,
+ analysis and tests. It has read-only repository permissions, receives no signing
+ secret, builds no signed candidate, creates no attestation, and invokes no
+-artifact upload/download action. Successful CI is not a build, staging,
++artifact upload/download action. The separate RU source workflow can produce
++only the explicitly permitted unsigned ARM64 candidate. Successful CI is not a build, staging,
+ publication or Play upload result.
+ 
+ Sensitive building, comparison and staging stay on one owner-controlled machine
+diff --git a/docs/SECURITY_POLICY.md b/docs/SECURITY_POLICY.md
+index 62bcfea..e9b55f0 100644
+--- a/docs/SECURITY_POLICY.md
++++ b/docs/SECURITY_POLICY.md
+@@ -346,6 +346,18 @@ Esto puede ser logueado por proxies, firewalls y herramientas de debug.
+ 
+ ## Release y distribución
+ 
++### RU direct application updates
++
++The RU `full` build alone requests `REQUEST_INSTALL_PACKAGES`. About → Check
++for app updates reads only the fork's public GitHub latest release. Download
++and installation each require a user action; there is no silent install or
++background download. The release manifest, GitHub asset digests, bounded APK
++download and Android package/version checks fail closed. A dedicated,
++non-exported FileProvider grants temporary read access only to the update cache
++subdirectory. Android's installer enforces signing compatibility. No storage or
++package-enumeration permission is added. Full contract and limitations:
++[APP_UPDATES.md](APP_UPDATES.md). This is separate from server-side Hermes updates.
++
+ - Las entregas de Google Play usan la upload key de XPeta Lab y Play App
+   Signing. Keystore, credenciales y copias de seguridad permanecen fuera del
+   repo.
+diff --git a/lib/core/screens/about_screen.dart b/lib/core/screens/about_screen.dart
+index 1c14ffa..b44a93f 100644
+--- a/lib/core/screens/about_screen.dart
++++ b/lib/core/screens/about_screen.dart
+@@ -9,6 +9,8 @@ import '../theme/app_theme.dart';
+ import '../widgets/animated_hermes_logo.dart' show kConsoleIconAsset;
+ import '../design/hermes_design.dart';
+ import '../feedback/feedback_policy.dart';
++import '../config/flavor.dart';
++import 'app_update_screen.dart';
+ 
+ /// Acerca de: identidad de la app, estado del proyecto, atribuciones y
+ /// acceso a las licencias open source. Las licencias viven aquí a propósito
+@@ -140,7 +142,7 @@ SOFTWARE.
+                   crossAxisAlignment: CrossAxisAlignment.start,
+                   children: [
+                     Text(
+-                      'Console',
++                      'Hermes Console RU',
+                       style: HermesType.display.copyWith(
+                         color: colors.textPrimary,
+                       ),
+@@ -163,6 +165,22 @@ SOFTWARE.
+             style: HermesType.text.copyWith(color: colors.textSecondary),
+           ),
+         ),
++        if (kHermesFlavor == 'full')
++          HermesListGroup(
++            children: [
++              HermesListRow(
++                icon: Icons.system_update_outlined,
++                title: s.appUpdateCheck,
++                subtitle: s.appUpdateIntro,
++                subtitleMaxLines: 3,
++                onTap: () => Navigator.of(context).push(
++                  MaterialPageRoute<void>(
++                    builder: (_) => const AppUpdateScreen(),
++                  ),
++                ),
++              ),
++            ],
++          ),
+         HermesSectionHeader(s.aboutSectionLegal),
+         HermesListGroup(
+           children: [
+diff --git a/lib/core/services/install_source.dart b/lib/core/services/install_source.dart
+index 5ce9e16..7225daf 100644
+--- a/lib/core/services/install_source.dart
++++ b/lib/core/services/install_source.dart
+@@ -1,16 +1,12 @@
+ import 'package:flutter/foundation.dart';
+ import 'package:flutter/services.dart';
+ 
+-/// Where this build receives updates from. Play and GitHub/Obtainium builds
+-/// are signed with different keys, so Android refuses to update one with the
+-/// other ("App not installed") — switching channel requires uninstalling.
++/// The installer is displayed for information; RU updates stay in this fork.
+ enum InstallSource { googlePlay, githubObtainium, manual }
+ 
+ abstract final class InstallSourceInfo {
+-  static const playListingUrl =
+-      'https://play.google.com/store/apps/details?id=dev.xpetalab.hermesconsole';
+   static const githubReleasesUrl =
+-      'https://github.com/xP3ta/hermes-console/releases';
++      'https://github.com/dedtsss/hermes-console/releases';
+ 
+   static const _channel = MethodChannel('hermes/platform_info');
+ 
+@@ -44,6 +40,5 @@ abstract final class InstallSourceInfo {
+     return classify(installer);
+   }
+ 
+-  static String updateUrl(InstallSource source) =>
+-      source == InstallSource.googlePlay ? playListingUrl : githubReleasesUrl;
++  static String updateUrl(InstallSource source) => githubReleasesUrl;
+ }
+diff --git a/lib/core/services/notifications/background_listener.dart b/lib/core/services/notifications/background_listener.dart
+index ea5ad9d..71d99f5 100644
+--- a/lib/core/services/notifications/background_listener.dart
++++ b/lib/core/services/notifications/background_listener.dart
+@@ -2563,11 +2563,11 @@ class BackgroundListener {
+   static const String readAloudEndButtonId = 'read_aloud_end';
+ 
+   static const String _serviceIconMeta =
+-      'dev.xpetalab.hermesconsole.service.NOTIFICATION_ICON';
++      'io.github.dedtsss.hermesconsole.service.NOTIFICATION_ICON';
+   static const String _voiceActiveIconMeta =
+-      'dev.xpetalab.hermesconsole.voice.NOTIFICATION_ICON_ACTIVE';
++      'io.github.dedtsss.hermesconsole.voice.NOTIFICATION_ICON_ACTIVE';
+   static const String _voicePausedIconMeta =
+-      'dev.xpetalab.hermesconsole.voice.NOTIFICATION_ICON_PAUSED';
++      'io.github.dedtsss.hermesconsole.voice.NOTIFICATION_ICON_PAUSED';
+ 
+   static const NotificationIcon _serviceNotificationIcon = NotificationIcon(
+     metaDataName: _serviceIconMeta,
+diff --git a/lib/core/widgets/install_source_section.dart b/lib/core/widgets/install_source_section.dart
+index 18788d6..dc6b857 100644
+--- a/lib/core/widgets/install_source_section.dart
++++ b/lib/core/widgets/install_source_section.dart
+@@ -43,7 +43,6 @@ class _InstallSourceSectionState extends State<InstallSourceSection> {
+       InstallSource.manual => s.aboutUpdatesManual,
+       null => '…',
+     };
+-    final isPlay = source == InstallSource.googlePlay;
+     return Column(
+       crossAxisAlignment: CrossAxisAlignment.stretch,
+       children: [
+@@ -61,9 +60,7 @@ class _InstallSourceSectionState extends State<InstallSourceSection> {
+                 key: const ValueKey('install-source-open'),
+                 icon: Icons.open_in_new_rounded,
+                 iconColor: colors.accentText,
+-                title: isPlay
+-                    ? s.aboutUpdatesOpenPlay
+-                    : s.aboutUpdatesOpenReleases,
++                title: s.aboutUpdatesOpenReleases,
+                 showChevron: false,
+                 onTap: () => launchUrl(
+                   Uri.parse(InstallSourceInfo.updateUrl(source)),
+diff --git a/lib/l10n/app_en.arb b/lib/l10n/app_en.arb
+index 52c1f71..1386e0f 100644
+--- a/lib/l10n/app_en.arb
++++ b/lib/l10n/app_en.arb
+@@ -6957,5 +6957,50 @@
+   "onb4HelpSafe": "It uses the official Hermes installer. If you already have Hermes, it doesn't touch it, nor Telegram or the Gateway. It takes a few minutes.",
+   "onb4HelpVps": "Hermes on an internet server? Install Tailscale on the server and on this phone, then paste the line.",
+   "onb4HadPassword": "This Hermes already had a password. Type it once and Console doesn't keep it.",
+-  "onb4ManualBody": "Type the address, the user and the password that the setup showed you when it finished."
++  "onb4ManualBody": "Type the address, the user and the password that the setup showed you when it finished.",
++  "appUpdateTitle": "App update",
++  "appUpdateCheck": "Check for app updates",
++  "appUpdateIntro": "Update Hermes Console RU on this phone from this fork’s GitHub Releases. Download and installation start only when you choose.",
++  "appUpdateInstalled": "Installed: {version}",
++  "@appUpdateInstalled": {
++    "placeholders": {
++      "version": {
++        "type": "String"
++      }
++    }
++  },
++  "appUpdateAvailable": "Available: {version}",
++  "@appUpdateAvailable": {
++    "placeholders": {
++      "version": {
++        "type": "String"
++      }
++    }
++  },
++  "appUpdateDownload": "Download verified APK",
++  "appUpdateInstall": "Open Android installer",
++  "appUpdateWorking": "Checking and verifying…",
++  "appUpdateProgress": "Downloading: {percent}%",
++  "@appUpdateProgress": {
++    "placeholders": {
++      "percent": {
++        "type": "int"
++      }
++    }
++  },
++  "appUpdateCurrent": "No newer app version is available.",
++  "appUpdateNoRelease": "No published app release yet. Try again later.",
++  "appUpdateNoNotes": "No release notes provided.",
++  "appUpdateReady": "APK verified. Tap below to ask Android to install it.",
++  "appUpdateNetworkError": "Could not complete the request or save the APK. Check your connection and free space, then retry.",
++  "appUpdateRateLimit": "GitHub temporarily limited requests. Try again later.",
++  "appUpdateInvalidRelease": "The release has no compatible, verifiable RU APK. Wait for a corrected release.",
++  "appUpdateIntegrityError": "APK verification failed. Nothing was installed. Check for updates and download again.",
++  "appUpdateUnsupported": "This updater requires the direct full RU app on an ARM64 Android device.",
++  "appUpdatePermissionHelp": "Allow installs from Hermes Console RU in Android settings, return here and tap the installer button again. You can cancel at any time.",
++  "appUpdateAllowSource": "Open installation permission settings",
++  "appUpdateInstallerCancelled": "Installation was cancelled or declined. You can retry; Android only permits updates with a compatible signing identity.",
++  "appUpdateInstallerError": "Could not open the Android installer or its settings. Nothing was installed. Try again.",
++  "appUpdateInstallerFinished": "The installer has finished. Check the installed version.",
++  "appUpdateCancelled": "Check or download cancelled."
+ }
+diff --git a/lib/l10n/app_es.arb b/lib/l10n/app_es.arb
+index a552261..ae7ea69 100644
+--- a/lib/l10n/app_es.arb
++++ b/lib/l10n/app_es.arb
+@@ -8835,5 +8835,50 @@
+   "onb4HelpSafe": "Usa el instalador oficial de Hermes. Si ya tienes Hermes, no lo toca, y tampoco Telegram ni el Gateway. Tarda unos minutos.",
+   "onb4HelpVps": "¿Hermes en un servidor de internet? Instala Tailscale en el servidor y en este móvil, y después pega la línea.",
+   "onb4HadPassword": "Este Hermes ya tenía contraseña. Escríbela una vez y Console no la guarda.",
+-  "onb4ManualBody": "Escribe la dirección, el usuario y la contraseña que te mostró la instalación al terminar."
++  "onb4ManualBody": "Escribe la dirección, el usuario y la contraseña que te mostró la instalación al terminar.",
++  "appUpdateTitle": "Actualización de la aplicación",
++  "appUpdateCheck": "Buscar actualizaciones de la aplicación",
++  "appUpdateIntro": "Actualiza Hermes Console RU en este móvil desde los Releases de este fork en GitHub. La descarga y la instalación solo comienzan cuando tú lo eliges.",
++  "appUpdateInstalled": "Instalada: {version}",
++  "@appUpdateInstalled": {
++    "placeholders": {
++      "version": {
++        "type": "String"
++      }
++    }
++  },
++  "appUpdateAvailable": "Disponible: {version}",
++  "@appUpdateAvailable": {
++    "placeholders": {
++      "version": {
++        "type": "String"
++      }
++    }
++  },
++  "appUpdateDownload": "Descargar APK verificado",
++  "appUpdateInstall": "Abrir el instalador de Android",
++  "appUpdateWorking": "Comprobando y verificando…",
++  "appUpdateProgress": "Descargando: {percent}%",
++  "@appUpdateProgress": {
++    "placeholders": {
++      "percent": {
++        "type": "int"
++      }
++    }
++  },
++  "appUpdateCurrent": "No hay una versión más reciente de la aplicación.",
++  "appUpdateNoRelease": "Todavía no hay una versión publicada. Vuelve a intentarlo más tarde.",
++  "appUpdateNoNotes": "No se han incluido notas de la versión.",
++  "appUpdateReady": "APK verificado. Pulsa abajo para pedir a Android que lo instale.",
++  "appUpdateNetworkError": "No se pudo completar la solicitud o guardar el APK. Revisa la conexión y el espacio libre y vuelve a intentarlo.",
++  "appUpdateRateLimit": "GitHub ha limitado temporalmente las solicitudes. Inténtalo más tarde.",
++  "appUpdateInvalidRelease": "La versión no incluye un APK RU compatible y verificable. Espera a una versión corregida.",
++  "appUpdateIntegrityError": "La verificación del APK ha fallado. No se ha instalado nada. Busca actualizaciones y vuelve a descargarlo.",
++  "appUpdateUnsupported": "Este actualizador requiere la aplicación RU directa full en un dispositivo Android ARM64.",
++  "appUpdatePermissionHelp": "Permite instalaciones desde Hermes Console RU en los ajustes de Android, vuelve aquí y pulsa de nuevo el botón del instalador. Puedes cancelar en cualquier momento.",
++  "appUpdateAllowSource": "Abrir ajustes del permiso de instalación",
++  "appUpdateInstallerCancelled": "La instalación se ha cancelado o rechazado. Puedes reintentarlo; Android solo permite actualizar con una firma compatible.",
++  "appUpdateInstallerError": "No se pudo abrir el instalador de Android o sus ajustes. No se ha instalado nada. Inténtalo de nuevo.",
++  "appUpdateInstallerFinished": "El instalador ha terminado. Comprueba la versión instalada.",
++  "appUpdateCancelled": "Comprobación o descarga cancelada."
+ }
+diff --git a/lib/main.dart b/lib/main.dart
+index e651738..27644bb 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -544,6 +544,7 @@ class AppLocales {
+     AppLocaleOption('system', 'Sistema', null),
+     AppLocaleOption('es', 'Español', Locale('es')),
+     AppLocaleOption('en', 'English', Locale('en')),
++    AppLocaleOption('ru', 'Русский', Locale('ru')),
+   ];
+ 
+   static AppLocaleOption byId(String? id) =>
+@@ -3108,7 +3109,7 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
+           builder: (context, font, _) => ValueListenableBuilder<String>(
+             valueListenable: localeId,
+             builder: (context, locId, _) => MaterialApp(
+-              title: 'Console',
++              title: 'Hermes Console RU',
+               debugShowCheckedModeBanner: false,
+               // Scroll con inercia (coasting) en toda la app: un flick sigue
+               // rodando y frena solo, en vez del frenazo seco de Material.
+@@ -3116,13 +3117,10 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
+               locale: AppLocales.byId(locId).locale,
+               localizationsDelegates: Strings.localizationsDelegates,
+               supportedLocales: Strings.supportedLocales,
+-              // El único idioma completo además del inglés es el español: si el
+-              // sistema (o la elección manual) es español lo usamos; en cualquier
+-              // otro caso caemos a inglés, nunca a un español a medias. Cubre los
+-              // tres casos: elección manual 'es'/'en' y modo "Sistema" (locale
+-              // nulo → llega el idioma del dispositivo).
++              // RU remains complete; the source gate rejects missing translations.
+               localeResolutionCallback: (locale, supported) {
+                 if (locale?.languageCode == 'es') return const Locale('es');
++                if (locale?.languageCode == 'ru') return const Locale('ru');
+                 return const Locale('en');
+               },
+               theme: AppFonts.applyToTheme(activeTheme, AppFonts.byId(font)),
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 3db2020..13027b2 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -1,7 +1,7 @@
+ name: hermes_android
+ description: "Hermes Agent — chat with your Hermes Gateway API Server over LAN. SSE streaming, Bearer auth, session management."
+ publish_to: 'none'
+-version: 1.3.0+9630
++version: 1.3.0-ru.1+9631
+ 
+ environment:
+   sdk: ^3.12.0
+diff --git a/test/design/install_source_test.dart b/test/design/install_source_test.dart
+index 74803d8..0f531a3 100644
+--- a/test/design/install_source_test.dart
++++ b/test/design/install_source_test.dart
+@@ -30,16 +30,16 @@ void main() {
+     );
+     expect(
+       InstallSourceInfo.updateUrl(InstallSource.googlePlay),
+-      contains('id=dev.xpetalab.hermesconsole'),
++      'https://github.com/dedtsss/hermes-console/releases',
+     );
+     expect(
+       InstallSourceInfo.updateUrl(InstallSource.manual),
+-      'https://github.com/xP3ta/hermes-console/releases',
++      'https://github.com/dedtsss/hermes-console/releases',
+     );
+   });
+ 
+   for (final (source, label, button) in const [
+-    (InstallSource.googlePlay, 'Google Play', 'Abrir en Google Play'),
++    (InstallSource.googlePlay, 'Google Play', 'Abrir versiones en GitHub'),
+     (
+       InstallSource.githubObtainium,
+       'GitHub / Obtainium',
+diff --git a/test/diagnostic_bundle_service_test.dart b/test/diagnostic_bundle_service_test.dart
+index 1abaf4b..f8fe857 100644
+--- a/test/diagnostic_bundle_service_test.dart
++++ b/test/diagnostic_bundle_service_test.dart
+@@ -43,7 +43,7 @@ void main() {
+       'prompt ultra secreto',
+       'respuesta privada del agente',
+       'tool output confidencial',
+-      '/data/user/0/dev.xpetalab.hermesconsole.qa/cache/private.png',
++      '/data/user/0/io.github.dedtsss.hermesconsole.qa/cache/private.png',
+       '/home/demo/.hermes/cache/images/private.png',
+       r'C:\Users\Server\private.png',
+       'private-attachment.png',
+@@ -78,7 +78,7 @@ void main() {
+       attachments: const [
+         AttachmentDraft(
+           localPath:
+-              '/data/user/0/dev.xpetalab.hermesconsole.qa/cache/private.png',
++              '/data/user/0/io.github.dedtsss.hermesconsole.qa/cache/private.png',
+           name: 'private-attachment.png',
+           mimeType: 'image/png',
+           sizeBytes: 123,
+diff --git a/test/l10n_catalog_parity_test.dart b/test/l10n_catalog_parity_test.dart
+index 7e16689..f47fb99 100644
+--- a/test/l10n_catalog_parity_test.dart
++++ b/test/l10n_catalog_parity_test.dart
+@@ -4,6 +4,7 @@ import 'dart:io';
+ import 'package:flutter_test/flutter_test.dart';
+ import 'package:hermes_android/l10n/app_localizations_en.dart';
+ import 'package:hermes_android/l10n/app_localizations_es.dart';
++import 'package:hermes_android/l10n/app_localizations_ru.dart';
+ 
+ Map<String, Object?> _readCatalog(String path) =>
+     jsonDecode(File(path).readAsStringSync()) as Map<String, Object?>;
+@@ -11,30 +12,61 @@ Map<String, Object?> _readCatalog(String path) =>
+ Set<String> _messageKeys(Map<String, Object?> catalog) =>
+     catalog.keys.where((key) => !key.startsWith('@')).toSet();
+ 
+-Set<String> _placeholders(Object? message) => RegExp(
+-  r'\{([A-Za-z][A-Za-z0-9_]*)\s*(?:\}|,)',
+-).allMatches(message as String).map((match) => match.group(1)!).toSet();
++Set<String> _placeholders(Object? message) =>
++    RegExp(r'\{([A-Za-z][A-Za-z0-9_]*)\s*(?:\}|,)')
++        .allMatches(message as String)
++        .map((match) => match.group(1)!)
++        .toSet();
+ 
+ void main() {
+-  test(
+-    'los catálogos español e inglés tienen las mismas claves y variables',
+-    () {
+-      final es = _readCatalog('lib/l10n/app_es.arb');
+-      final en = _readCatalog('lib/l10n/app_en.arb');
++  test('Spanish retains the English canonical message contract', () {
++    final en = _readCatalog('lib/l10n/app_en.arb');
++    final es = _readCatalog('lib/l10n/app_es.arb');
+ 
+-      // app_es.arb es la plantilla de gen-l10n y por eso conserva más entradas
+-      // @metadata. El contrato traducible son las claves de mensaje sin @.
+-      expect(_messageKeys(en), _messageKeys(es));
+-
+-      for (final key in _messageKeys(es)) {
+-        expect(
+-          _placeholders(en[key]),
+-          _placeholders(es[key]),
+-          reason: 'Los placeholders de $key deben coincidir en ES/EN',
+-        );
+-      }
+-    },
+-  );
++    expect(_messageKeys(es), _messageKeys(en));
++    for (final key in _messageKeys(en)) {
++      expect(
++        _placeholders(es[key]),
++        _placeholders(en[key]),
++        reason: 'Placeholders of $key must match EN/ES',
++      );
++    }
++  });
++
++  test('Russian implements all source keys and typed placeholder metadata', () {
++    final es = _readCatalog('lib/l10n/app_es.arb');
++    final en = _readCatalog('lib/l10n/app_en.arb');
++    final ru = _readCatalog('lib/l10n/app_ru.arb');
++
++    expect(_messageKeys(ru), _messageKeys(en));
++    expect(ru['@@locale'], 'ru');
++
++    for (final key in _messageKeys(en)) {
++      expect(
++        (ru[key] as String).trim(),
++        isNotEmpty,
++        reason: 'Russian translation for $key must not be blank',
++      );
++      expect(
++        _placeholders(ru[key]),
++        _placeholders(en[key]),
++        reason: 'Placeholders of $key must match EN/RU',
++      );
++      expect(
++        (ru['@$key'] as Map<String, Object?>?)?['placeholders'],
++        (es['@$key'] as Map<String, Object?>?)?['placeholders'],
++        reason: 'Placeholder metadata of $key must match source ES/RU',
++      );
++    }
++  });
++
++  test('Russian generated catalog resolves new copy and typed plurals', () {
++    final ru = StringsRu();
++    expect(ru.commonCancel, 'Отмена');
++    expect(ru.o2WelcomeTitle, 'Подключитесь к своему Hermes');
++    expect(ru.chaBackgroundWorkRemaining(1), contains('1 фоновая задача'));
++    expect(ru.chaBackgroundWorkRemaining(5), contains('5'));
++  });
+ 
+   test(
+     'Notificaciones conserva la misma mayúscula inicial que cada pantalla',
+diff --git a/test/new_session_android_resources_test.dart b/test/new_session_android_resources_test.dart
+index f01b497..14a9d11 100644
+--- a/test/new_session_android_resources_test.dart
++++ b/test/new_session_android_resources_test.dart
+@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
+ 
+ void main() {
+   test('shortcut and widget use collision-free secret-free native actions', () {
+-    const action = 'dev.xpetalab.hermesconsole.action.NEW_SESSION';
++    const action = 'io.github.dedtsss.hermesconsole.action.NEW_SESSION';
+     final shortcut = File(
+       'android/app/src/main/res/xml/shortcuts.xml',
+     ).readAsStringSync();
+diff --git a/test/release_policy_truth_test.py b/test/release_policy_truth_test.py
+index c9385f4..7699487 100644
+--- a/test/release_policy_truth_test.py
++++ b/test/release_policy_truth_test.py
+@@ -73,7 +73,8 @@ class PolicyFollowsTheManifestTest(unittest.TestCase):
+     def test_flavors_share_one_manifest_and_the_full_one_adds_nothing(self):
+         self.assertFalse((ROOT / "android/app/src/play").exists())
+         full = ET.parse(ROOT / "android/app/src/full/AndroidManifest.xml").getroot()
+-        self.assertEqual([child.tag for child in full], [])
++        self.assertEqual(declared_permissions(full), {'android.permission.REQUEST_INSTALL_PACKAGES': None})
++        self.assertNotIn('android.permission.REQUEST_INSTALL_PACKAGES', declared_permissions(MAIN))
+ 
+     def test_every_permission_the_app_declares_is_in_the_policy_with_the_same_limit(self):
+         policy = self.policy_permissions()
+@@ -84,7 +85,10 @@ class PolicyFollowsTheManifestTest(unittest.TestCase):
+ 
+     def test_the_rest_comes_from_named_dependencies(self):
+         policy = self.policy_permissions()
+-        extra = set(policy) - set(declared_permissions(MAIN))
++        full = ET.parse(ROOT / "android/app/src/full/AndroidManifest.xml").getroot()
++        extra = set(policy) - set(declared_permissions(MAIN)) - set(declared_permissions(full))
++        for name, maximum in declared_permissions(full).items():
++            self.assertEqual(policy[name], maximum)
+         self.assertEqual(extra, set(CONTRIBUTED_BY_DEPENDENCIES))
+         self.assertEqual(policy["android.permission.BLUETOOTH"], 30)
+ 
+diff --git a/test/release_safety_gate_test.py b/test/release_safety_gate_test.py
+index d37e615..e2b2265 100644
+--- a/test/release_safety_gate_test.py
++++ b/test/release_safety_gate_test.py
+@@ -2197,10 +2197,12 @@ class WorkflowContractTest(unittest.TestCase):
+         self.assertIn('"--cert-identity"', command)
+         self.assertNotIn('"--signer-workflow"', command)
+ 
+-    def test_distribution_policy_documents_private_local_staging_only(self):
++    def test_distribution_policy_allows_only_the_ru_unsigned_ci_candidate(self):
+         policy = (ROOT / "docs/RELEASE_DISTRIBUTION.md").read_text(encoding="utf-8")
+         self.assertIn("GitHub Actions artifacts are public-repository downloads", policy)
+-        self.assertIn("must never carry a signed APK, AAB", policy)
++        self.assertIn("The sole permitted APK artifact is the unsigned ARM64 `fullRelease`", policy)
++        self.assertIn("No other workflow may upload artifacts", policy)
++        self.assertIn("Signed\nAPKs, AABs, keystores, mappings", policy)
+         self.assertIn("owner-controlled local/private filesystem", policy)
+         self.assertIn("observed two-build byte identity", policy)
+         self.assertIn("not a general reproducible-build claim", policy)
+diff --git a/test/security_hardening_test.py b/test/security_hardening_test.py
+index 562af8d..b4ca508 100644
+--- a/test/security_hardening_test.py
++++ b/test/security_hardening_test.py
+@@ -206,6 +206,28 @@ class ReleaseWorkflowBoundaryTest(unittest.TestCase):
+         self.assertNotIn("contents: write", self.workflow)
+         self.assertNotIn("gh release", self.workflow)
+ 
++    def test_only_ru_android_ci_uploads_the_unsigned_arm64_candidate(self):
++        workflow_path = ROOT / ".github/workflows/fork-android-check.yml"
++        workflow = workflow_path.read_text(encoding="utf-8")
++        self.assertEqual(workflow.count("actions/upload-artifact@"), 1)
++        self.assertIn(
++            "path: build/app/outputs/flutter-apk/app-arm64-v8a-full-release.apk",
++            workflow,
++        )
++        self.assertIn(
++            "name: ru-fullrelease-arm64-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
++            workflow,
++        )
++        self.assertIn("Build fullRelease ARM64 candidate without a signer", workflow)
++        self.assertIn("Verify ARM64 candidate identity, libraries and unsigned release state", workflow)
++        self.assertNotIn("KEYSTORE_BASE64", workflow)
++        self.assertNotIn("key.properties", workflow)
++        workflow_dir = ROOT / ".github/workflows"
++        candidates = list(workflow_dir.glob("*.yml")) + list(workflow_dir.glob("*.yaml"))
++        for candidate in candidates:
++            if candidate != workflow_path:
++                self.assertNotIn("actions/upload-artifact", candidate.read_text(encoding="utf-8"))
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tool/release/full_release_policy.json b/tool/release/full_release_policy.json
+index eaa4140..7602111 100644
+--- a/tool/release/full_release_policy.json
++++ b/tool/release/full_release_policy.json
+@@ -16,6 +16,7 @@
+     {"name": "android.permission.POST_PROMOTED_NOTIFICATIONS"},
+     {"name": "android.permission.RECEIVE_BOOT_COMPLETED"},
+     {"name": "android.permission.RECORD_AUDIO"},
++    {"name": "android.permission.REQUEST_INSTALL_PACKAGES"},
+     {"name": "android.permission.USE_BIOMETRIC"},
+     {"name": "android.permission.USE_FINGERPRINT"},
+     {"name": "android.permission.VIBRATE"},

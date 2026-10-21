@@ -33,16 +33,17 @@ Widget _app(
     GlobalCupertinoLocalizations.delegate,
   ],
   supportedLocales: Strings.supportedLocales,
+  builder: (context, child) => MediaQuery(
+    data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+    child: child!,
+  ),
   home: Scaffold(
-    body: MediaQuery(
-      data: MediaQueryData(size: const Size(390, 844), textScaler: textScaler),
-      child: InteractivePromptCard(
-        entry: entry,
-        busy: busy,
-        onSubmit: onSubmit,
-        onSubmitBatch: onSubmitBatch,
-        onCancel: onCancel ?? () {},
-      ),
+    body: InteractivePromptCard(
+      entry: entry,
+      busy: busy,
+      onSubmit: onSubmit,
+      onSubmitBatch: onSubmitBatch,
+      onCancel: onCancel ?? () {},
     ),
   ),
 );
@@ -163,6 +164,53 @@ void main() {
     expect(submitted, 'qa');
   });
 
+  testWidgets(
+    'clarify multi-select de una pregunta marca varias opciones y las envía '
+    'como lista JSON',
+    (tester) async {
+      final key = InteractivePromptKey(
+        runtimeSessionId: 'runtime-a',
+        requestId: 'clarify-multi',
+      );
+      final submitted = <String>[];
+      await tester.pumpWidget(
+        _app(
+          _entry(
+            ClarifyPromptRequest(
+              key: key,
+              question: '¿Qué ramas?',
+              choices: const ['main', 'qa', 'dev'],
+              multiSelect: true,
+            ),
+          ),
+          submitted.add,
+        ),
+      );
+
+      await tester.tap(find.text('main'));
+      await tester.pump();
+      await tester.tap(find.text('dev'));
+      await tester.pump();
+      expect(submitted, isEmpty, reason: 'a toggle must not answer');
+      expect(find.byIcon(Icons.check_box_rounded), findsNWidgets(2));
+
+      // A second tap on a ticked choice unticks it and keeps it out of the
+      // answer.
+      await tester.tap(find.text('qa'));
+      await tester.pump();
+      expect(find.byIcon(Icons.check_box_rounded), findsNWidgets(3));
+      await tester.tap(find.text('qa'));
+      await tester.pump();
+      expect(find.byIcon(Icons.check_box_rounded), findsNWidgets(2));
+
+      await tester.enterText(find.byType(TextField), ' otra ');
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      await tester.pump();
+      expect(submitted, hasLength(1));
+      expect(jsonDecode(submitted.single), ['main', 'dev', 'otra']);
+    },
+  );
+
   testWidgets('terminal read explica la política y reintenta vacío', (
     tester,
   ) async {
@@ -216,6 +264,93 @@ void main() {
   });
 
   group('batch clarify', () {
+    testWidgets(
+      'clarify compacto con IME mantiene CTA fijo y responde una sola vez',
+      (tester) async {
+        tester.view
+          ..physicalSize = const Size(360, 800)
+          ..devicePixelRatio = 1
+          ..viewInsets = const FakeViewPadding(bottom: 300);
+        addTearDown(tester.view.reset);
+        final key = InteractivePromptKey(
+          runtimeSessionId: 'runtime-a',
+          requestId: 'batch-compact-ime',
+        );
+        final submissions = <Map<String, String>>[];
+
+        await tester.pumpWidget(
+          _app(
+            _entry(
+              ClarifyPromptRequest(
+                key: key,
+                questions: const [
+                  ClarifyQuestion(
+                    qid: 'q0',
+                    question:
+                        '¿Qué estrategia detallada debemos aplicar para cerrar '
+                        'esta operación sin perder ninguna garantía importante?',
+                    choices: [
+                      'Continuar con la alternativa conservadora y verificable',
+                      'Aplicar la migración completa manteniendo compatibilidad',
+                      'Posponer hasta disponer de toda la evidencia necesaria',
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            (_) {},
+            textScaler: const TextScaler.linear(1.3),
+            onSubmitBatch: submissions.add,
+          ),
+        );
+        await tester.pump();
+
+        final other = find.byType(TextField);
+        await tester.ensureVisible(other);
+        await tester.pump();
+        await tester.tap(other);
+        expect(tester.testTextInput.isVisible, isTrue);
+        await tester.enterText(
+          other,
+          'Otra respuesta suficientemente larga y explícita',
+        );
+        await tester.pump();
+
+        final confirm = find.byKey(const ValueKey('interactive-batch-confirm'));
+        expect(tester.takeException(), isNull);
+        expect(tester.widget<FilledButton>(confirm).enabled, isTrue);
+        final keyboardTop =
+            tester.view.physicalSize.height - tester.view.viewInsets.bottom;
+        expect(tester.getRect(confirm).bottom, lessThanOrEqualTo(keyboardTop));
+        for (final target in <Finder>[
+          find.widgetWithText(
+            OutlinedButton,
+            'Continuar con la alternativa conservadora y verificable',
+          ),
+          find.widgetWithText(
+            OutlinedButton,
+            'Aplicar la migración completa manteniendo compatibilidad',
+          ),
+          find.widgetWithText(
+            OutlinedButton,
+            'Posponer hasta disponer de toda la evidencia necesaria',
+          ),
+          find.byKey(const ValueKey('interactive-batch-cancel')),
+          other,
+          confirm,
+        ]) {
+          expect(tester.getSize(target).height, greaterThanOrEqualTo(48));
+        }
+
+        await tester.tap(confirm);
+        await tester.tap(confirm);
+        await tester.pump();
+        expect(submissions, [
+          {'q0': 'Otra respuesta suficientemente larga y explícita'},
+        ]);
+      },
+    );
+
     testWidgets('free-text batch answer preserves surrounding spaces', (
       tester,
     ) async {

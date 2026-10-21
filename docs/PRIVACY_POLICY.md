@@ -1,20 +1,21 @@
 # Privacy Policy — Hermes Console
 
-**Last updated:** 2026-08-23
+> **DRAFT of proposed changes for the owner's review. This is not the deployed
+> policy.** The date below is deliberately unchanged; the owner decides the
+> final wording, the date and the declaration made to Google Play.
 
-**Release scope:** `1.2.7 (915)`. This file is the canonical policy for the
-candidate source. Before distribution, the deployed Spanish and English pages
-must match this revision and identify the same date. Deployment verification,
-the final signed AAB review and physical permission-flow QA are still pending;
-a responding URL alone is not release evidence.
+**Last updated:** 2026-10-12
 
-Hermes Console is a client app that connects to a Hermes Agent server that **you
-host and control**. This policy explains exactly what the app accesses and why.
+**Release scope:** `1.2.15 (9540)`. This file is the canonical policy for the
+current source. The deployed Spanish and English pages must match this revision
+and identify the same date; a responding URL alone is not release evidence.
+
+Hermes Console (the app is called Console on your device) is a client app that
+connects to a Hermes Agent server that **you host and control**. This policy
+explains exactly what the app accesses and why.
 Public pages are hosted in
 [Spanish](https://hermes.xpetalab.dev/privacy) and
-[English](https://hermes.xpetalab.dev/en/privacy). Until the pending deployment
-is verified, those pages must not be treated as release-current merely because
-their URLs respond.
+[English](https://hermes.xpetalab.dev/en/privacy).
 
 ## The short version
 
@@ -23,8 +24,9 @@ their URLs respond.
 - Your conversations and attachments travel to the server **you configure**.
   Optional voice and catalog features can contact the providers described below.
   They never pass through developer-operated servers — we don't operate any.
-- Credentials (API tokens, passwords) are stored **encrypted on your device**
-  (Android Keystore / secure storage) and leave it only to authenticate with the
+- Credentials (Dashboard username and password or session token, SSH
+  credentials, API tokens) are stored **encrypted on your device** (Android
+  Keystore / secure storage) and leave it only to authenticate with the
   server or optional provider you choose.
 
 ## Data the app accesses on your device
@@ -36,7 +38,7 @@ their URLs respond.
 | Photos and documents | Only after you choose an attachment | Add selected content to a conversation | Sent to your configured server when you send the message |
 | Notifications | App-generated, local | Show agent events and controls for voice or Read Aloud you explicitly keep active | No |
 | Local storage / Keystore | Always | Store your connection settings and encrypted credentials | No |
-| Network (internet/LAN) | When you connect or use an optional online feature | Talk to your Hermes server and fetch optional catalog/model content | See “Optional external services” below |
+| Network (internet/LAN) | When you connect or use an optional online feature | Talk to the Dashboard of your Hermes server and fetch optional catalog/model content | See “Optional external services” below |
 
 ## Data we collect
 
@@ -56,13 +58,33 @@ service under that provider's terms:
   tool or search providers configured by that server's operator. Hermes Console
   cannot select or inspect those server-side providers. Review the privacy
   terms and configuration of your instance before connecting.
-- Cloud text-to-speech (ElevenLabs or an OpenAI-compatible endpoint): the text
-  to be spoken, using the API key and provider you configure.
+- Voice served by your Hermes: when you choose the Hermes server for speech, the
+  text to be spoken or the audio to be transcribed goes to your server, which
+  uses the speech providers configured there. Console no longer sends speech
+  to speech services of its own.
+- GPT-Live voice (off by default, available only when your server enables it):
+  the phone starts a real-time audio session with the voice provider your server
+  uses, through a session your Hermes server creates, and audio then flows
+  between the phone and that provider under the provider's terms. The provider
+  key stays on your server.
 - Android system speech recognition: microphone audio; depending on your device,
   Android may process it through its configured online speech provider.
-- skills.sh search: the search phrase, proxied through your configured Hermes
-  server, when you search the skills catalog.
-- QR scanning uses the open-source ZXing library and runs entirely on-device.
+- Skills catalog search: the search phrase goes to your configured Hermes
+  server, which looks it up in the skill sources it is set up with (skills.sh,
+  GitHub and others) under their terms. Console does not contact those
+  sources itself.
+- Rich embeds in chat (YouTube, Vimeo, Spotify, X, Instagram, TikTok,
+  Pinterest, maps): off for every type by default. If you turn a type on, or
+  allow one when asked, opening that embed loads a page from the service in a
+  sandboxed web view, so that service sees your IP address and browser. The
+  choice is stored on the device only.
+- SSH and SFTP: if you add an SSH host, Console connects directly to the host
+  you enter; the host, user and credentials you save stay on the device.
+- Signing in with your account: if your Dashboard uses an account sign-in,
+  Console opens the system browser on the sign-in page and stores the resulting
+  token only in secure storage.
+- QR scanning (for a pairing code made by an older setup helper) uses the
+  open-source ZXing library and runs entirely on-device.
   Camera frames, QR contents, decoded results and scanner metrics are not sent
   to XPeta Lab, Google or any other service.
 

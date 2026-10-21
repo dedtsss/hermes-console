@@ -11,6 +11,10 @@ import '../widgets/hermes_app_bar.dart';
 import 'sftp_browser_screen.dart';
 import 'ssh_credentials_screen.dart';
 import 'ssh_terminal_screen.dart';
+import '../widgets/console_loader.dart';
+import '../design/hermes_design.dart'
+    show HermesDialogAction, HermesDialogActionStyle, showHermesDialog;
+import '../feedback/feedback_policy.dart';
 
 class SshScreen extends StatefulWidget {
   final SavedConnection connection;
@@ -51,40 +55,52 @@ class _SshScreenState extends State<SshScreen> {
     if (saved == true) _load();
   }
 
-  void _terminal() => Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => SshTerminalScreen(connection: widget.connection)));
+  void _terminal() => Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => SshTerminalScreen(connection: widget.connection),
+    ),
+  );
 
-  void _sftp() => Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => SftpBrowserScreen(connection: widget.connection)));
+  void _sftp() => Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => SftpBrowserScreen(connection: widget.connection),
+    ),
+  );
 
   Future<void> _forgetHostKey() async {
     await _mgr.forgetFingerprint(widget.connection.id);
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(Strings.of(context).ssh2HostKeyForgotten)));
+      AppFeedback.of(
+        context,
+      ).notify(FeedbackKind.routine, Strings.of(context).ssh2HostKeyForgotten);
     }
   }
 
   Future<void> _remove() async {
-    final colors = Theme.of(context).hermes;
-    final ok = await showDialog<bool>(
+    final sessions = context
+        .findAncestorStateOfType<HermesAppState>()!
+        .sshSessions;
+    final ok = await showHermesDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(Strings.of(context).ssh2RemoveSsh),
-        content: Text(Strings.of(context).ssh2RemoveSshBody),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(Strings.of(context).commonCancel)),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: colors.error),
-            child: Text(Strings.of(context).ssh2Remove, style: TextStyle(color: colors.onAccent)),
-          ),
-        ],
-      ),
+      title: Strings.of(context).ssh2RemoveSsh,
+      message: Strings.of(context).ssh2RemoveSshBody,
+      actions: [
+        HermesDialogAction(
+          label: Strings.of(context).commonCancel,
+          value: false,
+          style: HermesDialogActionStyle.cancel,
+        ),
+        HermesDialogAction(
+          label: Strings.of(context).ssh2Remove,
+          value: true,
+          style: HermesDialogActionStyle.destructive,
+        ),
+      ],
     );
     if (ok == true) {
+      // Close the live shell too (including a connect in flight): otherwise
+      // the terminal would reattach to it without credentials or App Lock.
+      sessions.close(widget.connection.id);
       await _mgr.clear(widget.connection.id);
       _load();
     }
@@ -97,10 +113,10 @@ class _SshScreenState extends State<SshScreen> {
       backgroundColor: colors.background,
       appBar: HermesAppBar(title: const Text('SSH')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+          ? const Center(child: ConsoleLoader.large())
           : _config == null
-              ? _empty(colors)
-              : _configured(colors, _config!),
+          ? _empty(colors)
+          : _configured(colors, _config!),
     );
   }
 
@@ -113,17 +129,23 @@ class _SshScreenState extends State<SshScreen> {
           children: [
             Icon(Icons.terminal_rounded, size: 48, color: colors.accent),
             const SizedBox(height: 16),
-            Text(Strings.of(context).ssh2AccessTitle,
-                style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: colors.textPrimary)),
+            Text(
+              Strings.of(context).ssh2AccessTitle,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: colors.textPrimary,
+              ),
+            ),
             const SizedBox(height: 8),
             Text(
               Strings.of(context).ssh2AccessBody(widget.connection.label),
               textAlign: TextAlign.center,
               style: TextStyle(
-                  fontSize: 13, height: 1.45, color: colors.textSecondary),
+                fontSize: 13,
+                height: 1.45,
+                color: colors.textSecondary,
+              ),
             ),
             const SizedBox(height: 22),
             FilledButton.icon(
@@ -139,6 +161,7 @@ class _SshScreenState extends State<SshScreen> {
 
   Widget _configured(HermesThemeColors colors, SshConfig cfg) {
     return ListView(
+      clipBehavior: hermesUnderHeader,
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
       children: [
         Container(
@@ -155,15 +178,24 @@ class _SshScreenState extends State<SshScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(cfg.target,
-                        style: TextStyle(
-                            fontSize: 14.5,
-                            fontFamily: 'monospace',
-                            color: colors.textPrimary)),
+                    Text(
+                      cfg.target,
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        fontFamily: 'monospace',
+                        color: colors.textPrimary,
+                      ),
+                    ),
                     const SizedBox(height: 3),
-                    Text(Strings.of(context).sshAuthMethodLabel(cfg.method.label.toLowerCase()),
-                        style: TextStyle(
-                            fontSize: 12, color: colors.textSecondary)),
+                    Text(
+                      Strings.of(
+                        context,
+                      ).sshAuthMethodLabel(cfg.method.label.toLowerCase()),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: colors.textSecondary,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -171,35 +203,45 @@ class _SshScreenState extends State<SshScreen> {
           ),
         ),
         const SizedBox(height: 18),
-        _action(colors,
-            icon: Icons.terminal_rounded,
-            title: Strings.of(context).ssh2OpenTerminal,
-            subtitle: Strings.of(context).ssh2OpenTerminalSub,
-            onTap: _terminal,
-            primary: true),
-        _action(colors,
-            icon: Icons.folder_open_outlined,
-            title: Strings.of(context).sshFilesSftp,
-            subtitle: Strings.of(context).ssh2FilesSub,
-            onTap: _sftp),
-        _action(colors,
-            icon: Icons.edit_outlined,
-            title: Strings.of(context).ssh2EditCreds,
-            subtitle: Strings.of(context).ssh2EditCredsSub,
-            onTap: _configure),
+        _action(
+          colors,
+          icon: Icons.terminal_rounded,
+          title: Strings.of(context).ssh2OpenTerminal,
+          subtitle: Strings.of(context).ssh2OpenTerminalSub,
+          onTap: _terminal,
+          primary: true,
+        ),
+        _action(
+          colors,
+          icon: Icons.folder_open_outlined,
+          title: Strings.of(context).sshFilesSftp,
+          subtitle: Strings.of(context).ssh2FilesSub,
+          onTap: _sftp,
+        ),
+        _action(
+          colors,
+          icon: Icons.edit_outlined,
+          title: Strings.of(context).ssh2EditCreds,
+          subtitle: Strings.of(context).ssh2EditCredsSub,
+          onTap: _configure,
+        ),
         const SizedBox(height: 8),
         const Divider(),
-        _action(colors,
-            icon: Icons.gpp_maybe_outlined,
-            title: Strings.of(context).ssh2ForgetHostKey,
-            subtitle: Strings.of(context).ssh2ForgetHostKeySub,
-            onTap: _forgetHostKey),
-        _action(colors,
-            icon: Icons.delete_outline,
-            title: Strings.of(context).ssh2RemoveSsh,
-            subtitle: Strings.of(context).ssh2RemoveSshSub,
-            onTap: _remove,
-            danger: true),
+        _action(
+          colors,
+          icon: Icons.gpp_maybe_outlined,
+          title: Strings.of(context).ssh2ForgetHostKey,
+          subtitle: Strings.of(context).ssh2ForgetHostKeySub,
+          onTap: _forgetHostKey,
+        ),
+        _action(
+          colors,
+          icon: Icons.delete_outline,
+          title: Strings.of(context).ssh2RemoveSsh,
+          subtitle: Strings.of(context).ssh2RemoveSshSub,
+          onTap: _remove,
+          danger: true,
+        ),
       ],
     );
   }
@@ -216,8 +258,8 @@ class _SshScreenState extends State<SshScreen> {
     final tint = danger
         ? colors.error
         : primary
-            ? colors.accent
-            : colors.textSecondary;
+        ? colors.accent
+        : colors.textSecondary;
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Material(
@@ -236,16 +278,22 @@ class _SshScreenState extends State<SshScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(title,
-                          style: TextStyle(
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w500,
-                              color:
-                                  danger ? colors.error : colors.textPrimary)),
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w500,
+                          color: danger ? colors.error : colors.textPrimary,
+                        ),
+                      ),
                       const SizedBox(height: 2),
-                      Text(subtitle,
-                          style: TextStyle(
-                              fontSize: 12, color: colors.textSecondary)),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: colors.textSecondary,
+                        ),
+                      ),
                     ],
                   ),
                 ),

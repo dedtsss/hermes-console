@@ -118,16 +118,18 @@ void main() {
       },
     );
 
-    test('agent snapshot keeps backend path opaque and bounds output', () {
+    test('agent center retains only exact controls and status projections', () {
       final result = AgentCenterSnapshot.fromJson(
         snapshots: {
           'entries': [
             {
               'path': '/host/private/spawn.json',
-              'session_id': 'session-a',
-              'label': 'parallel review',
+              'session_id': 'private-session',
+              'label': 'private delegation label',
+              'goal': 'private goal',
               'count': 3,
               'finished_at': 10,
+              'metadata': {'model': 'private-model', 'cwd': '/private/path'},
             },
           ],
         },
@@ -135,19 +137,65 @@ void main() {
           'processes': [
             {
               'session_id': 'proc-a',
-              'command': 'flutter test',
-              'status': 'running',
+              'command': 'private command --token secret',
+              'status': 'RUNNING',
               'uptime_seconds': 5,
-              'output_tail': List.filled(5000, 'x').join(),
-              'token': 'must-not-survive',
+              'started_at': 1720000000,
+              'notify_on_complete': true,
+              'watch_patterns': ['ready', 'done'],
+              'watch_hit': true,
+              'output_tail': 'private process output',
+              'error': 'private process error',
+              'metadata': {'model': 'private-model', 'cwd': '/private/path'},
             },
+            {'process_id': 'proc-b', 'status': 'invented private state'},
           ],
         },
       );
+      final detail = SpawnTreeDetail.fromJson({
+        'session_id': 'private-session',
+        'label': 'private tree label',
+        'started_at': 1,
+        'finished_at': 2,
+        'subagents': [
+          {
+            'id': 'private-agent-id',
+            'status': 'completed',
+            'goal': 'private goal',
+            'summary': 'private summary',
+            'result': 'private result',
+            'error': 'private error',
+            'output': 'private output',
+            'metadata': {'model': 'private-model', 'cwd': '/private/path'},
+          },
+          {'status': 'invented private state'},
+          {'phase': 42},
+        ],
+      });
 
       expect(result.snapshots.single.opaquePath, '/host/private/spawn.json');
-      expect(result.processes.single.outputTail.length, 4000);
-      expect(result.processes.single.toString(), isNot(contains('token')));
+      expect(result.snapshots.single.count, 3);
+      expect(result.snapshots.single.finishedAt, 10);
+      expect(result.processes.first.opaqueId, 'proc-a');
+      expect(result.processes.first.status, AgentCenterStatus.running);
+      expect(result.processes.first.uptimeSeconds, 5);
+      expect(result.processes.first.command, 'private');
+      expect(result.processes.first.command, isNot(contains('secret')));
+      expect(result.processes.first.notifyOnComplete, isTrue);
+      expect(result.processes.first.watchPatterns, ['ready', 'done']);
+      expect(result.processes.first.watchHit, isTrue);
+      expect(
+        result.processes.first.startedAt,
+        DateTime.fromMillisecondsSinceEpoch(1720000000000, isUtc: true),
+      );
+      expect(result.processes.last.status, AgentCenterStatus.unknown);
+      expect(detail.startedAt, 1);
+      expect(detail.finishedAt, 2);
+      expect(detail.subagents.map((entry) => entry.status), [
+        AgentCenterStatus.completed,
+        AgentCenterStatus.unknown,
+        AgentCenterStatus.unknown,
+      ]);
     });
 
     test('project tree parses overview and hydrated lanes', () {
@@ -196,6 +244,133 @@ void main() {
         project.repositories.single.lanes.single.sessions.single.id,
         'chat-1',
       );
+    });
+  });
+
+  group('SessionControlSnapshot', () {
+    test('parses loop and heartbeat timing without retaining prompts', () {
+      final control = SessionControlSnapshot.fromJson({
+        'revision': 'rev-4',
+        'updated_at': 1720000400,
+        'loop': {
+          'prompt': 'PRIVATE LOOP PROMPT',
+          'status': 'active',
+          'interval_seconds': 300,
+          'last_fired_at': 1720000000,
+          'next_due_at': 1720000300,
+          'ticks_fired': 2,
+          'awaiting_response': true,
+          'deferred_by_goal': true,
+        },
+        'heartbeat': {
+          'prompt': 'PRIVATE HEARTBEAT PROMPT',
+          'status': 'active',
+          'interval_seconds': 60,
+          'last_fired_at': 1720000100,
+          'fire_count': 7,
+        },
+      });
+
+      expect(control.revision, 'rev-4');
+      expect(control.loop?.interval, const Duration(minutes: 5));
+      expect(control.loop?.ticksFired, 2);
+      expect(control.loop?.awaitingResponse, isTrue);
+      expect(control.loop?.deferredByGoal, isTrue);
+      expect(
+        control.loop?.nextDueAt,
+        DateTime.fromMillisecondsSinceEpoch(1720000300000, isUtc: true),
+      );
+      expect(control.heartbeat?.interval, const Duration(minutes: 1));
+      expect(control.heartbeat?.fireCount, 7);
+      expect(
+        control.heartbeat?.nextDueAt,
+        DateTime.fromMillisecondsSinceEpoch(1720000160000, isUtc: true),
+      );
+      expect(control.toString(), isNot(contains('PRIVATE')));
+    });
+  });
+
+  group('SessionGoalSnapshot', () {
+    test('parses an active goal with contract, subgoals and gates', () {
+      final goal = SessionGoalSnapshot.tryParse({
+        'title': 'Ship 1.2.11',
+        'status': 'active',
+        'turns_used': 3,
+        'max_turns': 20,
+        'contract': {
+          'outcome': 'PR merged',
+          'verification': 'CI green',
+          'constraints': 'no breaking changes',
+          'boundaries': 'this repo only',
+          'stop_when': 'PR merged',
+        },
+        'subgoals': ['write tests', 'update changelog'],
+        'gates': [
+          {
+            'command': 'flutter analyze --fatal-infos',
+            'timeout_seconds': 60,
+            'max_retries': 2,
+            'attempts': 1,
+            'last_exit_code': 0,
+          },
+        ],
+      });
+      expect(goal, isNotNull);
+      expect(goal!.title, 'Ship 1.2.11');
+      expect(goal.isActive, isTrue);
+      expect(goal.turnsUsed, 3);
+      expect(goal.maxTurns, 20);
+      expect(goal.outcome, 'PR merged');
+      expect(goal.subgoals, ['write tests', 'update changelog']);
+      expect(goal.gates.single.command, 'flutter analyze --fatal-infos');
+      expect(goal.gates.single.lastExitCode, 0);
+      expect(goal.isBlocked, isFalse);
+      expect(goal.displayReason, '');
+    });
+
+    test('a cleared goal parses to null', () {
+      expect(
+        SessionGoalSnapshot.tryParse({'status': 'cleared'}),
+        isNull,
+      );
+      expect(SessionGoalSnapshot.tryParse(null), isNull);
+      expect(SessionGoalSnapshot.tryParse('not a map'), isNull);
+    });
+
+    test('wait_barrier.reason wins over paused_reason and last_reason', () {
+      final goal = SessionGoalSnapshot.tryParse({
+        'status': 'waiting',
+        'paused_reason': 'paused reason',
+        'last_reason': 'last reason',
+        'wait_barrier': {
+          'type': 'until',
+          'until_at': '2026-09-15T00:00:00Z',
+          'reason': 'barrier reason',
+        },
+      });
+      expect(goal!.displayReason, 'barrier reason');
+      expect(goal.isWaiting, isTrue);
+    });
+
+    test('paused_reason wins over last_reason when there is no wait_barrier', () {
+      final goal = SessionGoalSnapshot.tryParse({
+        'status': 'paused',
+        'paused_reason': 'paused reason',
+        'last_reason': 'last reason',
+      });
+      expect(goal!.displayReason, 'paused reason');
+      expect(goal.isPaused, isTrue);
+    });
+
+    test('last_verdict blocked is independent of status', () {
+      final goal = SessionGoalSnapshot.tryParse({
+        'status': 'active',
+        'last_verdict': 'blocked',
+        'last_reason': 'flaky test',
+      });
+      expect(goal!.isActive, isTrue);
+      expect(goal.isBlocked, isTrue);
+      expect(goal.displayReason, 'flaky test');
     });
   });
 }

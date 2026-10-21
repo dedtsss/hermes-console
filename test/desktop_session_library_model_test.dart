@@ -3,15 +3,17 @@ import 'package:hermes_android/core/models/session.dart';
 import 'package:hermes_android/core/models/session_category.dart';
 
 void main() {
-  test('taxonomía 0.20 conserva las siete fuentes de automatización', () {
+  test('taxonomía actual conserva las fuentes internas de automatización', () {
     expect(AutomationSessionSources.values, const [
       'cron',
+      'kanban',
+      'subagent',
       'tool',
-      'api_server',
       'acp',
       'hermes_flow',
       'vulcan_delegate',
       'webhook',
+      'oneshot',
     ]);
 
     for (final source in AutomationSessionSources.values) {
@@ -29,6 +31,23 @@ void main() {
     }
   });
 
+  test('Chats leaves out every local automation source Desktop excludes', () {
+    // Desktop use-session-list-actions.ts SIDEBAR_EXCLUDED_SOURCES (local
+    // part): `hermes -z` / `chat -q` one-shot runs are not chats.
+    for (final source in const [
+      'acp',
+      'cron',
+      'kanban',
+      'oneshot',
+      'subagent',
+      'tool',
+    ]) {
+      expect(SessionCategory.chats.excludeSources, contains(source));
+      expect(SessionCategory.chats.includesSource(source), isFalse);
+      expect(SessionCategory.automation.includesSource(source), isTrue);
+    }
+  });
+
   test('Chats conserva fuentes humanas o futuras y Todo no oculta ninguna', () {
     for (final source in const ['mobile', 'tui', 'telegram', 'custom-source']) {
       expect(SessionCategory.chats.includesSource(source), isTrue);
@@ -43,6 +62,12 @@ void main() {
     expect(SessionCategory.automation.sources, AutomationSessionSources.values);
     expect(SessionCategory.all.sources, isEmpty);
     expect(SessionCategory.all.excludeSources, isEmpty);
+    expect(
+      SessionCategory.chats.includesSource('api_server'),
+      isTrue,
+      reason: 'API es un transporte de chat, no una automatización',
+    );
+    expect(SessionCategory.automation.includesSource('api_server'), isFalse);
   });
 
   test('Session parsea lineage, perfil, rama, archivo y handoff 0.19', () {

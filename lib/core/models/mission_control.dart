@@ -1,5 +1,9 @@
+import '../bots/state/bot_presence.dart';
 import 'agent_profile.dart';
+import 'desktop_active_session.dart';
+import 'hosted_groups.dart';
 import 'kanban.dart';
+import 'room_mirror.dart';
 import 'session.dart';
 
 enum MissionCapabilityState { available, unsupported, unavailable }
@@ -137,14 +141,36 @@ final class MissionOrganization {
 }
 
 final class MissionBackendSnapshot {
+  RoomMirrorIdentity? roomIdentity(HostedGroupRoom room) {
+    final defaults = profiles.where((profile) => profile.name == 'default');
+    if (defaults.length != 1) return null;
+    return defaults.single.roomMirror.match(room, hostedGroups.rooms);
+  }
+
   final List<AgentProfile> profiles;
   final List<Session> sessions;
   final KanbanBoard? board;
   final MissionCapabilityState profilesCapability;
   final MissionCapabilityState sessionsCapability;
   final MissionCapabilityState kanbanCapability;
+  final HostedGroupsSnapshot hostedGroups;
+  final MissionCapabilityState hostedGroupsCapability;
   final Map<String, Object> failures;
   final DateTime loadedAt;
+
+  /// `session.active_list` of the same read: every live session of the
+  /// Gateway process, whichever client moves it. It carries no profile.
+  /// A read that omits a session is authoritative about its absence.
+  final List<DesktopActiveSession> activeSessions;
+
+  /// When that read started; a row older than a chat's own settled turn loses
+  /// to the chat. Null falls back to [loadedAt].
+  final DateTime? activeSessionsObservedAt;
+
+  /// False when the read failed (timeout, cut socket, server error): the empty
+  /// list then proves nothing and the last good rows must be kept. A read that
+  /// answered, even with no rows, is authoritative about absence.
+  final bool activeSessionsAuthoritative;
 
   const MissionBackendSnapshot({
     this.profiles = const [],
@@ -153,8 +179,13 @@ final class MissionBackendSnapshot {
     this.profilesCapability = MissionCapabilityState.unavailable,
     this.sessionsCapability = MissionCapabilityState.unavailable,
     this.kanbanCapability = MissionCapabilityState.unavailable,
+    this.hostedGroups = HostedGroupsSnapshot.empty,
+    this.hostedGroupsCapability = MissionCapabilityState.unsupported,
     this.failures = const {},
     required this.loadedAt,
+    this.activeSessions = const [],
+    this.activeSessionsObservedAt,
+    this.activeSessionsAuthoritative = true,
   });
 
   List<KanbanTask> get tasks => List<KanbanTask>.unmodifiable(
@@ -176,6 +207,17 @@ final class MissionLiveChat {
   final String? model;
   final String? provider;
 
+  /// When this chat last saw its own turn end (`ActiveChat.lastTerminalAt`).
+  final DateTime? settledAt;
+
+  /// This open chat is the profile's Bot Chat (opened from Bots), even
+  /// before the server has registered it as `canonical_session`.
+  final bool botChat;
+
+  /// Delegated subagents of this chat still running
+  /// (`ActiveChat.safeActiveSubagentCount`).
+  final int subagentCount;
+
   const MissionLiveChat({
     required this.profileName,
     required this.sessionId,
@@ -184,6 +226,9 @@ final class MissionLiveChat {
     this.approval,
     this.model,
     this.provider,
+    this.settledAt,
+    this.botChat = false,
+    this.subagentCount = 0,
   });
 }
 
@@ -397,6 +442,7 @@ final class MissionAgent {
   final MissionAgentStatus status;
   final String statusEvidence;
   final Session? currentSession;
+  final String? liveSessionTitle;
   final KanbanTask? currentTask;
   final MissionUsage usage;
   final MissionApproval? approval;
@@ -404,17 +450,49 @@ final class MissionAgent {
   final String? model;
   final String? provider;
 
+  /// What `session.active_list` (and the fresh worker) says this bot is
+  /// doing, whichever client moves its chat; [BotPresence.derive] decides.
+  final BotPresence livePresence;
+
+  /// Title of the chat behind [livePresence], for the «Working · chat» line.
+  final String? livePresenceTitle;
+
+  /// State of the canonical Bot Chat alone: the one place the Bots avatar
+  /// opens, so its aura says nothing about the profile's other chats.
+  final BotPresence botChatPresence;
+
+  /// Title behind [botChatPresence], for the «Working · chat» line.
+  final String? botChatTitle;
+
+  /// Running subagents delegated by the canonical Bot Chat's open turn;
+  /// subagents of the profile's other chats never count.
+  final int botChatDelegated;
+
+  /// Shared by Bots and room presence; a gateway being online is not a turn.
+  bool get activeNow => switch (status) {
+    MissionAgentStatus.thinking ||
+    MissionAgentStatus.working ||
+    MissionAgentStatus.responding => true,
+    _ => false,
+  };
+
   const MissionAgent({
     required this.profile,
     required this.status,
     required this.statusEvidence,
     this.currentSession,
+    this.liveSessionTitle,
     this.currentTask,
     required this.usage,
     this.approval,
     this.lastActivityAt,
     this.model,
     this.provider,
+    this.livePresence = BotPresence.idle,
+    this.livePresenceTitle,
+    this.botChatPresence = BotPresence.idle,
+    this.botChatTitle,
+    this.botChatDelegated = 0,
   });
 }
 
@@ -521,6 +599,11 @@ abstract final class MissionProjector {
       liveByProfile.putIfAbsent(chat.profileName, () => []).add(chat);
     }
 
+    final ambiguousSessionIds = BotPresence.ambiguousSessionIds(
+      snapshot.profiles,
+    );
+    final activeObservedAt =
+        snapshot.activeSessionsObservedAt ?? snapshot.loadedAt;
     final agents = <MissionAgent>[];
     final approvals = <MissionApproval>[];
     final approvalSessions = <String>{};
@@ -551,6 +634,25 @@ abstract final class MissionProjector {
                 worker.lastActive > sessionActivitySeconds
           ? worker.lastActive
           : sessionActivitySeconds;
+      // What the server says this bot is doing, whichever client moves its
+      // chat. A row the bot's own open chat already speaks for is dropped.
+      final liveRows = snapshot.activeSessions
+          .where((row) => !_chatSpeaksFor(row, chats, activeObservedAt))
+          .toList(growable: false);
+      final liveRow = BotPresence.liveSessionFor(
+        profile,
+        liveRows,
+        ambiguousSessionIds: ambiguousSessionIds,
+      );
+      // Only the row speaks here: a fresh worker already feeds `status`, and
+      // its freshness is judged again whenever the roster is drawn.
+      final livePresence = BotPresence.ofLiveStatus(liveRow?.status);
+      final botChat = _botChatPresence(
+        profile,
+        chats,
+        liveRows,
+        ambiguousSessionIds,
+      );
       final currentSession =
           _pinnedBotChat(profile) ??
           _sessionForChat(sessions, chat) ??
@@ -561,6 +663,12 @@ abstract final class MissionProjector {
           status: status,
           statusEvidence: _statusEvidence(status, chat, task, worker),
           currentSession: currentSession,
+          liveSessionTitle: chat != null && chat.phase != MissionLivePhase.idle
+              ? _firstNonEmpty([
+                  chat.title,
+                  _sessionForChat(sessions, chat)?.title,
+                ])
+              : null,
           currentTask: task,
           usage: MissionUsage.fromSessions(sessions),
           approval: approval,
@@ -580,6 +688,13 @@ abstract final class MissionProjector {
             task?.providerOverride,
             profile.provider,
           ]),
+          livePresence: livePresence,
+          livePresenceTitle: liveRow == null
+              ? null
+              : _liveRowTitle(profile, liveRow),
+          botChatPresence: botChat.presence,
+          botChatTitle: botChat.title,
+          botChatDelegated: botChat.delegated,
         ),
       );
     }
@@ -602,15 +717,99 @@ abstract final class MissionProjector {
     );
   }
 
+  /// The canonical Bot Chat's own state: its open Console chat, else its
+  /// `session.active_list` row (the chat speaks for a row of the same id).
+  static ({BotPresence presence, String? title, int delegated})
+  _botChatPresence(
+    AgentProfile profile,
+    List<MissionLiveChat> chats,
+    List<DesktopActiveSession> liveRows,
+    Set<String> ambiguousSessionIds,
+  ) {
+    final ids = BotPresence.botChatIds(profile);
+    var best = BotPresence.idle;
+    String? title;
+    for (final row in liveRows) {
+      final presence = BotPresence.ofBotChat(profile, [
+        row,
+      ], ambiguousSessionIds: ambiguousSessionIds);
+      if (presence.priority > best.priority) {
+        best = presence;
+        title = _liveRowTitle(profile, row);
+      }
+    }
+    var delegated = 0;
+    for (final chat in chats) {
+      if (!chat.botChat && !ids.contains(chat.sessionId)) continue;
+      if (chat.subagentCount > delegated) delegated = chat.subagentCount;
+      final presence = switch (chat.phase) {
+        MissionLivePhase.approvalRequired => BotPresence.attention,
+        MissionLivePhase.working ||
+        MissionLivePhase.responding => BotPresence.working,
+        MissionLivePhase.thinking => BotPresence.thinking,
+        _ => BotPresence.idle,
+      };
+      if (presence.priority > best.priority) {
+        best = presence;
+        title = _firstNonEmpty([chat.title]);
+      }
+    }
+    return (
+      presence: best,
+      title: best == BotPresence.idle ? null : title,
+      delegated: delegated,
+    );
+  }
+
+  /// The open chat of the same session speaks for it: a working chat always,
+  /// an idle one unless the row was read after the chat settled its turn.
+  static bool _chatSpeaksFor(
+    DesktopActiveSession row,
+    List<MissionLiveChat> chats,
+    DateTime observedAt,
+  ) {
+    for (final chat in chats) {
+      if (chat.sessionId != row.storedSessionId) continue;
+      if (chat.phase != MissionLivePhase.idle) return true;
+      final settled = chat.settledAt;
+      if (settled != null && !observedAt.isAfter(settled)) return true;
+    }
+    return false;
+  }
+
+  /// The row's own title, else the bot's stored title for that session.
+  static String? _liveRowTitle(AgentProfile profile, DesktopActiveSession row) {
+    final own = _firstNonEmpty([row.title]);
+    if (own != null) return own;
+    final id = row.storedSessionId;
+    for (final summary in [
+      profile.canonicalSession,
+      profile.lastSession,
+      profile.preferredSession,
+    ]) {
+      if (summary == null || (summary.id != id && summary.resolvedId != id)) {
+        continue;
+      }
+      final title = _firstNonEmpty([summary.title, summary.rootTitle]);
+      if (title != null) return title;
+    }
+    final worker = profile.workerSession;
+    return worker != null && worker.id == id
+        ? _firstNonEmpty([worker.title])
+        : null;
+  }
+
+  /// The canonical Bot Chat (`canonical_session`, spec 070 T206). The legacy
+  /// `ui_meta['hermes-bots'].chat` pin is ignored per Desktop's invariant.
   static Session? _pinnedBotChat(AgentProfile profile) {
-    final id = profile.botChatSessionId;
+    final id = profile.canonicalBotChatSessionId;
     if (id == null || id.isEmpty) return null;
     return Session(
       id: id,
       title: 'Bot Chat',
       model: profile.model.isEmpty ? 'hermes-agent' : profile.model,
-      source: 'bot-mode',
-      messageCount: 0,
+      source: 'bot-mode-canonical',
+      messageCount: profile.canonicalSession?.messageCount ?? 0,
       isActive: true,
       preview: '',
       startedAt: 0,

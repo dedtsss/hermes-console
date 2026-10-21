@@ -212,7 +212,7 @@ void main() {
       final locked = shown.last;
       final android = androidOf(locked);
       expect(locked['title'], 'Hermes necesita tu atención');
-      expect(locked['body'], 'Abre la aplicación para ver los detalles.');
+      expect(locked['body'], 'Toca para verla');
       expect(android['visibility'], NotificationVisibility.secret.index);
       expect(actionIdsOf(locked), ['open']);
     },
@@ -243,8 +243,8 @@ void main() {
 
     final shown = shownArgs(groupSummary: false);
     expect(shown, hasLength(2));
-    expect(shown.first['title'], 'Cron completado');
-    expect(shown.last['title'], 'Cron falló');
+    expect(shown.first['title'], 'Tarea programada terminada');
+    expect(shown.last['title'], 'Falló una tarea programada');
     expect(shown.first['id'], isNot(shown.last['id']));
   });
 
@@ -262,7 +262,7 @@ void main() {
     final shown = shownArgs(groupSummary: false);
     expect(shown, hasLength(1));
     final android = androidOf(shown.single);
-    expect(shown.single['title'], 'Tarea de Kanban bloqueada');
+    expect(shown.single['title'], 'Tarea bloqueada');
     expect(shown.single['body'], 'Preparar publicación');
     expect(android['subText'], 'Kanban · task-42');
     final payload = Map<String, dynamic>.from(
@@ -318,7 +318,7 @@ void main() {
 
     final shown = shownArgs(groupSummary: false);
     expect(shown, hasLength(2));
-    expect(shown.last['title'], 'Tarea de Kanban completada');
+    expect(shown.last['title'], 'Tarea terminada');
   });
 
   test(
@@ -441,6 +441,80 @@ void main() {
       }).toList();
       expect(cancels, containsAllInOrder([firstId, 500]));
       expect(tray.keys, isNot(contains(500)));
+    },
+  );
+
+  test(
+    'un cron job silenciado individualmente calla aunque el toggle global de Cron esté activo',
+    () async {
+      final prefs = await SharedPreferences.getInstance();
+      final service = testService(prefs)..appInForeground = false;
+      expect(service.notifyCronResults, isTrue);
+
+      await service.setJobMuted('job-muted', true);
+      expect(service.isJobMuted('job-muted'), isTrue);
+
+      await service.cronFinished(
+        title: 'Job silenciado',
+        ok: true,
+        connId: 'demo-node',
+        sessionId: 'cron-muted-1',
+        executionId: 'execution-muted-1',
+        jobId: 'job-muted',
+      );
+      expect(shownArgs(groupSummary: false), isEmpty);
+
+      // Otro job, no silenciado, sigue avisando con el mismo toggle global.
+      await service.cronFinished(
+        title: 'Job normal',
+        ok: true,
+        connId: 'demo-node',
+        sessionId: 'cron-normal-1',
+        executionId: 'execution-normal-1',
+        jobId: 'job-normal',
+      );
+      expect(shownArgs(groupSummary: false), hasLength(1));
+    },
+  );
+
+  test(
+    'una tarea de Kanban silenciada individualmente calla aunque el toggle global de Kanban esté activo',
+    () async {
+      final prefs = await SharedPreferences.getInstance();
+      final service = testService(prefs)..appInForeground = false;
+      expect(service.notifyKanbanResults, isTrue);
+
+      await service.setTaskMuted('task-muted', true);
+      expect(service.isTaskMuted('task-muted'), isTrue);
+
+      await service.kanbanTransition(
+        connId: 'demo-node',
+        taskId: 'task-muted',
+        title: 'Tarea silenciada',
+        status: 'done',
+      );
+      expect(shownArgs(groupSummary: false), isEmpty);
+
+      // Otra tarea, no silenciada, sigue avisando con el mismo toggle global.
+      await service.kanbanTransition(
+        connId: 'demo-node',
+        taskId: 'task-normal',
+        title: 'Tarea normal',
+        status: 'done',
+      );
+      expect(shownArgs(groupSummary: false), hasLength(1));
+
+      // Des-silenciar restaura el aviso para esa misma tarea.
+      await service.setTaskMuted('task-muted', false);
+      expect(service.isTaskMuted('task-muted'), isFalse);
+      await service.kanbanTransition(
+        connId: 'demo-node',
+        taskId: 'task-muted',
+        title: 'Tarea silenciada',
+        status: 'blocked',
+        sourceVersion: 'second',
+      );
+      expect(shownArgs(groupSummary: false), hasLength(2));
     },
   );
 }

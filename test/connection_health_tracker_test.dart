@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_android/core/services/connection_health_tracker.dart';
+import 'package:hermes_android/core/services/connection_status.dart';
 
 void main() {
   group('ConnectionHealthTracker', () {
@@ -49,5 +50,40 @@ void main() {
       expect(tracker.checking, isFalse);
       expect(tracker.consecutiveFailures, 0);
     });
+  });
+
+  test(
+    'qa9485: un re-sondeo de una conexión sana no muestra «comprobando»',
+    () {
+      final tracker = ConnectionHealthTracker();
+      tracker.beginProbe();
+      // Primer sondeo: nada conocido aún.
+      expect(tracker.showsChecking, isTrue);
+      tracker.recordResult(1, healthy: true);
+      final probe = tracker.beginProbe();
+      expect(tracker.checking, isTrue);
+      expect(tracker.showsChecking, isFalse);
+      // Tras caer a offline, el siguiente sondeo vuelve a «comprobando».
+      tracker.recordResult(probe, healthy: false);
+      tracker.recordResult(tracker.beginProbe(), healthy: false);
+      tracker.beginProbe();
+      expect(tracker.showsChecking, isTrue);
+    },
+  );
+
+  test('N4: REST healthy never reads online over a down chat socket', () {
+    final tracker = ConnectionHealthTracker();
+    tracker.recordResult(tracker.beginProbe(), healthy: true);
+    expect(tracker.online, isTrue);
+
+    tracker.link = ConnectionStatus(
+      ConnectionStatusKind.reconnecting,
+      since: DateTime(2026),
+    );
+    expect(tracker.healthy, isTrue, reason: 'REST stays what it measured');
+    expect(tracker.online, isFalse);
+
+    tracker.link = const ConnectionStatus(ConnectionStatusKind.connected);
+    expect(tracker.online, isTrue);
   });
 }

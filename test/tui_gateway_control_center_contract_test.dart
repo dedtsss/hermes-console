@@ -7,6 +7,8 @@ import 'package:hermes_android/core/services/desktop_control_gateway.dart';
 import 'package:hermes_android/core/services/desktop_gateway_capabilities.dart';
 import 'package:hermes_android/core/services/tui_gateway_client.dart';
 
+import 'support/rpc_frame_helpers.dart';
+
 final class _ControlTicketDashboard extends DashboardClient {
   _ControlTicketDashboard()
     : super(host: '127.0.0.1', port: 1, manualToken: 'unused');
@@ -42,8 +44,19 @@ void main() {
       final requests = <Map<String, dynamic>>[];
       server.listen((request) async {
         final socket = await WebSocketTransformer.upgrade(request);
+        socket.add(
+          jsonEncode({
+            'jsonrpc': '2.0',
+            'method': 'event',
+            'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+          }),
+        );
         await for (final raw in socket) {
           final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+          if (isClientCapabilitiesFrame(frame)) {
+            socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+            continue;
+          }
           requests.add(frame);
           final params = Map<String, dynamic>.from(frame['params'] as Map);
           final result = switch (frame['method']) {
@@ -190,9 +203,20 @@ void main() {
       var requests = 0;
       server.listen((request) async {
         final socket = await WebSocketTransformer.upgrade(request);
+        socket.add(
+          jsonEncode({
+            'jsonrpc': '2.0',
+            'method': 'event',
+            'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+          }),
+        );
         await for (final raw in socket) {
-          requests++;
           final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+          if (isClientCapabilitiesFrame(frame)) {
+            socket.add(jsonEncode(clientCapabilitiesResponse(frame)));
+            continue;
+          }
+          requests++;
           socket.add(
             jsonEncode({
               'jsonrpc': '2.0',
@@ -244,6 +268,13 @@ void main() {
     final requests = <Map<String, dynamic>>[];
     server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(
+        jsonEncode({
+          'jsonrpc': '2.0',
+          'method': 'event',
+          'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+        }),
+      );
       await for (final raw in socket) {
         requests.add(jsonDecode(raw as String) as Map<String, dynamic>);
       }
@@ -272,6 +303,13 @@ void main() {
       final requests = <Map<String, dynamic>>[];
       server.listen((request) async {
         final socket = await WebSocketTransformer.upgrade(request);
+        socket.add(
+          jsonEncode({
+            'jsonrpc': '2.0',
+            'method': 'event',
+            'params': {'type': 'gateway.ready', 'payload': <String, dynamic>{}},
+          }),
+        );
         await for (final raw in socket) {
           requests.add(jsonDecode(raw as String) as Map<String, dynamic>);
         }

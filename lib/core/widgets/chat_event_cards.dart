@@ -1,16 +1,26 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../l10n/app_localizations.dart';
-import '../companion/render/companion_status_indicator.dart';
 import '../companion/state/companion_controller.dart';
+import '../models/activity_snapshot.dart';
+import '../models/agent_task_list.dart';
+import '../models/deferred_tool_call.dart';
+import '../models/tool_label.dart';
+import '../models/tool_output.dart';
+import '../services/approval_policy.dart';
 import '../services/command_risk.dart';
-import '../services/connection_manager.dart';
 import '../theme/app_theme.dart';
+import 'activity_sections.dart';
+import 'agent_task_widgets.dart';
+import 'approval_choice_button.dart';
+import 'chat/tool_output_cards.dart';
+import 'chat_turn_activity.dart';
 import 'hermes_premium_ui.dart';
-import 'hermes_spark_mascot.dart';
+import '../companion/models/companion_mood.dart';
 import 'hermes_pill.dart';
 
 /// Clasificación y renderizado de eventos técnicos del chat.
@@ -27,30 +37,89 @@ enum ChatEventKind { text, toolEvent, approval }
 /// Resultado de clasificar un mensaje del historial.
 class ChatEventInfo {
   final ChatEventKind kind;
-  final String? command;
-  final String? description;
-  final String? output;
-  final int? exitCode;
+  String? get command => null;
+  String? get description => null;
+  String? get output => null;
+  int? get exitCode => null;
   final String? status;
-  final String? runId;
-  final String? patternKey;
+  String? get runId => null;
+  String? get patternKey => null;
   final bool approvalPending;
 
   /// Texto a renderizar cuando [kind] == text (markdown normal).
   final String text;
 
+  /// tp1216: herramientas que nombra el propio mensaje (las
+  /// `tool_calls[].function.name` de una llamada, o el `tool_name` de un
+  /// resultado), con la skill que carga una `skill_view` si su argumento
+  /// `name` viene. Vacío cuando el servidor no las nombra.
+  final List<({String label, bool skill, String? detail})> tools;
+
+  /// mp1215: the `memory` writes this message describes — from a call's
+  /// args, or (for a result) only whether it landed and where.
+  final List<MemoryWrite> memory;
+
   const ChatEventInfo._({
     required this.kind,
     required this.text,
-    this.command,
-    this.description,
-    this.output,
-    this.exitCode,
     this.status,
-    this.runId,
-    this.patternKey,
     this.approvalPending = false,
+    this.tools = const [],
+    this.memory = const [],
   });
+
+  /// lp1215: every logical tool of a `tool_calls` list, with the
+  /// deferred-tool bridge (`tool_call`) unwrapped into the tools it invokes.
+  static Iterable<({String name, Object? args})> _logicalCalls(
+    List calls,
+  ) sync* {
+    for (final call in calls.take(64)) {
+      if (call is! Map) continue;
+      final function = call['function'];
+      final name = (function is Map ? function['name'] : call['name'])
+          ?.toString()
+          .trim();
+      if (name == null || name.isEmpty) continue;
+      final args = function is Map ? function['arguments'] : null;
+      final wrapped = unwrapDeferredToolCall(name, args);
+      if (wrapped == null) {
+        yield (name: name, args: args);
+      } else {
+        for (final entry in wrapped) {
+          yield (name: entry.name, args: entry.arguments);
+        }
+      }
+    }
+  }
+
+  static List<MemoryWrite> _callMemory(List calls) => [
+    for (final call in _logicalCalls(calls))
+      ?MemoryWrite.fromArgs(call.name, call.args),
+  ];
+
+  static List<({String label, bool skill, String? detail})> _callTools(
+    List calls,
+  ) {
+    final tools = <({String label, bool skill, String? detail})>[];
+    for (final call in _logicalCalls(calls)) {
+      final name = call.name;
+      if (name.length > 120) continue;
+      Object? args = call.args;
+      if (args is String && isSkillLoadTool(name)) {
+        try {
+          args = jsonDecode(args);
+        } catch (_) {
+          args = null;
+        }
+      }
+      tools.add((
+        label: name,
+        skill: false,
+        detail: isSkillLoadTool(name) ? activityToolDetail(name, args) : null,
+      ));
+    }
+    return List.unmodifiable(tools);
+  }
 
   static const _internalKeys = {
     'command',
@@ -69,6 +138,21 @@ class ChatEventInfo {
     'tool_call',
   };
 
+  // Los resultados de herramientas pueden contener megabytes de salida. La
+  // detección conserva las cinco frases históricas y su semántica sin distinguir
+  // mayúsculas, pero evita materializar una copia minúscula de cada payload.
+  static final RegExp _approvalMarkerRe = RegExp(
+    r'asking the user for approval'
+    r'|approval is one-shot'
+    r'|pending_approval'
+    r'|awaiting_approval'
+    r'|waiting_for_approval',
+    caseSensitive: false,
+  );
+
+  static bool _isApprovalToolResult(String content) =>
+      _approvalMarkerRe.hasMatch(content);
+
   /// Clasifica un mensaje `{role, content, ...}` del historial del servidor.
   ///
   /// Heurística conservadora para no romper respuestas normales del asistente:
@@ -78,6 +162,9 @@ class ChatEventInfo {
     final role = (msg['role'] ?? '').toString().toLowerCase();
     final rawContent = msg['content'];
     final textContent = rawContent is String ? rawContent : '';
+    if (role != 'user' && role != 'assistant' && !_toolRoles.contains(role)) {
+      return const ChatEventInfo._(kind: ChatEventKind.text, text: '');
+    }
 
     // ── Caso 1: el asistente INVOCA una herramienta. ──────────────────────
     // El agente Hermes manda content:"" y la llamada en tool_calls[].function
@@ -89,19 +176,12 @@ class ChatEventInfo {
     if (toolCalls is List &&
         toolCalls.isNotEmpty &&
         textContent.trim().isEmpty) {
-      final call = toolCalls.first;
-      final fn = (call is Map) ? call['function'] : null;
-      final name =
-          (fn is Map ? fn['name'] : null)?.toString() ??
-          (msg['tool_name']?.toString() ?? 'tool');
-      final argsRaw = (fn is Map ? fn['arguments'] : null)?.toString() ?? '';
-      final command = _formatToolArgs(argsRaw);
       return ChatEventInfo._(
         kind: ChatEventKind.toolEvent,
-        text: textContent,
-        description: name,
-        command: (command.isNotEmpty) ? command : null,
+        text: '',
         status: 'llamada',
+        tools: _callTools(toolCalls),
+        memory: List.unmodifiable(_callMemory(toolCalls)),
       );
     }
 
@@ -109,53 +189,29 @@ class ChatEventInfo {
     // El content puede ser JSON puro, JSON + "\n\n[Tool loop warning: …]" o
     // texto plano. La señal de aprobación viene EMBEBIDA en el string de error.
     if (_toolRoles.contains(role)) {
-      final toolName = msg['tool_name']?.toString();
-      final lower = textContent.toLowerCase();
-      final isApproval =
-          lower.contains('asking the user for approval') ||
-          lower.contains('approval is one-shot') ||
-          lower.contains('pending_approval') ||
-          lower.contains('awaiting_approval') ||
-          lower.contains('waiting_for_approval');
-
-      final payload = _tryParseLeadingJson(textContent);
-      String? output;
-      int? exitCode;
-      String? status;
-      String? command = (msg['command'])?.toString();
-      if (payload != null) {
-        output =
-            (payload['output'] ??
-                    payload['stdout'] ??
-                    payload['result'] ??
-                    payload['error'])
-                ?.toString();
-        exitCode = (payload['exit_code'] as num?)?.toInt();
-        status = payload['status']?.toString();
-        command ??= payload['command']?.toString();
-      } else {
-        output = textContent;
-      }
-      output = _sanitizeToolOutput(output);
+      final isApproval = _isApprovalToolResult(textContent);
 
       if (isApproval) {
-        return ChatEventInfo._(
+        return const ChatEventInfo._(
           kind: ChatEventKind.approval,
-          text: textContent,
-          description: toolName,
-          command: _extractFencedCode(textContent) ?? command,
+          text: '',
           status: 'pending_approval',
           approvalPending: true,
         );
       }
+      final resultName = (msg['tool_name'] ?? msg['name'])?.toString().trim();
+      final memoryResult = isMemoryTool(resultName ?? '')
+          ? MemoryWrite.settle(null, textContent)
+          : null;
       return ChatEventInfo._(
         kind: ChatEventKind.toolEvent,
-        text: textContent,
-        description: toolName,
-        command: (command != null && command.isNotEmpty) ? command : null,
-        output: (output != null && output.isNotEmpty) ? output : null,
-        exitCode: exitCode,
-        status: status ?? 'completado',
+        text: '',
+        status: 'completado',
+        memory: memoryResult == null ? const [] : [memoryResult],
+        tools:
+            resultName == null || resultName.isEmpty || resultName.length > 120
+            ? const []
+            : [(label: resultName, skill: false, detail: null)],
       );
     }
 
@@ -175,16 +231,7 @@ class ChatEventInfo {
       return ChatEventInfo._(kind: ChatEventKind.text, text: textContent);
     }
 
-    final command = (payload['command'] ?? msg['command'])?.toString();
-    final description = (payload['description'] ?? msg['description'])
-        ?.toString();
-    final output = (payload['output'] ?? payload['stdout'] ?? payload['result'])
-        ?.toString();
-    final exitCode = (payload['exit_code'] as num?)?.toInt();
     final status = (payload['status'] ?? msg['status'])?.toString();
-    final runId = (payload['run_id'] ?? payload['runId'] ?? msg['run_id'])
-        ?.toString();
-    final patternKey = payload['pattern_key']?.toString();
 
     final approvalPending =
         payload['approval_pending'] == true ||
@@ -198,47 +245,10 @@ class ChatEventInfo {
 
     return ChatEventInfo._(
       kind: kind,
-      text: textContent,
-      command: (command != null && command.isNotEmpty) ? command : null,
-      description: (description != null && description.isNotEmpty)
-          ? description
-          : null,
-      output: (output != null && output.isNotEmpty) ? output : null,
-      exitCode: exitCode,
-      status: status,
-      runId: (runId != null && runId.isNotEmpty) ? runId : null,
-      patternKey: patternKey,
+      text: '',
+      status: approvalPending ? 'pending_approval' : 'completado',
       approvalPending: approvalPending,
     );
-  }
-
-  /// Extrae el campo "jugoso" de los argumentos JSON de una tool call (código,
-  /// comando, contenido de fichero, consulta…) con los `\n` ya reales. Si no hay
-  /// uno claro, devuelve el JSON indentado legible.
-  static String _formatToolArgs(String argsRaw) {
-    final t = argsRaw.trim();
-    if (t.isEmpty) return '';
-    try {
-      final decoded = jsonDecode(t);
-      if (decoded is Map<String, dynamic>) {
-        for (final k in [
-          'code',
-          'command',
-          'content',
-          'query',
-          'path',
-          'url',
-        ]) {
-          final v = decoded[k];
-          if (v is String && v.trim().isNotEmpty) return v;
-        }
-        const enc = JsonEncoder.withIndent('  ');
-        return enc.convert(decoded);
-      }
-    } catch (_) {
-      // No es JSON: se muestra crudo (ya con \n reales si los traía).
-    }
-    return t;
   }
 
   /// Parsea el PRIMER objeto JSON balanceado al inicio de [s], tolerando texto
@@ -270,9 +280,10 @@ class ChatEventInfo {
           try {
             final d = jsonDecode(t.substring(0, i + 1));
             return d is Map<String, dynamic> ? d : null;
-          } catch (e) {
+          } catch (error) {
             debugPrint(
-              '[chat-cards] excepción silenciada (se devuelve null): $e',
+              '[chat-cards] malformed legacy tool envelope '
+              '(${error.runtimeType})',
             );
             return null;
           }
@@ -280,23 +291,6 @@ class ChatEventInfo {
       }
     }
     return null;
-  }
-
-  /// Quita los avisos internos de control del agente ("[Tool loop warning: …]",
-  /// cerrados o truncados) que no deben verse en el chat.
-  static String? _sanitizeToolOutput(String? out) {
-    if (out == null) return null;
-    var s = out.replaceAll(RegExp(r'\[Tool loop warning:[\s\S]*?\]'), '');
-    s = s.replaceAll(RegExp(r'\[Tool loop warning:[\s\S]*$'), '');
-    return s.trim();
-  }
-
-  /// Extrae el primer bloque de código cercado (```…```) de [s]; usado para
-  /// mostrar el código que el agente quiere ejecutar en la tarjeta de aprobación.
-  static String? _extractFencedCode(String s) {
-    final m = RegExp(r'```[a-zA-Z]*\n([\s\S]*?)```').firstMatch(s);
-    final code = m?.group(1)?.trim();
-    return (code != null && code.isNotEmpty) ? code : null;
   }
 }
 
@@ -602,19 +596,51 @@ class _ToolActivityGroupState extends State<ToolActivityGroup> {
               ? (anyOk ? colors.warning : colors.error)
               : colors.textSecondary);
 
-    // Resumen de herramientas usadas (nombres únicos, máx 3) para el subtítulo.
-    final names = <String>[];
-    for (final e in events) {
-      final d = e.description;
-      if (d != null && d.isNotEmpty && !names.contains(d)) names.add(d);
-    }
-    final namesLabel = names.take(3).join(', ') + (names.length > 3 ? '…' : '');
+    // tp1216: qué usó la tanda. Cuentan las llamadas; los resultados solo
+    // si ninguna llamada nombra herramientas (así una llamada y su
+    // resultado no suman dos).
+    final calls = [
+      for (final e in events)
+        if (e.status == 'llamada') ...e.tools,
+    ];
+    final source = calls.isNotEmpty
+        ? calls
+        : [for (final e in events) ...e.tools];
+    final tools = summarizeToolRun(
+      source.map(
+        (t) =>
+            (label: t.label, skill: t.skill, detail: t.detail, running: false),
+      ),
+    );
 
-    // Subtítulo colapsado: nombres de herramientas o "actividad" al expandir.
+    // mp1215: each memory result settles the oldest unmatched memory call
+    // (args give action/target/preview); only confirmed writes are marked.
+    final pendingMemoryCalls = <MemoryWrite>[];
+    final landedMemory = <MemoryWrite>[];
+    for (final e in events) {
+      if (e.status == 'llamada') {
+        pendingMemoryCalls.addAll(e.memory);
+        continue;
+      }
+      for (final result in e.memory) {
+        final call = pendingMemoryCalls.isEmpty
+            ? null
+            : pendingMemoryCalls.removeAt(0);
+        if (!result.landed) continue;
+        landedMemory.add(
+          MemoryWrite(
+            action: call?.action ?? result.action,
+            userTarget: result.userTarget || (call?.userTarget ?? false),
+            landed: true,
+            preview: call?.preview,
+          ),
+        );
+      }
+    }
+
+    // Subtítulo colapsado: el resumen, o "actividad" sin nombres/al expandir.
     final s = Strings.of(context);
-    final headLabel = _expanded
-        ? s.cevActivity
-        : (namesLabel.isNotEmpty ? namesLabel : s.cevActivity);
+    final headLabel = s.cevActivity;
 
     return Padding(
       padding: const EdgeInsets.only(left: 12, right: 40, top: 2, bottom: 2),
@@ -634,22 +660,35 @@ class _ToolActivityGroupState extends State<ToolActivityGroup> {
                   Icon(Icons.bolt_rounded, size: 14, color: accent),
                   const SizedBox(width: 7),
                   Flexible(
-                    child: Text(
-                      headLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: colors.textDisabled,
-                      ),
-                    ),
+                    // ct1215: the same words as a turn's folded line, so an
+                    // old chat reads like a new one.
+                    child: tools.isNotEmpty && !_expanded
+                        ? Text(
+                            toolRunSummaryParts(s, tools).join(' · '),
+                            key: const ValueKey('tool-run-summary'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: colors.textSecondary,
+                            ),
+                          )
+                        : Text(
+                            headLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: colors.textTertiary,
+                            ),
+                          ),
                   ),
                   const SizedBox(width: 8),
                   Text(
                     s.cevStepCount(n),
                     style: TextStyle(
                       fontSize: 10.5,
-                      color: colors.textDisabled,
+                      color: colors.textTertiary,
                     ),
                   ),
                   if (hasApproval) ...[
@@ -673,6 +712,10 @@ class _ToolActivityGroupState extends State<ToolActivityGroup> {
                 ],
               ),
             ),
+          ),
+          memorySavedMarkers(
+            landedMemory,
+            padding: const EdgeInsets.only(left: 2),
           ),
           AnimatedSize(
             duration: const Duration(milliseconds: 180),
@@ -730,15 +773,30 @@ class _ToolStepState extends State<_ToolStep> {
       label = s.cevStatusDone;
     }
 
+    // ct1215: each tool in the words every other surface uses, never its
+    // id; Hermes' own bridge tools are not named at all.
+    final named = {
+      for (final tool in info.tools)
+        if (!isInternalActivityLabel(tool.label))
+          [
+            toolOrSkillStepTitle(
+              s,
+              tool.label,
+              running: false,
+              detail: tool.detail,
+            ),
+            ?tool.detail,
+          ].join(' · '),
+    };
     final name = (info.description != null && info.description!.isNotEmpty)
         ? info.description!
-        : s.cevToolFallback;
+        : (named.isNotEmpty ? named.join(', ') : s.cevToolFallback);
     final hasDetail =
         (info.command != null && info.command!.isNotEmpty) ||
         (info.output != null && info.output!.isNotEmpty);
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.only(bottom: 3),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -887,7 +945,7 @@ class _ApprovalCommandBoxState extends State<ApprovalCommandBox> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ChatApprovalCard — aprobación inline en el chat (motor /v1/runs). Tarjeta
+// ChatApprovalCard — aprobación inline en el chat (socket de Desktop). Tarjeta
 // limpia con el código a ejecutar y los 4 botones: permitir / denegar /
 // esta sesión / siempre. Pensada para vivir encima de la barra de entrada.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -926,6 +984,7 @@ class ChatApprovalCard extends StatelessWidget {
     // en inglés del servidor).
     final what = command.isNotEmpty ? command : description;
     final oneLine = !what.contains('\n') && what.length <= 80;
+    final allowed = permittedApprovalChoices(approval);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
@@ -989,58 +1048,72 @@ class ChatApprovalCard extends StatelessWidget {
               ApprovalCommandBox(command: what, oneLine: oneLine),
             ],
             const SizedBox(height: 13),
-            Row(
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: _ApprovalChoice(
-                    label: s.cevAllow,
-                    icon: Icons.check_rounded,
-                    color: colors.accent,
-                    busy: busy,
-                    filled: true,
-                    onTap: () => onChoice('once'),
+            if (allowed.contains('once') || allowed.contains('deny'))
+              Row(
+                children: [
+                  if (allowed.contains('once'))
+                    Expanded(
+                      child: Tooltip(
+                        message: s.apx1215ScopeOnceHint,
+                        child: ApprovalChoiceButton(
+                          label: s.cevAllow,
+                          icon: Icons.check_rounded,
+                          color: colors.success,
+                          busy: busy,
+                          onTap: () => onChoice('once'),
+                        ),
+                      ),
+                    ),
+                  if (allowed.contains('once') && allowed.contains('deny'))
+                    const SizedBox(width: 9),
+                  if (allowed.contains('deny'))
+                    Expanded(
+                      child: ApprovalChoiceButton(
+                        label: s.cevDeny,
+                        icon: Icons.close_rounded,
+                        color: colors.error,
+                        busy: busy,
+                        onTap: () => onChoice('deny'),
+                      ),
+                    ),
+                ],
+              ),
+            if (allowed.contains('session') || allowed.contains('always'))
+              const SizedBox(height: 10),
+            if (allowed.contains('session') || allowed.contains('always'))
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 4,
+                runSpacing: 2,
+                children: [
+                  Text(
+                    '${s.cevRemember}:',
+                    style: TextStyle(fontSize: 11, color: colors.textTertiary),
                   ),
-                ),
-                const SizedBox(width: 9),
-                Expanded(
-                  flex: 2,
-                  child: _ApprovalChoice(
-                    label: s.cevDeny,
-                    icon: Icons.close_rounded,
-                    color: colors.error,
-                    busy: busy,
-                    onTap: () => onChoice('deny'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 4,
-              runSpacing: 2,
-              children: [
-                Text(
-                  '${s.cevRemember}:',
-                  style: TextStyle(fontSize: 11, color: colors.textDisabled),
-                ),
-                _ScopeChip(
-                  label: s.cevThisSession,
-                  icon: Icons.repeat_rounded,
-                  busy: busy,
-                  semanticHint: s.cevRemember,
-                  onTap: () => onChoice('session'),
-                ),
-                _ScopeChip(
-                  label: s.cevAlways,
-                  icon: Icons.all_inclusive_rounded,
-                  busy: busy,
-                  semanticHint: s.cevRemember,
-                  onTap: () => onChoice('always'),
-                ),
-              ],
-            ),
+                  if (allowed.contains('session'))
+                    Tooltip(
+                      message: s.apx1215ScopeSessionHint,
+                      child: _ScopeChip(
+                        label: s.cevThisSession,
+                        icon: Icons.repeat_rounded,
+                        busy: busy,
+                        semanticHint: s.cevRemember,
+                        onTap: () => onChoice('session'),
+                      ),
+                    ),
+                  if (allowed.contains('always'))
+                    Tooltip(
+                      message: s.apx1215ScopeAlwaysHint,
+                      child: _ScopeChip(
+                        label: s.cevAlways,
+                        icon: Icons.all_inclusive_rounded,
+                        busy: busy,
+                        semanticHint: s.cevRemember,
+                        onTap: () => onChoice('always'),
+                      ),
+                    ),
+                ],
+              ),
           ],
         ),
       ),
@@ -1096,76 +1169,14 @@ class _ScopeChip extends StatelessWidget {
   }
 }
 
-class _ApprovalChoice extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final bool busy;
-
-  /// `true` = botón relleno (acción principal); `false` = solo borde.
-  final bool filled;
-
-  final VoidCallback onTap;
-
-  const _ApprovalChoice({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.busy,
-    required this.onTap,
-    this.filled = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final onFilled = color.computeLuminance() > 0.5
-        ? const Color(0xFF0A0A0A)
-        : Colors.white;
-    final buttonStyle = filled
-        ? FilledButton.styleFrom(
-            backgroundColor: color,
-            foregroundColor: onFilled,
-            minimumSize: const Size.fromHeight(46),
-            shape: const StadiumBorder(),
-          )
-        : TextButton.styleFrom(
-            foregroundColor: color,
-            minimumSize: const Size.fromHeight(46),
-            shape: const StadiumBorder(),
-          );
-    return filled
-        ? FilledButton.icon(
-            onPressed: busy ? null : onTap,
-            style: buttonStyle,
-            icon: Icon(icon, size: 16),
-            label: Text(
-              label,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-            ),
-          )
-        : TextButton.icon(
-            onPressed: busy ? null : onTap,
-            style: buttonStyle,
-            icon: Icon(icon, size: 16),
-            label: Text(
-              label,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-            ),
-          );
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // ApprovalRequestCard — aprobación pendiente con resolución inline
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// El flujo /v1/runs/{id}/approval del Gateway soporta resolver una aprobación
-// pendiente. Cuando el chat tiene el [ApiClient] de la instancia y la tarjeta
-// llega con run_id + estado pendiente, se ofrecen botones Permitir/Denegar que
-// llaman a resolveRunApproval y actualizan el estado local SIN esperar a que el
-// servidor reenvíe un mensaje. Si no hay ApiClient (p. ej. rehidratación pura)
-// se cae al enlace "Abrir en Ejecuciones". Nunca se renderiza el JSON crudo ni
-// se finge un approve/deny que el backend no soporta.
+// Tarjeta de aprobación del chat: muestra el estado de la aprobación. La
+// aprobación se resuelve por el socket de Desktop (ChatApprovalCard); aquí solo
+// se ofrece abrir el registro antiguo en Tareas. Nunca se renderiza el JSON
+// crudo ni se finge un approve/deny que el backend no soporta.
 
 class ApprovalRequestCard extends StatefulWidget {
   final ChatEventInfo info;
@@ -1173,14 +1184,9 @@ class ApprovalRequestCard extends StatefulWidget {
   /// Abrir el run asociado en Ejecuciones (si hay runId y sigue pendiente).
   final void Function(String runId)? onOpenInRuns;
 
-  /// Cliente del Gateway de la instancia activa. Si está presente y hay runId,
-  /// la tarjeta resuelve la aprobación inline (Permitir/Denegar).
-  final ApiClient? apiClient;
-
   const ApprovalRequestCard({
     required this.info,
     this.onOpenInRuns,
-    this.apiClient,
     super.key,
   });
 
@@ -1189,66 +1195,20 @@ class ApprovalRequestCard extends StatefulWidget {
 }
 
 class _ApprovalRequestCardState extends State<ApprovalRequestCard> {
-  /// null = sin resolver inline; 'once' (permitido) | 'deny' (denegado).
-  String? _resolvedChoice;
-  bool _busy = false;
-  String? _actionError;
-
-  bool get _serverPending => widget.info.approvalPending;
-  bool get _pending => _serverPending && _resolvedChoice == null;
-  bool get _canResolveInline =>
-      widget.apiClient != null && widget.info.runId != null;
-
-  Future<void> _resolve(String choice) async {
-    final api = widget.apiClient;
-    final runId = widget.info.runId;
-    if (api == null || runId == null || _busy) return;
-    final s = Strings.of(context);
-    setState(() {
-      _busy = true;
-      _actionError = null;
-    });
-    try {
-      await api.resolveRunApproval(runId, choice);
-      if (!mounted) return;
-      HapticFeedback.selectionClick();
-      setState(() {
-        _resolvedChoice = choice;
-        _busy = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _actionError = s.cevSendError(e);
-      });
-    }
-  }
+  bool get _pending => widget.info.approvalPending;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).hermes;
     final info = widget.info;
 
-    // Color de acento según el estado efectivo (resuelto inline > servidor).
-    final Color accent;
-    if (_resolvedChoice != null) {
-      accent = _resolvedChoice == 'deny' ? colors.error : colors.success;
-    } else if (_pending) {
-      accent = colors.warning;
-    } else {
-      accent = colors.textSecondary;
-    }
+    // Color de acento según el estado del servidor.
+    final accent = _pending ? colors.warning : colors.textSecondary;
 
     final s = Strings.of(context);
     final String title;
     final String pillLabel;
-    if (_resolvedChoice != null) {
-      title = s.cevApprovalResolved;
-      pillLabel = _resolvedChoice == 'deny'
-          ? s.cevApprovalDenied
-          : s.cevApprovalGranted;
-    } else if (_pending) {
+    if (_pending) {
       title = s.cevApprovalRequired;
       pillLabel = s.cevApprovalPending;
     } else {
@@ -1307,18 +1267,11 @@ class _ApprovalRequestCardState extends State<ApprovalRequestCard> {
               const SizedBox(height: 6),
               Text(
                 s.cevPatternKey(info.patternKey!),
-                style: TextStyle(fontSize: 10.5, color: colors.textDisabled),
+                style: TextStyle(fontSize: 10.5, color: colors.textTertiary),
               ),
             ],
             const SizedBox(height: 10),
             _buildAction(colors, accent),
-            if (_actionError != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                _actionError!,
-                style: TextStyle(fontSize: 11, color: colors.error),
-              ),
-            ],
           ],
         ),
       ),
@@ -1329,60 +1282,7 @@ class _ApprovalRequestCardState extends State<ApprovalRequestCard> {
     final info = widget.info;
     final s = Strings.of(context);
 
-    // Resuelta inline: chip de confirmación local.
-    if (_resolvedChoice != null) {
-      final denied = _resolvedChoice == 'deny';
-      final color = denied ? colors.error : colors.success;
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            denied ? Icons.block : Icons.check_circle,
-            size: 15,
-            color: color,
-          ),
-          const SizedBox(width: 7),
-          Text(
-            denied ? s.cevApprovalDenied : s.cevApprovalGranted,
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w700,
-              color: color,
-            ),
-          ),
-        ],
-      );
-    }
-
-    // Pendiente + ApiClient + runId: botones de resolución inline.
-    if (_pending && _canResolveInline) {
-      return Row(
-        children: [
-          Expanded(
-            child: _ApprovalButton(
-              label: s.cevAllow,
-              icon: Icons.check,
-              color: colors.accent,
-              busy: _busy,
-              filled: true,
-              onTap: () => _resolve('once'),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: _ApprovalButton(
-              label: s.cevDeny,
-              icon: Icons.close,
-              color: colors.error,
-              busy: _busy,
-              onTap: () => _resolve('deny'),
-            ),
-          ),
-        ],
-      );
-    }
-
-    // Pendiente sin ApiClient pero con runId: abrir en Ejecuciones.
+    // Pendiente con runId: abrir el registro en Tareas.
     if (_pending && info.runId != null && widget.onOpenInRuns != null) {
       return TextButton.icon(
         onPressed: () => widget.onOpenInRuns!(info.runId!),
@@ -1398,78 +1298,322 @@ class _ApprovalRequestCardState extends State<ApprovalRequestCard> {
       style: TextStyle(
         fontSize: 11,
         fontStyle: FontStyle.italic,
-        color: colors.textDisabled,
+        color: colors.textTertiary,
       ),
     );
   }
 }
 
-/// Botón de resolución de aprobación (Permitir verde / Denegar rojo).
-class _ApprovalButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final bool busy;
-  final bool filled;
-  final VoidCallback onTap;
+// ─────────────────────────────────────────────────────────────────────────────
+// tp1216 · Resumen de una tanda de herramientas en UNA línea
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const _ApprovalButton({
+/// Una entrada del resumen: una herramienta con sus llamadas o una skill por
+/// su nombre, en el orden en que apareció por primera vez.
+final class ToolRunSummaryItem {
+  const ToolRunSummaryItem({
     required this.label,
-    required this.icon,
-    required this.color,
-    required this.busy,
-    required this.onTap,
-    this.filled = false,
+    required this.count,
+    required this.skill,
+    required this.running,
+    this.memory = false,
   });
+
+  final String label;
+  final int count;
+
+  /// mp1215: the agent's `memory` tool, named on its own («memoria»).
+  final bool memory;
+
+  /// Es una skill: o el gateway marcó el paso como `skill`, o es una carga
+  /// `skill_view` cuyo argumento `name` la identifica.
+  final bool skill;
+
+  /// Alguna de sus llamadas sigue en curso.
+  final bool running;
+}
+
+/// Agrega los pasos de una tanda por herramienta/skill. Solo usa lo que el
+/// servidor dio (nombre del paso, su tipo y el detalle seguro ya proyectado);
+/// una `skill_view` sin nombre conocido cuenta como herramienta normal.
+/// Las skills van primero: son lo más informativo de la tanda.
+List<ToolRunSummaryItem> summarizeToolRun(
+  Iterable<({String label, bool skill, String? detail, bool running})> steps,
+) {
+  final order = <String>[];
+  final counts = <String, int>{};
+  final running = <String>{};
+  final skills = <String>{};
+  for (final step in steps) {
+    final label = step.label.trim();
+    if (label.isEmpty || isInternalActivityLabel(label)) continue;
+    String name = label;
+    var skill = step.skill;
+    if (!skill && isMemoryTool(label)) {
+      final key = 'm:memory';
+      if (!counts.containsKey(key)) order.add(key);
+      counts[key] = (counts[key] ?? 0) + 1;
+      if (step.running) running.add(key);
+      continue;
+    }
+    if (!skill && isSkillLoadTool(label)) {
+      final detail = step.detail?.trim();
+      if (detail != null && detail.isNotEmpty) {
+        name = detail.split(' → ').first.trim();
+        skill = name.isNotEmpty;
+        if (!skill) name = label;
+      }
+    }
+    // QA 9489: a skill loaded as `hyperframes` and as
+    // `creative/hyperframes` is one skill; the category prefix is dropped.
+    if (skill) {
+      final bare = name.split('/').last.trim();
+      if (bare.isNotEmpty) name = bare;
+    }
+    final key = '${skill ? 's' : 't'}:$name';
+    if (!counts.containsKey(key)) order.add(key);
+    counts[key] = (counts[key] ?? 0) + 1;
+    if (skill) skills.add(key);
+    if (step.running) running.add(key);
+  }
+  final items = [
+    for (final key in order)
+      ToolRunSummaryItem(
+        label: key.substring(2),
+        count: counts[key]!,
+        skill: skills.contains(key),
+        running: running.contains(key),
+        memory: key.startsWith('m:'),
+      ),
+  ];
+  return [
+    ...items.where((item) => item.skill),
+    ...items.where((item) => item.memory),
+    ...items.where((item) => !item.skill && !item.memory),
+  ];
+}
+
+/// What a run used, in words: skills by their name, the memory tool, and
+/// every other tool counted by kind in Desktop's order («github-pr-workflow
+/// · memoria · 3 comandos»). Never a tool id. One summary for a turn's
+/// folded line and for the legacy activity group.
+List<String> toolRunSummaryParts(Strings s, List<ToolRunSummaryItem> used) => [
+  for (final item in used)
+    if (item.skill) item.label,
+  if (used.any((item) => item.memory)) s.mp1215MemoryChip,
+  ...toolRunSummary(s, [
+    for (final item in used)
+      if (!item.skill && !item.memory)
+        for (var call = 0; call < item.count; call++) item.label,
+  ]),
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// mp1215 · Marca «Guardado en memoria»
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Hermes Desktop's «legendary» memory chrome (gold→purple), tuned per theme.
+final class MemoryLegendaryPalette {
+  const MemoryLegendaryPalette._({
+    required this.from,
+    required this.to,
+    required this.icon,
+    required this.meta,
+  });
+
+  final Color from;
+  final Color to;
+  final Color icon;
+  final Color meta;
+
+  static MemoryLegendaryPalette of(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return dark
+        ? const MemoryLegendaryPalette._(
+            from: Color(0xFFF2C766),
+            to: Color(0xFFB79CFF),
+            icon: Color(0xFFD9B27A),
+            meta: Color(0xFFC3AEEF),
+          )
+        : const MemoryLegendaryPalette._(
+            from: Color(0xFFA86F00),
+            to: Color(0xFF6E43D6),
+            icon: Color(0xFF8E5FB0),
+            meta: Color(0xFF6F4FB8),
+          );
+  }
+
+  Shader shader(Rect bounds) => LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [from, Color.lerp(from, to, 0.5)!, to],
+  ).createShader(bounds);
+}
+
+/// Texto de la marca según lo que dice la propia llamada.
+String memoryWriteLabel(Strings s, MemoryWrite write) =>
+    switch ((write.action, write.userTarget)) {
+      (MemoryWriteAction.add, false) => s.mp1215SavedToMemory,
+      (MemoryWriteAction.add, true) => s.mp1215SavedToProfile,
+      (MemoryWriteAction.replace, false) => s.mp1215MemoryUpdated,
+      (MemoryWriteAction.replace, true) => s.mp1215ProfileUpdated,
+      (MemoryWriteAction.remove, false) => s.mp1215RemovedFromMemory,
+      (MemoryWriteAction.remove, true) => s.mp1215RemovedFromProfile,
+    };
+
+/// Marca compacta de una escritura de memoria que aterrizó: cerebro y título
+/// en dorado→violeta y, si la llamada lo trae, el texto guardado (dos líneas,
+/// desplegable). Estática: sin brillo animado, nada que respetar en
+/// «reducir movimiento».
+class MemorySavedMarker extends StatefulWidget {
+  const MemorySavedMarker({required this.write, super.key});
+
+  final MemoryWrite write;
+
+  @override
+  State<MemorySavedMarker> createState() => _MemorySavedMarkerState();
+}
+
+class _MemorySavedMarkerState extends State<MemorySavedMarker> {
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
-    final onFilled = color.computeLuminance() > 0.5
-        ? const Color(0xFF0A0A0A)
-        : Colors.white;
-    final style = filled
-        ? FilledButton.styleFrom(
-            backgroundColor: color,
-            foregroundColor: onFilled,
-            minimumSize: const Size.fromHeight(44),
-            shape: const StadiumBorder(),
-          )
-        : TextButton.styleFrom(
-            foregroundColor: color,
-            minimumSize: const Size.fromHeight(44),
-            shape: const StadiumBorder(),
-          );
-    return filled
-        ? FilledButton.icon(
-            onPressed: busy ? null : onTap,
-            style: style,
-            icon: Icon(icon, size: 15),
-            label: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
+    final colors = Theme.of(context).hermes;
+    final s = Strings.of(context);
+    final palette = MemoryLegendaryPalette.of(context);
+    final label = memoryWriteLabel(s, widget.write);
+    final preview = widget.write.preview;
+    const previewStyle = TextStyle(fontSize: 12, height: 1.35);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        var overflows = false;
+        if (preview != null) {
+          final painter = TextPainter(
+            text: TextSpan(text: preview, style: previewStyle),
+            maxLines: 2,
+            textDirection: Directionality.of(context),
+            textScaler: MediaQuery.textScalerOf(context),
+          )..layout(maxWidth: math.max(0, constraints.maxWidth - 22));
+          overflows = painter.didExceedMaxLines;
+          painter.dispose();
+        }
+        final canToggle = overflows;
+        void toggle() => setState(() => _expanded = !_expanded);
+        return Semantics(
+          container: true,
+          button: canToggle,
+          expanded: canToggle ? _expanded : null,
+          label: preview == null ? label : '$label. $preview',
+          onTap: canToggle ? toggle : null,
+          excludeSemantics: true,
+          child: InkWell(
+            key: const ValueKey('memory-saved-marker'),
+            borderRadius: BorderRadius.circular(8),
+            onTap: canToggle ? toggle : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Desktop's glyph-shaped glow (drop-shadow), not a
+                      // disk behind the icon.
+                      ShaderMask(
+                        blendMode: BlendMode.srcIn,
+                        shaderCallback: palette.shader,
+                        child: Icon(
+                          Icons.psychology_rounded,
+                          key: const ValueKey('memory-saved-icon'),
+                          size: 16,
+                          shadows: [
+                            Shadow(
+                              color: palette.to.withValues(alpha: 0.45),
+                              blurRadius: 5,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: ShaderMask(
+                          blendMode: BlendMode.srcIn,
+                          shaderCallback: palette.shader,
+                          child: Text(
+                            label,
+                            key: const ValueKey('memory-saved-label'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (preview != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 22, top: 2),
+                      child: Text(
+                        preview,
+                        key: const ValueKey('memory-saved-preview'),
+                        maxLines: _expanded ? null : 2,
+                        overflow: _expanded
+                            ? TextOverflow.visible
+                            : TextOverflow.ellipsis,
+                        style: previewStyle.copyWith(
+                          color: colors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  if (canToggle)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 22, top: 2),
+                      child: Text(
+                        _expanded ? s.mp1215ShowLess : s.mp1215ShowMore,
+                        key: const ValueKey('memory-saved-toggle'),
+                        style: TextStyle(fontSize: 11, color: palette.meta),
+                      ),
+                    ),
+                ],
               ),
             ),
-          )
-        : TextButton.icon(
-            onPressed: busy ? null : onTap,
-            style: style,
-            icon: Icon(icon, size: 15),
-            label: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          );
+          ),
+        );
+      },
+    );
   }
+}
+
+/// Las marcas de memoria de una tanda, en su orden; nada si no hay ninguna.
+Widget memorySavedMarkers(
+  Iterable<MemoryWrite> writes, {
+  EdgeInsetsGeometry padding = EdgeInsets.zero,
+}) {
+  final list = writes.toList(growable: false);
+  if (list.isEmpty) return const SizedBox.shrink();
+  return Padding(
+    padding: padding,
+    child: Column(
+      key: const ValueKey('memory-saved-markers'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [for (final write in list) MemorySavedMarker(write: write)],
+    ),
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ThinkingTraceCard — UNA tarjeta por respuesta/run con el progreso agregado
 // ─────────────────────────────────────────────────────────────────────────────
+
+enum ChatTraceEventKind { reasoning, tool, skill }
 
 /// Un evento agregado del trace de pensamiento/herramientas.
 class ChatTraceEvent {
@@ -1477,6 +1621,7 @@ class ChatTraceEvent {
   final String label;
   String status; // running | completed | finished | failed | error
   final String emoji;
+  final ChatTraceEventKind kind;
 
   /// Vista previa REAL del argumento de la herramienta (query, ruta, comando…)
   /// tal como la mandó el agente en `tool.started`. Pertenece exclusivamente a
@@ -1484,15 +1629,44 @@ class ChatTraceEvent {
   /// porque puede contener rutas, comandos o secretos. Vacío si no viene.
   final String preview;
 
+  /// Detalle SEGURO del paso (ejecutable, nombre de archivo, host…) y sus
+  /// tiempos medidos, cuando el trace los trae. Alimentan las mismas filas
+  /// «✓ terminal · date  0.7 s» del panel en vivo.
+  final String? detail;
+  final DateTime? startedAt;
+  final Duration? duration;
+
+  /// The gateway's own label of an MCP or connector call, when it sent one.
+  final String? title;
+
+  /// mp1215: the write a `memory` call describes, as projected from the
+  /// gateway's own args/result. Only [MemoryWrite.landed] earns a marker.
+  final MemoryWrite? memory;
+
+  /// What the finished tool left to review (a file diff, terminal output),
+  /// when the server sent it. Rendered only inside the unfolded trace.
+  final ToolOutputRecord? output;
+
   ChatTraceEvent({
     required this.id,
     required this.label,
     required this.status,
     this.emoji = '🔧',
     this.preview = '',
+    this.kind = ChatTraceEventKind.tool,
+    this.detail,
+    this.startedAt,
+    this.duration,
+    this.title,
+    this.memory,
+    this.output,
   });
 
   bool get isDone => status == 'completed' || status == 'finished';
+
+  /// A `memory` write the gateway confirmed: settled, not failed, landed.
+  bool get memoryLanded =>
+      isDone && !isFailed && memory?.landed == true && isMemoryTool(label);
   bool get isFailed => status == 'failed' || status == 'error';
 }
 
@@ -1504,6 +1678,9 @@ class ChatTraceEvent {
 enum TraceOutcome {
   /// El run sigue trabajando.
   working,
+
+  /// El usuario detuvo el turno.
+  stopped,
 
   /// Terminó sin ningún fallo.
   completed,
@@ -1521,7 +1698,9 @@ enum TraceOutcome {
 TraceOutcome traceOutcome({
   required List<ChatTraceEvent> events,
   required bool active,
+  bool stopped = false,
 }) {
+  if (stopped) return TraceOutcome.stopped;
   if (active) return TraceOutcome.working;
   final anyFailed = events.any((e) => e.isFailed);
   if (!anyFailed) return TraceOutcome.completed;
@@ -1534,11 +1713,7 @@ TraceOutcome traceOutcome({
 /// respuesta/run activo. Sustituye al apilado de líneas `terminal — done`
 /// (PRIORIDAD 2): los eventos actualizan ESTA tarjeta, no crean mensajes.
 class ThinkingTraceCard extends StatefulWidget {
-  /// La mascota debe conservar protagonismo dentro de la burbuja del run.
-  /// Son tamaños base: la escala elegida por el usuario se aplica después en
-  /// [CompanionView].
-  static const double activeCompanionSize = 50;
-  static const double activeWithEventsCompanionSize = 42;
+  static const double statusIconSize = 17;
   static const double statusFontSize = 12;
   static const double statusLetterSpacing = 0.35;
 
@@ -1551,22 +1726,45 @@ class ThinkingTraceCard extends StatefulWidget {
   /// "Conectando…", "Pensando…", "Ejecutando…").
   final String headline;
 
-  /// Controller del Companion (006). Cuando la presencia está activa, el
-  /// indicador de estado del turno es la **mascota** (corriendo/fallo) en vez
-  /// del spinner clásico. Null o presencia apagada → indicador clásico.
-  final CompanionController? companion;
+  /// Estado vivo del pipeline, usado para elegir el icono y su color.
+  final CompanionMood? activeMood;
 
-  /// Estado de ánimo de la mascota mientras el turno está activo, derivado del
-  /// estado real del pipeline (conectando/esperando/pensando). Si es null se
-  /// usa `thinking`. Al terminar manda el desenlace de la traza.
-  final HermesSparkMood? activeMood;
+  /// El runtime está bloqueado esperando una aclaración o aprobación.
+  final bool waitingForUser;
+
+  /// El usuario interrumpió este turno.
+  final bool stopped;
+
+  final Duration? duration;
+
+  /// Sin [headerBuilder], el estado vivo del turno lo cuenta la pastilla de
+  /// actividad: mientras [active] la tarjeta no pinta NADA (ni fila de estado
+  /// ni shimmer) y solo aparece, plegada, cuando el turno termina.
+  final bool liveInPill;
+
+  /// ct1215: the turn inside the transcript. The caller places the two
+  /// parts: `summary` is the line under the message's name (the live status
+  /// while [active], the folded «Pensó durante 9s · 3 comandos» afterwards)
+  /// and `details` the loose lines below it (the thought being written, the
+  /// tool in hand and the plan in flight while [active]; the task line and
+  /// whatever the reader opened afterwards).
+  final Widget Function(BuildContext context, Widget summary, Widget details)?
+  headerBuilder;
+
+  /// Content owned by one exact tool row, keyed by [ChatTraceEvent.id].
+  final Map<String, Widget> rowAttachments;
 
   const ThinkingTraceCard({
     required this.events,
     required this.active,
     this.headline = 'Pensando…',
-    this.companion,
     this.activeMood,
+    this.waitingForUser = false,
+    this.stopped = false,
+    this.duration,
+    this.liveInPill = false,
+    this.headerBuilder,
+    this.rowAttachments = const {},
     super.key,
   });
 
@@ -1663,6 +1861,84 @@ class _TraceStatusWord extends StatelessWidget {
   }
 }
 
+class _TraceStateIcon extends StatefulWidget {
+  const _TraceStateIcon({
+    required this.icon,
+    required this.color,
+    required this.animate,
+  });
+
+  final IconData icon;
+  final Color color;
+  final bool animate;
+
+  @override
+  State<_TraceStateIcon> createState() => _TraceStateIconState();
+}
+
+class _TraceStateIconState extends State<_TraceStateIcon>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+    value: 0.5,
+  );
+  late final Animation<double> _scale = Tween<double>(
+    begin: 0.94,
+    end: 1.04,
+  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncAnimation();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TraceStateIcon oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.animate != widget.animate) _syncAnimation();
+  }
+
+  void _syncAnimation() {
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (widget.animate && !reduceMotion) {
+      _controller.repeat(reverse: true);
+    } else {
+      _controller
+        ..stop()
+        ..value = 0.5;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = Icon(
+      widget.icon,
+      key: const ValueKey('thinking-trace-state-icon'),
+      color: widget.color,
+      size: ThinkingTraceCard.statusIconSize,
+    );
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (!widget.animate || reduceMotion) return icon;
+    return ScaleTransition(scale: _scale, child: icon);
+  }
+}
+
+/// Hermes Desktop's `formatElapsed` (components/chat/activity-timer.ts):
+/// "12s" under a minute, "m:ss" from there.
+String formatThoughtDuration(Duration duration) {
+  final seconds = duration.inSeconds;
+  if (seconds < 60) return '${seconds}s';
+  return '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
+}
+
 class _ThinkingTraceCardState extends State<ThinkingTraceCard> {
   /// null = expansión automática (expandido mientras hay una herramienta en
   /// curso, colapsado cuando todas terminan). Un toque del usuario fija un
@@ -1671,14 +1947,49 @@ class _ThinkingTraceCardState extends State<ThinkingTraceCard> {
 
   /// Desenlace del trace: distingue "falló un paso pero el turno se recuperó"
   /// (ruido interno, no accionable) de "el turno terminó en error" (accionable).
-  TraceOutcome get _outcome =>
-      traceOutcome(events: widget.events, active: widget.active);
+  TraceOutcome get _outcome => traceOutcome(
+    events: widget.events,
+    active: widget.active,
+    stopped: widget.stopped,
+  );
 
   /// Estado de expansión efectivo: colapsada por defecto (la línea de resumen
   /// ya informa del progreso en vivo); solo el toque del usuario la expande.
   /// U-01 (spec 028): el auto-expand/colapso durante la ejecución mareaba y
   /// violaba la regla del ThinkingCard (colapsado salvo petición explícita).
-  bool get _expanded => _userExpanded ?? false;
+  bool get _expanded => _userExpanded ?? widget.rowAttachments.isNotEmpty;
+
+  /// Pasos que el usuario debe ver: sin las herramientas puente de Hermes.
+  List<ChatTraceEvent> get _visibleEvents => widget.events
+      .where(
+        (event) =>
+            event.kind == ChatTraceEventKind.reasoning ||
+            !isInternalActivityLabel(event.label),
+      )
+      .toList(growable: false);
+
+  /// The steps that count for the folded summary: settled ones only
+  /// (done/failed). A call still without a result may belong to a turn
+  /// another surface is running, and passive observation must not
+  /// reconstruct its tools.
+  Iterable<ChatTraceEvent> get _settledToolSteps => _visibleEvents.where(
+    (event) =>
+        event.kind != ChatTraceEventKind.reasoning &&
+        (event.isDone || event.isFailed),
+  );
+
+  static ({String label, bool skill, String? detail, bool running})
+  _summaryStep(ChatTraceEvent event) => (
+    label: event.label,
+    skill: event.kind == ChatTraceEventKind.skill,
+    detail: event.detail,
+    running: false,
+  );
+
+  /// mp1215: memory writes of this block that the gateway confirmed.
+  Iterable<MemoryWrite> get _landedMemory => _visibleEvents
+      .where((event) => event.memoryLanded)
+      .map((event) => event.memory!);
 
   String get _summary {
     final s = Strings.of(context);
@@ -1688,28 +1999,124 @@ class _ThinkingTraceCardState extends State<ThinkingTraceCard> {
         (event) => !event.isDone && !event.isFailed,
         orElse: () => widget.events.last,
       );
-      return current.label.trim().isEmpty ? widget.headline : current.label;
+      return switch (current.kind) {
+        ChatTraceEventKind.reasoning => s.chatActivityThinking,
+        ChatTraceEventKind.tool => s.chatActivityRunningTool,
+        ChatTraceEventKind.skill => s.chatActivityRunningSkill,
+      };
     }
+    // Hermes Desktop has one label for a finished block, with or without
+    // tools (components/assistant-ui/thread/message-parts.tsx): watched live
+    // it reports the measured time ("Thought for 1:12", `formatElapsed`),
+    // under a second "Thought briefly", and reopened from history — where no
+    // time was measured — plain "Thought". Failed/recovered/stopped keep
+    // their own outcome.
     switch (_outcome) {
+      case TraceOutcome.stopped:
+        return s.cevTraceStopped;
       case TraceOutcome.failed:
         return s.cevTraceFailed;
       case TraceOutcome.recovered:
         return s.cevTraceRecovered;
       case TraceOutcome.working:
       case TraceOutcome.completed:
-        return s.cevTraceCompleted;
+        final duration = widget.duration;
+        if (duration == null) return s.chatActivityThought;
+        if (duration < const Duration(seconds: 1)) {
+          return s.chatActivityThoughtBriefly;
+        }
+        return s.chatActivityThoughtForDuration(
+          formatThoughtDuration(duration),
+        );
     }
   }
 
-  /// Mood de la mascota: mientras trabaja, el del pipeline real (o `thinking`);
-  /// al terminar, el desenlace de la traza (éxito/error).
-  HermesSparkMood get _liveMood {
-    if (widget.active) return widget.activeMood ?? HermesSparkMood.thinking;
-    return switch (_outcome) {
-      TraceOutcome.failed => HermesSparkMood.error,
-      TraceOutcome.recovered ||
-      TraceOutcome.completed => HermesSparkMood.success,
-      TraceOutcome.working => HermesSparkMood.thinking,
+  ({IconData icon, Color color, bool animate}) _indicatorSpec(
+    HermesThemeColors colors,
+  ) {
+    if (!widget.active) {
+      return switch (_outcome) {
+        TraceOutcome.stopped => (
+          icon: Icons.stop_circle,
+          color: colors.textSecondary,
+          animate: false,
+        ),
+        TraceOutcome.recovered => (
+          icon: Icons.warning_amber_rounded,
+          color: colors.warning,
+          animate: false,
+        ),
+        TraceOutcome.failed => (
+          icon: Icons.error_outline,
+          color: colors.error,
+          animate: false,
+        ),
+        TraceOutcome.working || TraceOutcome.completed => (
+          icon: Icons.check_circle,
+          color: colors.success,
+          animate: false,
+        ),
+      };
+    }
+    if (widget.waitingForUser) {
+      return (
+        icon: Icons.help_outline_rounded,
+        color: colors.textSecondary,
+        animate: false,
+      );
+    }
+    final mood = widget.activeMood ?? CompanionMood.thinking;
+    if (mood == CompanionMood.offline) {
+      return (
+        icon: Icons.cloud_off_rounded,
+        color: colors.warning,
+        animate: false,
+      );
+    }
+    if (widget.events.isEmpty) {
+      return switch (mood) {
+        CompanionMood.connecting || CompanionMood.waiting => (
+          icon: Icons.cloud_queue_rounded,
+          color: colors.accent,
+          animate: false,
+        ),
+        CompanionMood.error => (
+          icon: Icons.error_outline,
+          color: colors.error,
+          animate: false,
+        ),
+        CompanionMood.success => (
+          icon: Icons.check_circle,
+          color: colors.success,
+          animate: false,
+        ),
+        _ => (
+          icon: Icons.psychology_alt_rounded,
+          color: colors.textSecondary,
+          animate: true,
+        ),
+      };
+    }
+    final current = widget.events.lastWhere(
+      (event) => !event.isDone && !event.isFailed,
+      orElse: () => widget.events.last,
+    );
+    return switch (current.kind) {
+      ChatTraceEventKind.reasoning => (
+        icon: Icons.psychology_alt_rounded,
+        color: colors.textSecondary,
+        animate: true,
+      ),
+      ChatTraceEventKind.tool => (
+        icon: Icons.terminal_rounded,
+        color: colors.textSecondary,
+        animate: false,
+      ),
+      ChatTraceEventKind.skill => (
+        icon: Icons.auto_awesome_rounded,
+        color: colors.textSecondary,
+        animate: false,
+      ),
     };
   }
 
@@ -1725,15 +2132,344 @@ class _ThinkingTraceCardState extends State<ThinkingTraceCard> {
     HapticFeedback.selectionClick();
   }
 
-  Widget _buildTraceDetails(HermesThemeColors colors) {
+  /// Lista de tareas del agente que pertenece a ESTE bloque de actividad (el
+  /// del turno que escribió la última `todo_list`), o null.
+  AgentTaskList? get _ownedTasks => AgentTaskScope.ownedBy(
+    context,
+    widget.events.map((event) => (id: event.id, label: event.label)),
+  );
+
+  // ── ct1215 · the turn inside the transcript («C1 — como Desktop») ─────────
+
+  /// The task list of a finished turn is open.
+  bool _tasksExpanded = false;
+
+  /// Rows an opened turn lists; older ones are counted («+12 anteriores»).
+  static const int _openStepRows = 30;
+
+  /// The steps the turn shows, oldest first: without Hermes' bridge tools
+  /// and without the task-list calls, which the list itself tells.
+  List<ChatTraceEvent> get _turnEvents => [
+    for (final event in _visibleEvents)
+      if (event.kind == ChatTraceEventKind.reasoning ||
+          !isAgentTaskToolLabel(event.label))
+        event,
+  ];
+
+  static ActivityStep _turnStep(ChatTraceEvent event) => ActivityStep(
+    id: event.id,
+    kind: switch (event.kind) {
+      ChatTraceEventKind.reasoning => ActivityStepKind.reasoning,
+      ChatTraceEventKind.skill => ActivityStepKind.skill,
+      ChatTraceEventKind.tool => ActivityStepKind.tool,
+    },
+    label: event.label,
+    status: event.isFailed
+        ? ActivityStepStatus.failed
+        : event.isDone
+        ? ActivityStepStatus.done
+        : ActivityStepStatus.running,
+    detail: event.detail,
+    startedAt: event.startedAt,
+    duration: event.duration,
+    title: event.title,
+  );
+
+  /// One tool of the turn and what hangs from it: the card bound to its
+  /// call and, once the turn is opened, what it left to review.
+  List<Widget> _toolRows(
+    ChatTraceEvent event, {
+    DateTime Function()? clock,
+    bool outputs = false,
+  }) {
+    final output = outputs ? toolOutputCard(event.output) : null;
+    final attachment = widget.rowAttachments[event.id];
+    return [
+      TurnToolRow(
+        key: ValueKey('thinking-trace-step-${event.id}'),
+        step: _turnStep(event),
+        clock: clock,
+      ),
+      if (output != null)
+        Padding(
+          padding: const EdgeInsetsDirectional.only(
+            start: 24,
+            top: 2,
+            bottom: 4,
+          ),
+          child: output,
+        ),
+      if (attachment != null)
+        KeyedSubtree(
+          key: ValueKey('activity-step-attachment-${event.id}'),
+          child: attachment,
+        ),
+    ];
+  }
+
+  /// While the turn runs: its status under the name and, in loose lines,
+  /// the thought being written, the tool in hand and the plan in flight.
+  /// Each of them is replaced in place; the run is never piled up here
+  /// (QA 9489) and opens whole once the turn ends.
+  Widget _buildLiveTurn(
+    BuildContext context,
+    Widget Function(BuildContext context, Widget summary, Widget details)
+    headerBuilder,
+  ) {
+    final scope = LiveTurnScope.maybeOf(context);
+    final events = _turnEvents;
+    ChatTraceEvent? thought;
+    ChatTraceEvent? running;
+    ChatTraceEvent? latest;
+    for (final event in events.reversed) {
+      if (event.kind == ChatTraceEventKind.reasoning) {
+        if (thought == null && event.preview.trim().isNotEmpty) thought = event;
+        continue;
+      }
+      latest ??= event;
+      if (running == null && !event.isDone && !event.isFailed) running = event;
+    }
+    final inHand = running ?? latest;
+    // The plan in flight belongs to the turn in flight; a card on its own
+    // (no chat around it) falls back to the list its steps own.
+    final tasks = scope != null ? scope.status.tasks : _ownedTasks;
+    return headerBuilder(
+      context,
+      TurnStatusLine(fallbackState: _summary),
+      Column(
+        key: const ValueKey('thinking-trace-live'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (thought != null)
+            TurnReasoningQuote(text: thought.preview, live: true),
+          for (final event in events)
+            if (event.kind != ChatTraceEventKind.reasoning &&
+                (identical(event, inHand) ||
+                    widget.rowAttachments.containsKey(event.id)))
+              ..._toolRows(event, clock: scope?.clock),
+          if (tasks != null && tasks.isNotEmpty) TurnTasksLive(tasks: tasks),
+          memorySavedMarkers(
+            _landedMemory,
+            padding: const EdgeInsets.only(top: 2),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// «Pensó durante 9s · 3 comandos»: how the turn ended and what it used,
+  /// counted by kind in Desktop's order (`run-summary.ts`). Skills go by
+  /// their name.
+  String _foldLabel(Strings s) {
+    final used = summarizeToolRun(
+      _settledToolSteps
+          .where((event) => !isAgentTaskToolLabel(event.label))
+          .map(_summaryStep),
+    );
+    return [
+      _cleanTraceStatus(_summary),
+      ...toolRunSummaryParts(s, used),
+    ].join(' · ');
+  }
+
+  /// The opened turn, oldest first: each thought as a quoted block, each
+  /// tool as a row with what it left to review.
+  List<Widget> _openSteps(BuildContext context) {
     final s = Strings.of(context);
+    final colors = Theme.of(context).hermes;
+    final events = _turnEvents;
+    final hidden = events.length > _openStepRows
+        ? events.length - _openStepRows
+        : 0;
+    return [
+      if (hidden > 0)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          child: Text(
+            s.liveOlderSteps(hidden),
+            style: TextStyle(fontSize: 12.5, color: colors.textSecondary),
+          ),
+        ),
+      for (final event in events.skip(hidden))
+        if (event.kind == ChatTraceEventKind.reasoning) ...[
+          if (event.preview.trim().isNotEmpty)
+            TurnReasoningQuote(
+              key: ValueKey('thinking-trace-step-${event.id}'),
+              text: event.preview,
+            ),
+        ] else
+          ..._toolRows(event, outputs: true),
+      Semantics(
+        button: true,
+        label: s.chatCopyTrace,
+        onTap: _copyTrace,
+        child: ExcludeSemantics(
+          child: TextButton.icon(
+            key: const ValueKey('thinking-trace-copy'),
+            onPressed: _copyTrace,
+            style: TextButton.styleFrom(
+              foregroundColor: colors.textTertiary,
+              minimumSize: const Size(48, 48),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              textStyle: const TextStyle(fontSize: 10.5),
+              shape: const StadiumBorder(),
+              overlayColor: colors.textSecondary.withValues(alpha: 0.12),
+            ),
+            icon: const Icon(Icons.content_copy, size: 12),
+            label: Text(s.chatCopyTrace),
+          ),
+        ),
+      ),
+    ];
+  }
+
+  /// Once the turn ends: at most two quiet lines above the reply, each a
+  /// button that opens what it names. Nothing is left that looks alive.
+  Widget _buildSettledTurn(
+    BuildContext context,
+    Widget Function(BuildContext context, Widget summary, Widget details)
+    headerBuilder,
+    AgentTaskList? ownedTasks,
+  ) {
+    final s = Strings.of(context);
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final hasSteps = _turnEvents.isNotEmpty;
+    final tasks = ownedTasks?.asHistory;
+    // What a line opens keeps the full width whether open or closed, so
+    // only its height animates: it unfolds downwards from its line instead
+    // of growing out of the middle of the row.
+    Widget folding(Widget? body) {
+      final box = SizedBox(width: double.infinity, child: body);
+      return reduceMotion
+          ? box
+          : AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              alignment: AlignmentDirectional.topStart,
+              child: box,
+            );
+    }
+
+    return headerBuilder(
+      context,
+      TurnFoldLine(
+        key: const ValueKey('thinking-trace-summary'),
+        label: _foldLabel(s),
+        expanded: _expanded,
+        onTap: hasSteps
+            ? () {
+                HapticFeedback.selectionClick();
+                setState(() => _userExpanded = !_expanded);
+              }
+            : null,
+      ),
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          folding(
+            hasSteps && _expanded
+                ? Column(
+                    key: const ValueKey('thinking-trace-steps'),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: _openSteps(context),
+                  )
+                : null,
+          ),
+          // mp1215: a landed memory write stays visible, folded or not.
+          memorySavedMarkers(
+            _landedMemory,
+            padding: const EdgeInsets.only(top: 2),
+          ),
+          if (tasks != null && tasks.isNotEmpty) ...[
+            TurnFoldLine(
+              key: const ValueKey('thinking-trace-tasks'),
+              label: turnTasksFoldLabel(s, tasks),
+              leading: Icons.checklist_rounded,
+              expanded: _tasksExpanded,
+              onTap: () {
+                HapticFeedback.selectionClick();
+                setState(() => _tasksExpanded = !_tasksExpanded);
+              },
+            ),
+            folding(_tasksExpanded ? TurnTasksHistory(tasks: tasks) : null),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTraceDetails(
+    HermesThemeColors colors,
+    AgentTaskList? tasks, {
+    bool muted = false,
+  }) {
+    final s = Strings.of(context);
+    final now = DateTime.now();
+    final steps = _visibleEvents.reversed
+        .map(
+          (event) => ActivityStep(
+            id: event.id,
+            kind: switch (event.kind) {
+              ChatTraceEventKind.reasoning => ActivityStepKind.reasoning,
+              ChatTraceEventKind.skill => ActivityStepKind.skill,
+              ChatTraceEventKind.tool => ActivityStepKind.tool,
+            },
+            label: event.label,
+            status: event.isFailed
+                ? ActivityStepStatus.failed
+                : event.isDone
+                ? ActivityStepStatus.done
+                : ActivityStepStatus.running,
+            detail: event.detail,
+            startedAt: event.startedAt,
+            duration: event.duration,
+            text: event.preview.trim().isEmpty ? null : event.preview.trim(),
+            title: event.title,
+          ),
+        )
+        .toList(growable: false);
+    final outputs = <String, ToolOutputRecord>{
+      for (final event in _visibleEvents)
+        if (event.output != null) event.id: event.output!,
+    };
     return Padding(
-      padding: const EdgeInsets.only(left: 40, top: 2),
+      padding: EdgeInsets.only(left: muted ? 50 : 40, top: 2),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          ...widget.events.map((event) => _TraceEventLine(event: event)),
+          if (tasks != null)
+            ActivityTasksSection(
+              tasks: tasks,
+              dense: true,
+              incomplete: !widget.active && tasks.hasOpen,
+            ),
+          if (steps.isNotEmpty)
+            ActivityDoneSection(
+              steps: steps,
+              now: now,
+              dense: true,
+              muted: muted,
+              trailingFor: outputs.isEmpty
+                  ? null
+                  : (step) {
+                      final card = toolOutputCard(outputs[step.id]);
+                      return card == null
+                          ? null
+                          : Padding(
+                              padding: const EdgeInsets.only(
+                                left: 20,
+                                top: 2,
+                                bottom: 4,
+                              ),
+                              child: card,
+                            );
+                    },
+              rowAttachments: widget.rowAttachments,
+            ),
           const SizedBox(height: 6),
           Semantics(
             button: true,
@@ -1744,7 +2480,7 @@ class _ThinkingTraceCardState extends State<ThinkingTraceCard> {
                 key: const ValueKey('thinking-trace-copy'),
                 onPressed: _copyTrace,
                 style: TextButton.styleFrom(
-                  foregroundColor: colors.textDisabled,
+                  foregroundColor: colors.textTertiary,
                   minimumSize: const Size(48, 48),
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   textStyle: const TextStyle(fontSize: 10.5),
@@ -1764,35 +2500,50 @@ class _ThinkingTraceCardState extends State<ThinkingTraceCard> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).hermes;
-    final hasEvents = widget.events.isNotEmpty;
+    // Una traza solo de herramientas puente no tiene nada que desplegar.
+    final hasEvents = widget.active
+        ? widget.events.isNotEmpty
+        : _visibleEvents.isNotEmpty;
+    final tasks = widget.events.isNotEmpty ? _ownedTasks : null;
+    final indicator = _indicatorSpec(colors);
 
     final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
-    // Antes de las herramientas, la mascota sigue siendo el rostro del agente.
-    // El texto cambia solo cuando cambia el estado real del pipeline; no hay
-    // puntos, porcentaje inventado ni una barra lateral decorativa.
+    final headerBuilder = widget.headerBuilder;
+    if (headerBuilder != null) {
+      return widget.active
+          ? _buildLiveTurn(context, headerBuilder)
+          : _buildSettledTurn(context, headerBuilder, tasks);
+    }
+    // El estado vivo lo cuenta la pastilla de actividad, no la burbuja.
+    if (widget.active && widget.liveInPill) {
+      return const SizedBox.shrink(
+        key: ValueKey('thinking-trace-live-in-pill'),
+      );
+    }
+
     if (widget.active && !hasEvents) {
       return Padding(
-        padding: const EdgeInsets.only(left: 12, right: 16, top: 7, bottom: 3),
+        padding: const EdgeInsets.only(left: 12, right: 16, top: 3, bottom: 1),
         child: Align(
           alignment: Alignment.centerLeft,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 380),
+            constraints: const BoxConstraints(maxWidth: 380, minHeight: 48),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                CompanionStatusIndicator(
-                  companion: widget.companion,
-                  size: ThinkingTraceCard.activeCompanionSize,
-                  mood: _liveMood,
+                _TraceStateIcon(
+                  icon: indicator.icon,
+                  color: indicator.color,
+                  animate: indicator.animate,
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
                 Flexible(
                   child: HermesShimmerText(
                     _cleanTraceStatus(widget.headline),
                     key: const ValueKey('thinking-shimmer'),
                     style: TextStyle(
-                      color: colors.textSecondary,
+                      color: indicator.color,
                       fontSize: ThinkingTraceCard.statusFontSize,
                       fontWeight: FontWeight.w700,
                       letterSpacing: ThinkingTraceCard.statusLetterSpacing,
@@ -1828,14 +2579,12 @@ class _ThinkingTraceCardState extends State<ThinkingTraceCard> {
                   constraints: const BoxConstraints(minHeight: 48),
                   child: Row(
                     children: [
-                      CompanionStatusIndicator(
-                        companion: widget.companion,
-                        size: widget.active
-                            ? ThinkingTraceCard.activeWithEventsCompanionSize
-                            : 30,
-                        mood: _liveMood,
+                      _TraceStateIcon(
+                        icon: indicator.icon,
+                        color: indicator.color,
+                        animate: indicator.animate,
                       ),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 8),
                       Flexible(
                         child: widget.active
                             ? HermesShimmerText(
@@ -1844,7 +2593,7 @@ class _ThinkingTraceCardState extends State<ThinkingTraceCard> {
                                   'trace-current-${_cleanTraceStatus(_summary)}',
                                 ),
                                 style: TextStyle(
-                                  color: colors.textSecondary,
+                                  color: indicator.color,
                                   fontSize: ThinkingTraceCard.statusFontSize,
                                   fontWeight: FontWeight.w700,
                                   letterSpacing:
@@ -1853,11 +2602,15 @@ class _ThinkingTraceCardState extends State<ThinkingTraceCard> {
                               )
                             : _TraceStatusWord(
                                 label: _summary,
-                                color: colors.textSecondary,
+                                color: indicator.color,
                                 reduceMotion: reduceMotion,
                               ),
                       ),
                       if (hasEvents) ...[
+                        if (tasks != null) ...[
+                          const SizedBox(width: 8),
+                          AgentTaskChip(tasks: tasks),
+                        ],
                         const SizedBox(width: 8),
                         AnimatedRotation(
                           turns: _expanded ? 0.5 : 0,
@@ -1875,81 +2628,26 @@ class _ThinkingTraceCardState extends State<ThinkingTraceCard> {
                   ),
                 ),
               ),
+              memorySavedMarkers(
+                _landedMemory,
+                padding: const EdgeInsets.only(left: 25),
+              ),
               if (hasEvents)
                 if (reduceMotion)
                   _expanded
-                      ? _buildTraceDetails(colors)
+                      ? _buildTraceDetails(colors, tasks)
                       : const SizedBox.shrink()
                 else
                   AnimatedSize(
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.easeOut,
                     child: _expanded
-                        ? _buildTraceDetails(colors)
+                        ? _buildTraceDetails(colors, tasks)
                         : const SizedBox.shrink(),
                   ),
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _TraceEventLine extends StatelessWidget {
-  final ChatTraceEvent event;
-  const _TraceEventLine({required this.event});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).hermes;
-    final color = event.isFailed
-        ? colors.error
-        : event.isDone
-        ? colors.success.withValues(alpha: 0.8)
-        : colors.accent;
-    final glyph = event.isFailed
-        ? '✕ '
-        : event.isDone
-        ? '✓ '
-        : '◐ ';
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 3),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(glyph, style: TextStyle(fontSize: 11, color: color)),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${event.label} · ${event.status}',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: event.isDone
-                        ? colors.textDisabled
-                        : colors.textSecondary,
-                  ),
-                ),
-                if (event.preview.trim().isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    event.preview.trim(),
-                    maxLines: 4,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 10.5,
-                      height: 1.3,
-                      color: colors.textDisabled,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }

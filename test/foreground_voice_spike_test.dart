@@ -36,6 +36,52 @@ void main() {
       );
     });
 
+    test('GPT-Live continues hidden only with the opt-in, under the '
+        'microphone service and with its chat still there', () {
+      for (final optIn in [true, false]) {
+        for (final service in [true, false]) {
+          for (final view in [true, false]) {
+            expect(
+              liveVoiceMayContinueHidden(
+                continueWhenLocked: optIn,
+                microphoneServiceHeld: service,
+                viewAttached: view,
+              ),
+              optIn && service && view,
+              reason: 'opt-in $optIn, service $service, view $view',
+            );
+          }
+        }
+      }
+    });
+
+    test('the voice service follows the lease of whichever engine runs', () {
+      final main = File('lib/main.dart').readAsStringSync();
+      final sync = main.substring(
+        main.indexOf('Future<void> _queueVoiceForegroundSync()'),
+        main.indexOf('void _onVoiceRuntimeChanged()'),
+      );
+      // `voiceConvo` is the coordinator: its lease is the chained engine's
+      // or the GPT-Live one's, so the same condition starts the microphone
+      // service for a live conversation while the app is still in front.
+      expect(sync, contains('active: voiceConvo.audioLeaseRequired,'));
+      expect(
+        sync,
+        contains('continueWhenLocked: voice.continueVoiceWhenLocked,'),
+      );
+      final coordinator = File(
+        'lib/core/services/voice/conversation/'
+        'voice_conversation_coordinator.dart',
+      ).readAsStringSync();
+      expect(
+        coordinator,
+        contains(
+          '_chained.audioLeaseRequired || '
+          '(_live?.audioLeaseRequired ?? false)',
+        ),
+      );
+    });
+
     test('Pause libera lease de audio sin terminar la conversación lógica', () {
       final main = File('lib/main.dart').readAsStringSync();
       final runtimeChanged = main.indexOf('void _onVoiceRuntimeChanged()');
@@ -464,7 +510,7 @@ void main() {
     expect(RegExp(r'allowWifiLock:\s*false').allMatches(source), hasLength(2));
   });
 
-  test('las notificaciones solo se inicializan si hay runs o cron', () {
+  test('las notificaciones solo se inicializan si hay cron', () {
     final source = File(
       'lib/core/services/notifications/background_listener.dart',
     ).readAsStringSync();
@@ -480,7 +526,7 @@ void main() {
 
     expect(onStart, contains('_notif = NotificationService(prefs)'));
     expect(onStart, isNot(contains('.init()')));
-    final emptyGuard = poll.indexOf('if (runs.isEmpty && cronTargets.isEmpty)');
+    final emptyGuard = poll.indexOf('if (cronTargets.isEmpty)');
     expect(emptyGuard, greaterThanOrEqualTo(0));
     expect(poll.indexOf('await notif.init()'), greaterThan(emptyGuard));
   });

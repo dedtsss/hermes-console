@@ -25,8 +25,7 @@ android {
    }
 
    defaultConfig {
-       // Fork identity: it coexists with the official Hermes Console. The
-       // Kotlin namespace remains an implementation detail.
+       // Existing RU package: preserves updates and coexists with upstream.
        applicationId = "io.github.dedtsss.hermesconsole"
        minSdk = 24
        targetSdk = 36
@@ -45,16 +44,13 @@ android {
        }
    }
 
-   // Variantes del mismo código (ver docs/RELEASE_DISTRIBUTION.md):
-   //  · full → app completa con instancia local en Termux (descarga directa).
-   //  · play → solo-remoto, sin la función local ni sus permisos (Google Play).
-   //  · qa   → equivalente remoto para pruebas físicas en paralelo a Play.
-   // Ambas comparten applicationId de producción a propósito: así el build `full`
-   // (el de uso diario) actualiza la app instalada sin perder datos. No conviven
-   // a la vez en un mismo dispositivo, lo cual es aceptable (full = directo,
-   // play = tienda). Both remain separate from the official XPeta package. El
-   // gating de UI/permisos se hace por manifest (src/play) y
-   // por la bandera Dart kLocalAgentEnabled (--dart-define=HERMES_FLAVOR).
+   // Flavors of the same code (see docs/RELEASE_DISTRIBUTION.md):
+   //  - full -> direct download (GitHub Releases / Obtainium).
+   //  - play -> Google Play.
+   //  - qa   -> emulator testing, installed next to the Play build.
+   // full and play share the production applicationId on purpose, so an
+   // update keeps the installed app's data. They cannot be installed at the
+   // same time, which is acceptable (full = direct, play = store).
    flavorDimensions += "distribution"
    productFlavors {
        create("full") {
@@ -107,6 +103,10 @@ flutter {
 dependencies {
    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
    implementation("androidx.glance:glance-appwidget:1.1.1")
+   // Live Updates (Android 16): NotificationCompat.ProgressStyle,
+   // setRequestPromotedOngoing and canPostPromotedNotifications (core 1.17+).
+   // The runtime classpath already resolves core 1.18 transitively.
+   implementation("androidx.core:core-ktx:1.17.0")
    // home_widget already resolves this exact artifact transitively. Declaring
    // it here exposes the one-shot expiry API to the app without adding a new
    // binary, version or periodic background component.

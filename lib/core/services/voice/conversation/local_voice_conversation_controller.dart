@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../../active_chat_service.dart';
+import '../../connection_manager.dart';
+import '../../prompt_client_surface.dart';
 import '../session/voice_ui_surface.dart';
 import '../hermes_speech_stream.dart';
 import '../spoken_text.dart';
@@ -13,6 +15,7 @@ import '../voice_service.dart';
 import '../voice_settings.dart';
 import 'full_duplex_barge_in_monitor.dart';
 import 'streaming_narration_queue.dart';
+import 'voice_conversation_engine.dart';
 import 'voice_conversation_runtime.dart';
 
 const int _maxVoicePublicCommentaryRunes = 160;
@@ -32,12 +35,12 @@ bool voiceConversationMustSuspendFullDuplexInBackground({
 }) => !continueWhenLocked;
 
 /// Conversación local por turnos alineada con el chat visible:
-/// STT APK → `ActiveChat.send/steer/enqueue` → respuesta visible → TTS APK.
+/// STT APK → `ActiveChat.send/enqueue` → respuesta visible → TTS APK.
 ///
 /// No crea sesiones, talkers ni acuses auxiliares. Toda operación asíncrona
 /// captura [_epoch]; Pausa, Stop, Cancel y X la rotan antes de tocar plugins.
 class LocalVoiceConversationController extends ChangeNotifier
-    implements VoiceUiSurface {
+    implements VoiceUiSurface, VoiceConversationEngine {
   LocalVoiceConversationController(
     this.voice, {
     FullDuplexBargeInMonitor? fullDuplexMonitor,
@@ -86,6 +89,7 @@ class LocalVoiceConversationController extends ChangeNotifier
 
   String _model = '';
   String _profile = '';
+  bool _allowTransportFallback = false;
   Future<void> Function(String prompt)? _onBeforeSend;
   String _partialTranscript = '';
   String _userTranscript = '';
@@ -132,6 +136,7 @@ class LocalVoiceConversationController extends ChangeNotifier
   /// True only while Android audio resources are needed or their release is
   /// still awaiting a physical/plugin ACK. A logical paused conversation stays
   /// [active] without retaining the microphone/media FGS or local models.
+  @override
   bool get audioLeaseRequired =>
       active &&
       (!userPaused || _userPauseReleaseTask != null || _privacyCleanupInFlight);
@@ -207,10 +212,14 @@ class LocalVoiceConversationController extends ChangeNotifier
   @override
   Stream<SttCheck> get unavailable => _unavailable.stream;
 
+  @override
   String? get sessionId => active ? _chat?.serverSessionId : null;
 
   @visibleForTesting
   int get debugEpoch => _epoch;
+
+  @visibleForTesting
+  bool get debugAllowTransportFallback => _allowTransportFallback;
 
   @visibleForTesting
   int get debugNarrationCursor => _narration?.cursor ?? 0;
@@ -232,6 +241,7 @@ class LocalVoiceConversationController extends ChangeNotifier
     required ActiveChat chat,
     required String model,
     String profile = '',
+    bool allowTransportFallback = false,
     Future<void> Function(String prompt)? onBeforeSend,
   }) async {
     final pendingExit = _exitInFlight;
@@ -257,6 +267,7 @@ class LocalVoiceConversationController extends ChangeNotifier
     _chat = chat;
     _model = model;
     _profile = ownerProfile;
+    _allowTransportFallback = allowTransportFallback;
     _onBeforeSend = onBeforeSend;
     _partialTranscript = '';
     _userTranscript = '';
@@ -588,30 +599,17 @@ class LocalVoiceConversationController extends ChangeNotifier
       _notify();
 
       if (!voicePlaybackInterrupted && chat.isStreaming) {
-        _latencyTurn?.mark(VoiceLatencyPoint.submitStarted);
-        try {
-          // Hermes Desktop corrige un run vivo con `session.redirect`. Cancelar
-          // y enviar inmediatamente abría una carrera con el drenaje del run:
-          // el backend aceptaba el stop, pero podía perder el reemplazo.
-          await chat.steer(text);
-          if (!_isCurrent(operation) || turn != _turnBinding) return;
-          _runtime.markBackendRunning(turn);
-          _markLatencySubmitAccepted(chat, lifecycleAcknowledged: true);
-          // `session.redirect` conserva el mismo run, así que no llegará un
-          // `started` que reinicie la cola. Omite lo ya visible antes de la
-          // interrupción y narra solo la continuación posterior.
-          _narration?.resumeFromVisibleEnd();
-        } catch (error) {
-          if (!_isCurrent(operation) || turn != _turnBinding) return;
-          // Gateways sin redirect conservan el texto en la cola. Nunca hacemos
-          // cancel -> send sin esperar: el siguiente turno se drena cuando el
-          // run actual termina y la corrección no se pierde.
-          chat.enqueue(text);
-          _runtime.markSubmissionQueued(turn);
-        }
+        // Una transcripción nueva durante un run activo siempre pertenece al
+        // turno siguiente. Voz comparte la cola FIFO del chat y no muta el run
+        // vivo mediante session.redirect/session.steer.
+        chat.enqueue(
+          text,
+          clientSurface: const PromptClientSurface.voiceChat(),
+        );
+        _runtime.markSubmissionQueued(turn);
         _notify();
-        // El monitor consume una captura por interjección. Rearmarlo después
-        // de redirect/cola permite otra corrección en el mismo run.
+        // El monitor consume una captura por interjección. Rearmarlo después de
+        // encolar permite preparar otro turno sin alterar el actual.
         unawaited(_armFullDuplexForTurn(beginResponseTurn: true));
         return;
       }
@@ -623,6 +621,7 @@ class LocalVoiceConversationController extends ChangeNotifier
       _latencyTurn?.mark(VoiceLatencyPoint.submitStarted);
       final accepted = await chat.send(
         fullText: text,
+        clientSurface: const PromptClientSurface.voiceChat(),
         model: _model,
         // Voz y teclado comparten exactamente el mismo contexto. El modo voz
         // no añade instrucciones ocultas de brevedad ni cambia la personalidad
@@ -630,6 +629,11 @@ class LocalVoiceConversationController extends ChangeNotifier
         history: chat.buildHistory(),
         profile: _profile,
         voicePlaybackInterrupted: voicePlaybackInterrupted,
+        allowTransportFallbackOverride: chat.hasDesktopTransport
+            ? _allowTransportFallback &&
+                  chat.connection.kind == InstanceKind.localhost &&
+                  chat.connection.onDeviceLoopback
+            : null,
       );
       if (!_isCurrent(operation) || turn != _turnBinding) return;
       if (accepted) {
@@ -990,7 +994,7 @@ class LocalVoiceConversationController extends ChangeNotifier
     bool lifecycleAcknowledged = false,
   }) {
     if (_latencyTurn?.mark(VoiceLatencyPoint.submitAccepted) != true) return;
-    // Anything observed while the submit/redirect was still pending belongs
+    // Anything observed while the submit was still pending belongs
     // to the previous response and cannot seed the new turn's latency.
     _latencyAssistantBaseline = chat.assistantContent;
     _latencyNarrationBaselineLength = _narration?.rawObserved.length ?? 0;
@@ -1004,8 +1008,8 @@ class LocalVoiceConversationController extends ChangeNotifier
 
   void _markFirstBackendLifecycle(ActiveChat chat) {
     // `started` is an optimistic local UI event. Desktop is acknowledged only
-    // after message.start/session.info running; REST only after a real run id.
-    if (chat.desktopTurnStartedAt == null && chat.currentRunId == null) return;
+    // after message.start/session.info running.
+    if (chat.desktopTurnStartedAt == null) return;
     _latencyTurn?.mark(VoiceLatencyPoint.backendAccepted);
     _latencyTurn?.mark(VoiceLatencyPoint.backendLifecycleAck);
   }
@@ -1051,7 +1055,13 @@ class LocalVoiceConversationController extends ChangeNotifier
   void _onChatEvent(ActiveChatEvent event) {
     if (!active) return;
     // A context-metrics refresh has no conversational or audio meaning.
-    if (event == ActiveChatEvent.responseMetrics) return;
+    if (event == ActiveChatEvent.responseMetrics ||
+        event == ActiveChatEvent.dashboardAuthChanged ||
+        event == ActiveChatEvent.goalUpdated ||
+        event == ActiveChatEvent.reactionsChanged ||
+        event == ActiveChatEvent.backgroundTaskComplete) {
+      return;
+    }
     final chat = _chat;
     final narration = _narration;
     if (chat == null || narration == null) return;
@@ -1105,9 +1115,7 @@ class LocalVoiceConversationController extends ChangeNotifier
       case ActiveChatEvent.toolProgress:
       case ActiveChatEvent.subagentActivity:
         _resumeAfterApprovalIfResolved();
-        final hasActiveSubagent = chat.subagentActivities.any(
-          (activity) => !activity.isTerminal,
-        );
+        final hasActiveSubagent = chat.subagentAggregate.activeCount > 0;
         final liveToolLabel =
             chat.activeVoiceToolLabel ??
             (hasActiveSubagent ? 'delegate_task' : null);
@@ -1224,6 +1232,11 @@ class LocalVoiceConversationController extends ChangeNotifier
       case ActiveChatEvent.earlierMessagesLoaded:
       case ActiveChatEvent.responseMetrics:
       case ActiveChatEvent.sessionInfo:
+      case ActiveChatEvent.warning:
+      case ActiveChatEvent.dashboardAuthChanged:
+      case ActiveChatEvent.goalUpdated:
+      case ActiveChatEvent.reactionsChanged:
+      case ActiveChatEvent.backgroundTaskComplete:
         break;
     }
     _notify();
@@ -2114,8 +2127,10 @@ class LocalVoiceConversationController extends ChangeNotifier
     final microphoneCleanup = _disarmFullDuplex();
     final subscriptionCleanup = subscription?.cancel();
     final releaseLocalModels = !voice.nativeVoiceActive;
+    // The microphone is released now; the recogniser stays loaded for a
+    // while so Resume does not pay its load again.
     final sttCleanup = releaseLocalModels
-        ? voice.disposeSttForVoiceExit()
+        ? voice.disposeSttForVoiceExit(keepRecognizerWarm: true)
         : null;
     _sttReleasedForPause = sttCleanup != null;
 
@@ -2432,7 +2447,9 @@ class LocalVoiceConversationController extends ChangeNotifier
     } catch (_) {
       if (!_isCurrent(operation)) return;
       paused = true;
-      note = 'No se pudo guardar Stop de forma segura. Reinténtalo.';
+      note = _isEnglish
+          ? "Couldn't save Stop safely. Try again."
+          : 'No se pudo guardar Stop de forma segura. Reinténtalo.';
       _notify();
       return;
     }
@@ -2485,8 +2502,10 @@ class LocalVoiceConversationController extends ChangeNotifier
     _notify();
   }
 
+  @override
   Future<void> pauseFromSystemControl() async => pauseConversation();
 
+  @override
   Future<void> resumeFromSystemControl() async {
     if (_fullDuplexPrivacySuspended) {
       if (!_privacyReleaseRequested) return;
@@ -2502,8 +2521,10 @@ class LocalVoiceConversationController extends ChangeNotifier
     await _resumeConversation();
   }
 
+  @override
   Future<void> onAppBackgrounded() => suspendForPrivacy();
 
+  @override
   void onAppResumed({required bool appUnlocked}) {
     if (_disposed || !appUnlocked || _privacyPauseTask != null) return;
     // Volver visible solo retira la valla que impedía Play. `userPaused` sigue
@@ -2527,6 +2548,7 @@ class LocalVoiceConversationController extends ChangeNotifier
   /// turno y después libera recorder, STT, TTS y modelos, incluso si el usuario
   /// ya había pulsado Pause. El desbloqueo solo retira la valla; nunca llama a
   /// Play ni abre de nuevo el micrófono por sí solo.
+  @override
   Future<void> suspendForPrivacy() async {
     if (_disposed) return;
     _privacyReleaseRequested = false;
@@ -2577,9 +2599,9 @@ class LocalVoiceConversationController extends ChangeNotifier
 
     final fullDuplexStop = _suspendFullDuplexNow();
     final stopSpeaking = voice.stopSpeaking();
-    final sttCleanup = _sttReleasedForPause
-        ? Future<void>.value()
-        : voice.disposeSttForVoiceExit();
+    // A pause only kept the recogniser loaded for Resume. A lock or the
+    // background releases it for good, like everything else here.
+    final sttCleanup = voice.disposeSttForVoiceExit();
     final ttsCleanup = _ttsReleasedForPause
         ? Future<void>.value()
         : voice.disposeTtsForVoiceExit();
@@ -2618,6 +2640,7 @@ class LocalVoiceConversationController extends ChangeNotifier
   /// Al perder foreground, una conversación conserva barge-in solo si el
   /// usuario aceptó continuar con la pantalla bloqueada. App Lock continúa
   /// ganando siempre.
+  @override
   Future<void> suspendFullDuplexForAppBackground() async {
     if (_disposed) return;
     _fullDuplexLifecycleSuspended = true;
@@ -2631,6 +2654,7 @@ class LocalVoiceConversationController extends ChangeNotifier
 
   /// Rearma la interrupción solo al volver visible y desbloqueado, y solo si
   /// todavía existe una fase en la que interrumpir tiene sentido.
+  @override
   Future<void> resumeFullDuplexCaptureIfNeeded() async {
     if (_disposed) return;
     _privacyReleaseRequested = true;
@@ -2731,6 +2755,7 @@ class LocalVoiceConversationController extends ChangeNotifier
     _sttSub = null;
     _modelHandoff = null;
     _chat = null;
+    _allowTransportFallback = false;
     _onBeforeSend = null;
     // Invalida y empieza a liberar los motores antes de esperar cancelaciones
     // de streams. Algunos plugins completan `StreamSubscription.cancel()` solo
@@ -2742,7 +2767,7 @@ class LocalVoiceConversationController extends ChangeNotifier
     final stopSpeaking = voice.stopSpeaking();
     final sttCleanup = _sttReleasedForPause
         ? (pendingPauseRelease ?? Future<void>.value())
-        : voice.disposeSttForVoiceExit();
+        : voice.disposeSttForVoiceExit(keepRecognizerWarm: true);
     final ttsCleanup = _ttsReleasedForPause
         ? (pendingPauseRelease ?? Future<void>.value())
         : voice.disposeTtsForVoiceExit();

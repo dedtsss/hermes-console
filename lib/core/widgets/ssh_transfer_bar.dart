@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../../l10n/app_localizations.dart';
 import '../services/sftp_transfer_service.dart';
 import '../theme/app_theme.dart';
+import '../../l10n/app_localizations.dart';
 
 /// Barra in-app que muestra las transferencias SFTP (en curso y recién
 /// terminadas), con su barra de progreso. Observa el servicio, así que sigue
@@ -33,7 +33,6 @@ class SshTransferBar extends StatelessWidget {
   }
 
   Widget _row(BuildContext context, HermesThemeColors colors, SftpTransfer t) {
-    final s = Strings.of(context);
     final ok = t.status == TransferStatus.done;
     final err = t.status == TransferStatus.error;
     final icon = t.direction == TransferDirection.download
@@ -77,9 +76,9 @@ class SshTransferBar extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text(
                       err
-                          ? s.sftpTransferFailed
+                          ? Strings.of(context).m1215TransferError
                           : ok
-                              ? s.kanbanColDone
+                              ? Strings.of(context).m1215TransferDone
                               : (pct == null ? '…' : '$pct%'),
                       style: TextStyle(fontSize: 11, color: tone),
                     ),
@@ -103,10 +102,11 @@ class SshTransferBar extends StatelessWidget {
           if (!t.isRunning)
             IconButton(
               icon: Icon(Icons.close, size: 15, color: colors.textDisabled),
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              tooltip: s.sftpDiscard,
+              // Objetivo táctil real de 44dp aunque el icono visible sea de
+              // 15dp: `BoxConstraints()` vacío colapsaba el hit-test al
+              // tamaño del icono.
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+              tooltip: Strings.of(context).inAppDismiss,
               onPressed: service.clearFinished,
             ),
         ],

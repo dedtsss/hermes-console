@@ -1,203 +1,151 @@
 <p align="center">
-  <a href="https://hermes.xpetalab.dev">
-    <img src="assets/branding/hermes_console_hero.png" width="100%" alt="Hermes Console — your self-hosted agent in your pocket" />
-  </a>
+  <a href="https://hermes.xpetalab.dev"><img src="assets/branding/console_banner.png" width="100%" alt="Console, the Android app for your self-hosted Hermes Agent" /></a>
 </p>
 
 <p align="center">
-  A private, Android-first console for the self-hosted Hermes Agent you control.
+  Your self-hosted Hermes Agent, native on Android.
+  <br><br>
+  <a href="https://play.google.com/store/apps/details?id=dev.xpetalab.hermesconsole"><img align="middle" height="52" alt="Get it on Google Play" src="docs/badges/google-play-en.png"></a>
+  <a href="https://github.com/xP3ta/hermes-console/releases/latest"><img align="middle" height="52" alt="Get it on GitHub" src="docs/badges/get-it-on-github.png"></a>
+  <a href="https://hermes.xpetalab.dev/obtainium/"><img align="middle" height="52" alt="Get it on Obtainium" src="docs/badges/obtainium.png"></a>
+  <a href="https://hermes.xpetalab.dev"><img align="middle" height="52" alt="Visit the website" src="docs/badges/visit-website-en.png"></a>
+  <br><br>
+  English · <a href="README_ES.md">Español</a>
 </p>
 
 <p align="center">
-  <a href="https://play.google.com/store/apps/details?id=dev.xpetalab.hermesconsole"><img height="64" alt="Get Hermes Console on Google Play" src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png"></a>
-  <a href="https://hermes.xpetalab.dev/obtainium/"><img height="64" alt="Add Hermes Console to Obtainium" src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png"></a>
-</p>
-<p align="center">
-  <a href="https://ko-fi.com/xpeta"><img height="64" alt="Support Hermes Console on Ko-fi" src="https://storage.ko-fi.com/cdn/kofi3.png?v=6"></a>
-</p>
-
-<p align="center">
-  <a href="https://hermes.xpetalab.dev"><img alt="Website" src="https://img.shields.io/badge/Website-hermes.xpetalab.dev-F59E0B?style=flat-square&logo=googlechrome&logoColor=white"></a>
-  <a href="LICENSE"><img alt="GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-7C3AED?style=flat-square"></a>
-  <img alt="Android 7+" src="https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white">
+  <img src="docs/screenshots/1.2.15/home.png" width="23%" alt="Console Home: a board with what is happening now, chats, bots, rooms, cron jobs and tasks" />
+  <img src="docs/screenshots/1.2.15/chat-live.png" width="23%" alt="A chat while Hermes works, with its thinking, tools and tasks in the conversation" />
+  <img src="docs/screenshots/1.2.15/voice.png" width="23%" alt="A voice conversation inside the chat" />
+  <img src="docs/screenshots/1.2.15/bots.png" width="23%" alt="Bot Mode: the profiles of a Hermes server, each with its own face" />
 </p>
 
-<p align="center">
-  <a href="docs/README_ES.md">Español</a> ·
-  <a href="docs/INSTALLATION.md">Installation</a> ·
-  <a href="docs/CONFIGURATION.md">Server setup</a> ·
-  <a href="docs/PRIVACY_POLICY.md">Privacy</a> ·
-  <a href="SECURITY.md">Security</a>
-</p>
+## What it is
 
-Hermes Console is an independent Flutter client for
-[Hermes Agent](https://github.com/NousResearch/hermes-agent). It brings chat,
-Bots, operations, approvals and Voice to Android without putting an XPeta Lab
-account or analytics service between your phone and your server.
+Console is an independent Android app for [Hermes Agent](https://github.com/NousResearch/hermes-agent), the agent you run on your own computer or server. It talks straight to the Dashboard that comes with Hermes, with no Console account and no server of ours in between.
 
-> Hermes Console is a client, not an AI provider. You need a compatible Hermes
-> Agent instance and any model-provider access required by that instance.
+## Connect
+
+Console talks to the **Dashboard** that comes with Hermes. You do not need a pairing code, the Gateway or an API key: one command on the computer, then scan a code.
+
+**1. Open Console.** The welcome screen has two options: **I already have Hermes** opens the camera, with the command below it to get the code, and **I don't have Hermes yet** opens the **Install Hermes** help. **Connect manually** (address, username, password) is there too. Console does not search your Wi-Fi.
+
+**2. On the computer where Hermes lives**, paste one command in Terminal (Linux, macOS) or PowerShell (Windows), or in the SSH window if Hermes is on a server:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xP3ta/hermes-setup/main/hermes-dashboard-setup.sh | sh
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/xP3ta/hermes-setup/main/hermes-dashboard-setup.ps1)))
+```
+
+It installs the official Hermes only if it is missing (if Hermes is already there, it does not touch it, nor Telegram or the Gateway), leaves the Dashboard on behind a password at a private address (your home network or Tailscale) and starts it with the computer. When it finishes it shows the address, the username, the password and a QR code.
+
+**3. Scan the code in Console** and you are connected. Without a camera, choose **Connect manually** and type the three details.
+
+**Hermes on a server on the internet?** Install [Tailscale](https://tailscale.com) on the server and on the phone, then paste the same command. Never expose port 9119 to the public internet without TLS, authentication and a network policy.
+
+**Forgot the password?** Run the command below; it makes a new one and ends the old sessions. Console shows it under **Get access back**.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xP3ta/hermes-setup/main/hermes-dashboard-setup.sh | sh -s -- --new-access
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/xP3ta/hermes-setup/main/hermes-dashboard-setup.ps1))) -NewAccess
+```
+
+**Check it in a browser first.** On the phone, open `http://<computer-address>:9119`. If the Dashboard sign-in page appears, the network is fine and Console can connect too.
+
+**Updating from a version that only used the Gateway?** Console 1.3.0 talks only to the Dashboard, so Console tells you and takes you to the same guided page. Paste the command on the computer and scan the code: your existing connection is updated (no second one is created) and your chats and settings on the phone are kept. The Gateway is not touched: Open WebUI, cron jobs and Telegram that use it are not affected.
+
+<details>
+<summary>Advanced: keep the Dashboard always on</summary>
+
+<br>
+
+The setup command above already starts the Dashboard with the computer and restarts it by itself (`systemd --user` on Linux, `launchd` on macOS). If you started the Dashboard by hand with `hermes dashboard`, it only works while that command runs and does not come back after a restart.
+
+</details>
+
+<details>
+<summary>Coming from an older install?</summary>
+
+<br>
+
+Console no longer uses the Mobile Bridge or the Gateway. If you set up with an older setup helper, your computer may still run things Console does not need. Nothing breaks if you leave them, but you can remove them.
+
+**Mobile Bridge.** Once every phone is on Console 1.2.15 or newer, one line removes the bridge from the computer and nothing else:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xP3ta/hermes-setup/main/hermes-mobile-setup.sh | sh -s -- --retire-bridge
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/xP3ta/hermes-setup/main/hermes-mobile-setup.ps1))) -RetireBridge
+```
+
+**Gateway on the network.** The older helper saved an `API_SERVER_KEY` in Hermes' `.env` file (`~/.hermes/.env`) and set the Gateway's listening address in the settings of the service it created, which opens port 8642 to your network. (The old manual guide asked for `API_SERVER_ENABLED`, `API_SERVER_HOST` and `API_SERVER_KEY` in `.env`.) If you do not use Hermes' API server for anything else, you can close it: delete the `API_SERVER_KEY` line (and the other two if you added them by hand) and restart the Gateway, for example with `hermes gateway restart`. Without a usable key Hermes does not start its API server. The Gateway itself can keep running for anything else you use it for. The setup helper has an option that undoes only this exposure (it keeps your `API_SERVER_KEY` unless you add `--also-remove-api-key`), so run it only when every phone uses Console 1.3:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xP3ta/hermes-setup/main/hermes-dashboard-setup.sh | sh -s -- --retire-gateway-exposure
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/xP3ta/hermes-setup/main/hermes-dashboard-setup.ps1))) -RetireGatewayExposure
+```
+
+</details>
 
 ## What you can do
 
-| Surface | Native Android experience |
-|---|---|
-| Conversations | Streaming Markdown and code, attachments, generated images, session history and model selection. |
-| Bots | Profiles, Blobatar identities, mentions, rooms, tasks and activity kept separate from normal conversations. |
-| Operations | Runs and approvals, Cron, Kanban, skills, memory, models, artifacts and capability-aware admin tools. |
-| Voice | Dictation plus a dedicated conversation mode with phone or Hermes-server speech routes and explicit fallbacks. |
-| Android | App Lock, read-only instances, notifications, widgets, share sheet, QR pairing and connection diagnostics. |
-| Privacy | No XPeta Lab telemetry, no advertising SDK and credentials protected with Android Keystore. |
+- A chat that shows the work: reasoning, tools and tasks, in plain words
+- Voice conversations inside the chat
+- Bots and rooms, one identity per Hermes profile
+- Cron jobs and tasks, on a board or a list
+- Models, with real provider removal
+- An SSH terminal, SFTP and inline file viewers
 
-The app follows Hermes Desktop and Hermes Agent as the protocol contract. A
-feature is shown only when the connected server exposes the capability it
-needs; older servers degrade without inventing endpoints.
+<details>
+<summary>More screens</summary>
 
-## See it in action
+<br>
 
-<table>
-  <tr>
-    <td align="center"><strong>Home</strong></td>
-    <td align="center"><strong>Conversations</strong></td>
-    <td align="center"><strong>Voice</strong></td>
-    <td align="center"><strong>Tools</strong></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/1.2.4-912/home.png" width="220" alt="Hermes Console home screen with fictional Project Aurora data" /></td>
-    <td><img src="docs/screenshots/1.2.4-912/chat.png" width="220" alt="Hermes Console conversation with fictional Project Aurora data" /></td>
-    <td><img src="docs/screenshots/1.2.4-912/voice.png" width="220" alt="Hermes Console dedicated Voice screen" /></td>
-    <td><img src="docs/screenshots/1.2.4-912/tools.png" width="220" alt="Hermes Console tools screen" /></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="docs/screenshots/1.2.15/room.png" width="23%" alt="A bot room with several profiles replying" />
+  <img src="docs/screenshots/1.2.15/tasks-board.png" width="23%" alt="The Tasks board" />
+  <img src="docs/screenshots/1.2.15/tasks-list.png" width="23%" alt="The Tasks list" />
+  <img src="docs/screenshots/1.2.15/cron.png" width="23%" alt="Scheduled Cron jobs" />
+  <img src="docs/screenshots/1.2.15/models.png" width="23%" alt="The Models screen" />
+  <img src="docs/screenshots/1.2.15/tools.png" width="23%" alt="The Tools hub" />
+  <img src="docs/screenshots/1.2.15/terminal.png" width="23%" alt="The SSH terminal" />
+  <img src="docs/screenshots/1.2.15/documents.png" width="23%" alt="An inline document viewer" />
+  <img src="docs/screenshots/1.2.15/profile-editor.png" width="23%" alt="The profile editor" />
+  <img src="docs/screenshots/1.2.15/first-run.png" width="23%" alt="The first-run opening screen" />
+  <img src="docs/screenshots/1.2.15/first-run-code.png" width="23%" alt="The first-run screen scanning a setup code" />
+  <img src="docs/screenshots/1.2.15/home-light.png" width="23%" alt="Console Home in the light theme" />
+  <img src="docs/screenshots/1.2.15/chat-light.png" width="23%" alt="A chat in the light theme" />
+</p>
 
-The gallery uses the approved public demo set with fictional data. Screens may
-vary slightly by app version and by the capabilities exposed by your Hermes
-server.
+</details>
 
-## Install
+## Private by design
 
-### Google Play
+- Self-hosted: no account, no telemetry, no advertising
+- Credentials stay on the phone, in the Android Keystore
+- Plain HTTP only on private networks; HTTPS everywhere else
 
-[Install the production package from Google Play](https://play.google.com/store/apps/details?id=dev.xpetalab.hermesconsole).
-The package ID is `dev.xpetalab.hermesconsole` and Play builds use Play App
-Signing.
+## Support the project
 
-### Obtainium
+Console is free and built in my spare time. If it is useful to you, a coffee helps keep it going.
 
-After the first signed GitHub release is published, Obtainium can follow the
-release feed directly:
+<p align="center">
+  <a href="https://ko-fi.com/xpeta"><img height="40" alt="Support me on Ko-fi" src="https://storage.ko-fi.com/cdn/kofi3.png?v=6"></a>
+</p>
 
-1. Install [Obtainium](https://github.com/ImranR98/Obtainium).
-2. Use **[Add Hermes Console to Obtainium](https://hermes.xpetalab.dev/obtainium/)**.
-   The button opens Obtainium's Add App screen with the official repository
-   already filled in.
-3. Confirm that the detected source is **GitHub Releases** and review the APK
-   signature before installing.
-
-If Android blocks the hand-off, open **Add App** in Obtainium and paste
-`https://github.com/xP3ta/hermes-console` manually.
-
-The Obtainium path and Google Play path are alternative update channels for
-the same production package; do not switch between signatures without first
-checking the published migration notes.
-
-### Direct APK
-
-Only install a production APK attached to an official
-[GitHub release](https://github.com/xP3ta/hermes-console/releases). Verify its
-version, SHA-256 digest and signing certificate. `qa`, `debug` and `profile`
-artifacts are internal test builds and are never public releases.
-
-## Connect your Hermes server
-
-1. Install and configure
-   [Hermes Agent](https://github.com/NousResearch/hermes-agent) on a server you
-   control.
-2. Reach it from Android over HTTPS, LAN or a private network such as
-   [Tailscale](https://tailscale.com). Do not expose unauthenticated admin
-   services to the public internet.
-3. Open Hermes Console and choose **Connect server**.
-4. Scan the pairing QR/link generated by your server, or enter the Gateway and
-   optional Dashboard details manually.
-5. Run the built-in capability check before saving the instance.
-
-Gateway credentials are not model-provider keys. Pairing links and QR codes
-may contain access details; treat them as secrets and never attach them to a
-public issue. See the complete [configuration guide](docs/CONFIGURATION.md).
-
-## Voice, without hidden provider defaults
-
-Hermes Console keeps dictation and Voice conversation separate:
-
-- **On this phone** uses private on-device STT/TTS after an explicit model
-  download. It works without Google services once prepared.
-- **Hermes server** is opt-in per server identity and profile. Audio goes to
-  the self-hosted Dashboard endpoints and uses the speech providers configured
-  there.
-
-No paid provider, personal model, language or server address is hard-coded as
-a global default. An explicitly selected route fails visibly instead of
-silently sending audio somewhere else.
-
-## Build from source
-
-Required toolchain: Flutter 3.44.x, its bundled Dart SDK, Java 17 and Android
-SDK 36.
-
-```bash
-flutter pub get
-flutter analyze
-flutter test
-flutter build apk --debug --flavor full \
-  --dart-define=HERMES_FLAVOR=full
-```
-
-The debug build is for development only. Release builds deliberately fail
-without signing configuration stored outside the repository. Read
-[release and distribution](docs/RELEASE_DISTRIBUTION.md) before producing an
-APK or AAB.
-
-## Project structure
-
-```text
-lib/             Flutter UI, state and Hermes clients
-android/         Android integration, flavors, widgets and permissions
-assets/bridge/   Optional Mobile Bridge helper
-docs/            Setup, architecture, privacy, security and release policy
-test/            Unit and widget regression suites
-```
-
-## Privacy and security
-
-- No advertising, analytics or XPeta Lab-operated conversation proxy.
-- Secrets are stored with Android Keystore through `flutter_secure_storage`.
-- Remote destinations are the instances and optional providers the user
-  configures.
-- Cleartext access is limited to development/private-network cases documented
-  by the project; HTTPS or a private VPN is recommended.
-
-Report vulnerabilities privately using [SECURITY.md](SECURITY.md). Do not put
-credentials, real conversations, server topology or pairing payloads in a
-public issue.
-
-## Contributing
-
-Focused contributions are welcome. Start with
-[CONTRIBUTING.md](CONTRIBUTING.md) and the
-[Code of Conduct](CODE_OF_CONDUCT.md), preserve third-party notices, and run
-the complete test and analysis gates before opening a pull request.
-
-## License and independence
-
-Original Hermes Console source code is licensed under
-[GNU GPL version 3.0 only](LICENSE) (`GPL-3.0-only`). Portions derived from
-`rusty4444/hermes-android` retain their MIT notice. Dependencies, models,
-fonts and artwork retain their own terms; see [NOTICE](NOTICE) and
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Checksums and provenance for
-project artwork are recorded in [ASSET_PROVENANCE.md](ASSET_PROVENANCE.md).
-The final source, dependency and binary checks are tracked transparently in the
-[open-source release checklist](docs/OPEN_SOURCE_RELEASE_CHECKLIST.md).
-
-Hermes Console is maintained by [XPeta Lab](https://hermes.xpetalab.dev) as an
-independent project. It is compatible with Hermes Agent but is not affiliated
-with, sponsored by or endorsed by Nous Research.
+<p align="center">
+  <a href="docs/README.md">Docs</a> · <a href="CHANGELOG.md">Changelog</a> · <a href="SECURITY.md">Security</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="https://ko-fi.com/xpeta">Support</a> · <a href="LICENSE">GPL-3.0</a>
+  <br>
+  <sub>Independent project by XPeta Lab, not affiliated with Nous Research.<br>Google Play and the Google Play logo are trademarks of Google LLC.</sub>
+</p>

@@ -1,6 +1,10 @@
+import 'dart:convert';
+
 import '../models/session.dart';
 import '../services/session_reconciler.dart';
-import 'markdown_clipboard.dart';
+import 'chat_turn.dart';
+import 'fts_snippet.dart';
+import 'plain_preview.dart';
 
 enum HomeRecentDateGroup { today, yesterday, earlier }
 
@@ -12,6 +16,14 @@ class HomeRecentSummary {
 
   bool get isEmpty => user == null && assistant == null;
 }
+
+/// Rows per Home session read: Desktop's sidebar page (`listSessions(limit =
+/// 40)`, apps/desktop/src/api/sessions.ts).
+const int homeSessionPageSize = 40;
+
+/// Upper bound of pages Home reads when automation rows (cron, Kanban…) fill
+/// the newest page. Older chats live in Conversations, which pages on scroll.
+const int homeSessionMaxPages = 3;
 
 int homeRecentSessionLimit({
   required double viewportHeight,
@@ -74,6 +86,31 @@ HomeRecentSummary homeRecentSummary({
   return HomeRecentSummary(user: user, assistant: assistant);
 }
 
+String? humanReadableSessionPreview(String? value) =>
+    value == null ? null : _compactPreview(value);
+
+/// The preview line of a session row on Home and Conversations: the row's
+/// own canonical `preview`, exactly what Desktop's sidebar paints
+/// (session-row.tsx). Without one there is no line; the last turn is never
+/// substituted, so both apps show the same thing for the same chat.
+String? sessionListPreview(Session session) =>
+    _compactPreview(session.cleanPreview);
+
+/// [sessionListPreview] of a search hit with its matched terms marked, or
+/// null when the row has no match to highlight. The FTS delimiters ride
+/// through the same cleaning as sentinels, so the text is exactly the plain
+/// preview and a raw `>>>`/`<<<` never shows.
+List<FtsSnippetSpan>? sessionSearchHighlights(Session session) {
+  final snippet = session.searchSnippet;
+  if (snippet == null || !hasFtsMarkers(snippet)) return null;
+  final marked = _compactPreview(
+    session.copyWith(preview: ftsSnippetWithSentinels(snippet)).cleanPreview,
+  );
+  if (marked == null) return null;
+  final spans = ftsSpansFromSentinels(marked);
+  return spans.any((span) => span.highlighted) ? spans : null;
+}
+
 String? latestUserPreview(
   Iterable<Map<String, dynamic>> messages, {
   bool newestFirst = false,
@@ -94,6 +131,13 @@ String? _latestRolePreview(
       : messages.toList(growable: false).reversed;
   for (final message in ordered) {
     if (message['role']?.toString().toLowerCase() != role) continue;
+    if (role == 'user' && !isRealUserTurn(message)) continue;
+    final displayKind = message['display_kind']?.toString().trim() ?? '';
+    if (role == 'assistant' &&
+        const {'hidden', 'reasoning', 'system', 'tool', 'internal'}
+            .contains(displayKind)) {
+      continue;
+    }
     final raw =
         desktopSessionDisplayText(message['content']) ??
         desktopSessionDisplayText(message['text']);
@@ -136,10 +180,10 @@ bool _sameDate(DateTime left, DateTime right) =>
     left.day == right.day;
 
 String? _compactPreview(String value) {
-  final compact = markdownToCompactText(
-    Session.stripCronPreamble(value),
-  ).replaceAll(RegExp(r'\s+'), ' ').trim();
-  if (compact.isEmpty) return null;
+  final raw = value.trim();
+  if (raw.isEmpty || _isNonHumanPreview(raw)) return null;
+  final compact = plainPreview(Session.stripCronPreamble(raw));
+  if (compact.isEmpty || _isNonHumanPreview(compact)) return null;
   final lower = compact.toLowerCase();
   if (lower == 'operation interrupted.' ||
       lower.startsWith('operation interrupted:')) {
@@ -148,6 +192,36 @@ String? _compactPreview(String value) {
   final runes = compact.runes.toList(growable: false);
   if (runes.length <= 320) return compact;
   return '${String.fromCharCodes(runes.take(319))}…';
+}
+
+bool _isNonHumanPreview(String value) {
+  final lower = value.toLowerCase();
+  if (lower.startsWith('<system-reminder') ||
+      lower.startsWith('<system>') ||
+      lower.startsWith('<tool_') ||
+      lower.startsWith('<reasoning>') ||
+      lower.startsWith('[system:') ||
+      lower.startsWith('[continuing toward your standing goal') ||
+      lower.startsWith('[your active task list was preserved') ||
+      lower.startsWith('[async delegation')) {
+    return true;
+  }
+  if (effectiveUserDisplayKind({
+    'role': 'user',
+    'content': value,
+  }).isNotEmpty) {
+    return true;
+  }
+  if (!value.startsWith('[') && !value.startsWith('{')) return false;
+  try {
+    final decoded = jsonDecode(value);
+    return decoded is List || decoded is Map;
+  } on FormatException {
+    return RegExp(
+      r'^\[\s*\{\s*"(?:id|type|function|tool_call_id|tool_use_id)"',
+      caseSensitive: false,
+    ).hasMatch(value);
+  }
 }
 
 String _comparisonText(String value) => value

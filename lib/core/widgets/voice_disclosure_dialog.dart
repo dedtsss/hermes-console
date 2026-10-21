@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../theme/app_theme.dart';
+import '../design/modal.dart' show showHermesDialogRoute;
 
 enum VoiceDisclosureChoice { foregroundOnly, continueWhenLocked }
 
@@ -8,7 +10,7 @@ enum VoiceDisclosureChoice { foregroundOnly, continueWhenLocked }
 /// null y no activa el micrófono ni guarda consentimiento.
 Future<VoiceDisclosureChoice?> showVoiceDisclosureDialog(
   BuildContext context,
-) => showDialog<VoiceDisclosureChoice>(
+) => showHermesDialogRoute<VoiceDisclosureChoice>(
   context: context,
   builder: (context) {
     final s = Strings.of(context);
@@ -58,7 +60,7 @@ Future<VoiceDisclosureChoice?> showVoiceDisclosureDialog(
 /// (usar la voz del servidor), false (seguir en local; no se vuelve a
 /// preguntar) o null si se cierra sin decidir (se ofrecerá de nuevo).
 Future<bool?> showNativeVoiceConsentDialog(BuildContext context) =>
-    showDialog<bool>(
+    showHermesDialogRoute<bool>(
       context: context,
       builder: (context) {
         final s = Strings.of(context);
@@ -109,7 +111,8 @@ class _DisclosureChoiceTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+    // Bug real: usaba Theme.of(context).colorScheme en vez de `hermes`.
+    color: Theme.of(context).hermes.surfaceVariant,
     borderRadius: BorderRadius.circular(12),
     clipBehavior: Clip.antiAlias,
     child: InkWell(

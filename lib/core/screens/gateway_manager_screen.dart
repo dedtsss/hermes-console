@@ -1,4 +1,4 @@
-// Multi-gateway management screen — "Instancias".
+// The saved Hermes connections, each one opens its connection screen.
 //
 // Backed by the existing ConnectionManager (SharedPreferences metadata +
 // API keys in Android Keystore). The "active" gateway is the
@@ -7,20 +7,32 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import '../services/origin_bound_http_client.dart';
 
 import '../../l10n/app_localizations.dart';
-import '../config/flavor.dart';
 import '../services/connection_manager.dart';
 import '../utils/transport_privacy.dart';
 import '../theme/app_theme.dart';
-import '../widgets/accent_card.dart';
-import '../widgets/hermes_ui.dart';
+import '../widgets/general_dock_shell.dart';
+import '../widgets/hermes_ui.dart' show HermesIconTile, HermesPrimaryButton;
+import '../widgets/instance_kind_picker.dart';
+import '../widgets/instance_status_panel.dart'
+    show DashboardAuthCheck, checkSavedDashboardLogin;
 import '../widgets/status_pill.dart';
 import 'instance_edit_screen.dart';
-import 'local_instance_control_screen.dart';
-import 'onboarding/welcome_mode_screen.dart';
-import '../widgets/hermes_app_bar.dart';
+import 'onboarding_screen.dart';
+import '../design/hermes_design.dart'
+    show
+        HermesAction,
+        HermesPage,
+        HermesListGroup,
+        HermesListRow,
+        HermesSpace,
+        HermesDialogAction,
+        HermesDialogActionStyle,
+        HermesMenuButton,
+        showHermesDialog;
+import '../feedback/feedback_policy.dart';
 
 class GatewayManagerScreen extends StatefulWidget {
   final ConnectionManager connManager;
@@ -40,28 +52,17 @@ class _GatewayManagerScreenState extends State<GatewayManagerScreen> {
   /// Per-connection health status. Keyed by connection id.
   final Map<String, InstanceStatus> _statuses = {};
 
+  /// Ids whose Dashboard answered but wants a login.
+  final Set<String> _loginRequired = {};
+
   @override
   void initState() {
     super.initState();
     _init();
   }
 
-  /// U-13 (spec 028): con la instancia local retirada de la UI
-  /// (kLocalAgentEnabled=false), las conexiones on-device guardadas se
-  /// ocultan de la lista sin borrarlas (reversible); la activa se muestra
-  /// siempre para no dejar la app conectada a algo invisible.
-  List<SavedConnection> _visibleConnections() {
-    final all = widget.connManager.getConnections();
-    if (kLocalAgentEnabled) return all;
-    final activeId = widget.connManager.prefs.getString(_activeKey);
-    return all
-        .where(
-          (c) =>
-              c.id == activeId ||
-              (c.kind != InstanceKind.localhost && !c.onDeviceLoopback),
-        )
-        .toList();
-  }
+  List<SavedConnection> _visibleConnections() =>
+      widget.connManager.getConnections();
 
   void _init() {
     setState(() {
@@ -79,6 +80,7 @@ class _GatewayManagerScreenState extends State<GatewayManagerScreen> {
     setState(() {
       _connections = _visibleConnections();
       _defaultId = widget.connManager.defaultConnectionId;
+      _activeId = widget.connManager.activeConnectionId.value;
       for (final c in _connections) {
         if (!_statuses.containsKey(c.id)) {
           _statuses[c.id] = InstanceStatus.unknown;
@@ -95,92 +97,64 @@ class _GatewayManagerScreenState extends State<GatewayManagerScreen> {
   Future<void> _checkSingle(SavedConnection conn) async {
     if (!mounted) return;
     setState(() => _statuses[conn.id] = InstanceStatus.checking);
-    final status = await _fetchStatus(conn);
+    final (status, loginRequired) = await _fetchStatus(conn);
     if (!mounted) return;
-    setState(() => _statuses[conn.id] = status);
+    setState(() {
+      _statuses[conn.id] = status;
+      if (loginRequired) {
+        _loginRequired.add(conn.id);
+      } else {
+        _loginRequired.remove(conn.id);
+      }
+    });
   }
 
-  /// Fetches /health and maps the response to an [InstanceStatus].
-  ///
-  /// The current Hermes Gateway /health endpoint returns HTTP 200 when
-  /// the server is up and the API key is valid (checked via /api/sessions).
-  /// It does not currently expose a `mode` or `readOnly` field in its body,
-  /// so [InstanceStatus.readOnly] and [InstanceStatus.syncing] are supported
-  /// by the widget but are not sourced from live data. If a future version of
-  /// the health endpoint adds e.g. `{"status":"read_only"}` or
-  /// `{"status":"syncing"}`, extend the body-parsing block below.
-  static Future<InstanceStatus> _fetchStatus(SavedConnection conn) async {
+  /// Reads the state of the Dashboard, the only origin Desktop talks to:
+  /// `/api/status` says it is up and the authenticated `/api/sessions` read
+  /// (the same login check as the status panel) says the login is accepted.
+  /// A 401/403 is a login problem, never an offline server.
+  Future<(InstanceStatus, bool)> _fetchStatus(SavedConnection conn) async {
     try {
-      final base = TransportPrivacy.requireAllowed(conn.baseUrl);
-      final client = http.Client();
+      final base = TransportPrivacy.requireAllowed(conn.effectiveDashboardUrl);
+      final client = OriginBoundHttpClient();
       try {
         final res = await client
-            .get(
-              Uri.parse('$base/health'),
-              headers: {
-                'Authorization': 'Bearer ${conn.apiKey}',
-                'Content-Type': 'application/json',
-              },
-            )
+            .get(Uri.parse('$base/api/status'))
             .timeout(const Duration(seconds: 8));
-
-        if (res.statusCode == 401 || res.statusCode == 403) {
-          return InstanceStatus.error;
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          return (InstanceStatus.offline, false);
         }
-        if (res.statusCode != 200) return InstanceStatus.offline;
-
-        // Future-proof: if /health body carries a status field, map it.
-        // Currently this block never fires because Hermes /health
-        // returns a plain `{"ok":true}` or similar without a `status` key.
-        // Uncomment and extend when/if the backend adds it.
-        // try {
-        //   final body = jsonDecode(res.body) as Map<String, dynamic>?;
-        //   final mode = body?['status'] as String?;
-        //   if (mode == 'read_only') return InstanceStatus.readOnly;
-        //   if (mode == 'syncing') return InstanceStatus.syncing;
-        // } catch (_) {}
-
-        // Confirm auth with sessions endpoint (same logic as ApiClient.healthCheck)
-        final sessions = await client
-            .get(
-              Uri.parse('$base/api/sessions'),
-              headers: {
-                'Authorization': 'Bearer ${conn.apiKey}',
-                'Content-Type': 'application/json',
-              },
-            )
-            .timeout(const Duration(seconds: 8));
-
-        if (sessions.statusCode == 200) return InstanceStatus.online;
-        if (sessions.statusCode == 401 || sessions.statusCode == 403) {
-          return InstanceStatus.error;
-        }
-        return InstanceStatus.offline;
       } finally {
         client.close();
       }
+      return switch (await checkSavedDashboardLogin(widget.connManager, conn)) {
+        DashboardAuthCheck.ok => (InstanceStatus.online, false),
+        DashboardAuthCheck.loginRequired ||
+        DashboardAuthCheck.invalidCredentials => (InstanceStatus.error, true),
+        DashboardAuthCheck.unknown => (InstanceStatus.offline, false),
+      };
     } on TimeoutException {
-      return InstanceStatus.offline;
+      return (InstanceStatus.offline, false);
     } catch (e) {
       debugPrint(
-        '[gateway-manager] excepción silenciada (se continúa sin propagar): $e',
+        '[gateway-manager] status check unavailable (${e.runtimeType})',
       );
-      return InstanceStatus.offline;
+      return (InstanceStatus.offline, false);
     }
   }
 
   Future<void> _setActive(SavedConnection conn) async {
+    final changed = conn.id != _activeId;
     await widget.connManager.setActiveConnection(conn.id);
     if (!mounted) return;
     setState(() => _activeId = conn.id);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          Strings.of(context).gwActiveInstance(conn.label),
-          style: const TextStyle(fontSize: 13),
-        ),
-        duration: const Duration(seconds: 2),
-      ),
+    final notice = AppFeedback.of(context);
+    // Screens below this one (Tools hub, dock) were built for the previous
+    // instance; return to the root like the drawer selector does.
+    if (changed) Navigator.of(context).popUntil((route) => route.isFirst);
+    notice.notify(
+      FeedbackKind.routine,
+      Strings.of(context).gwActiveInstance(conn.label),
     );
   }
 
@@ -197,50 +171,41 @@ class _GatewayManagerScreenState extends State<GatewayManagerScreen> {
       _defaultId = makeDefault ? conn.id : null;
       if (makeDefault) _activeId = conn.id;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          makeDefault
-              ? Strings.of(context).gwDefaultInstance(conn.label)
-              : Strings.of(context).gwNoDefault,
-          style: const TextStyle(fontSize: 13),
-        ),
-        duration: const Duration(seconds: 2),
-      ),
+    AppFeedback.of(context).notify(
+      FeedbackKind.routine,
+      makeDefault
+          ? Strings.of(context).gwDefaultInstance(conn.label)
+          : Strings.of(context).gwNoDefault,
     );
   }
 
   Future<void> _deleteConnection(SavedConnection conn) async {
     if (conn.id == _activeId) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            Strings.of(context).gwCantDeleteActive,
-            style: const TextStyle(fontSize: 13),
-          ),
-        ),
+      AppFeedback.of(context).notify(
+        FeedbackKind.error,
+        Strings.of(context).gwCantDeleteActive,
+        warning: true,
       );
       return;
     }
 
-    final colors = Theme.of(context).hermes;
     final s = Strings.of(context);
-    final confirm = await showDialog<bool>(
+    final confirm = await showHermesDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text(s.gwDeleteInstanceTitle),
-        content: Text(s.gwDeleteInstanceBody(conn.label)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(s.commonCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(s.gwDelete, style: TextStyle(color: colors.error)),
-          ),
-        ],
-      ),
+      title: s.sRemoveTitle,
+      message: s.sRemoveBody(conn.label),
+      actions: [
+        HermesDialogAction(
+          label: s.commonCancel,
+          value: false,
+          style: HermesDialogActionStyle.cancel,
+        ),
+        HermesDialogAction(
+          label: s.sRemove,
+          value: true,
+          style: HermesDialogActionStyle.destructive,
+        ),
+      ],
     );
     if (confirm != true) return;
     await widget.connManager.deleteConnection(conn.id);
@@ -252,19 +217,6 @@ class _GatewayManagerScreenState extends State<GatewayManagerScreen> {
   }
 
   Future<void> _showEditDialog(SavedConnection conn) async {
-    if (conn.kind == InstanceKind.localhost) {
-      await Navigator.push<void>(
-        context,
-        MaterialPageRoute(
-          builder: (_) => LocalInstanceControlScreen(
-            connection: conn,
-            connManager: widget.connManager,
-          ),
-        ),
-      );
-      if (mounted) _refresh();
-      return;
-    }
     final saved = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
@@ -283,18 +235,14 @@ class _GatewayManagerScreenState extends State<GatewayManagerScreen> {
   }
 
   Future<void> _showAddDialog() async {
-    // Ofrece ambos modos (cliente remoto / agente local en este móvil), no solo
-    // remoto: así se puede añadir/instalar un Hermes local aunque ya existan
-    // instancias remotas.
+    // Add an explicit connection to an existing server.
     await Navigator.push<void>(
       context,
       MaterialPageRoute(
-        builder: (_) => WelcomeModeScreen(
+        builder: (_) => OnboardingScreen(
           connManager: widget.connManager,
-          // U-32 también aquí: tras un alta con éxito la instancia nueva queda
-          // activa (lo hace InstanceEditScreen), así que aterrizamos en la
-          // pantalla principal en vez de volver a esta lista. Si el usuario
-          // cancela, onDone no se dispara y se queda en el gestor.
+          // A finished connection becomes the active one: land on Home, not
+          // back on this list. Backing out never fires onDone.
           onDone: () => Navigator.of(context).popUntil((r) => r.isFirst),
         ),
       ),
@@ -306,269 +254,116 @@ class _GatewayManagerScreenState extends State<GatewayManagerScreen> {
     }
   }
 
+  // Esta pantalla lista TODAS las instancias y no tiene una "conexión
+  // actual" propia como el resto de pantallas del perfil General — usamos la
+  // instancia activa (la que HomeScreen usaría para reconectar) como ancla
+  // del dock; sin ninguna activa (lista vacía o recién arrancada) el dock
+  // simplemente no se pinta, igual que en Voz cuando falta connManager.
+  SavedConnection? get _activeConnectionObj {
+    final id = _activeId;
+    if (id == null) return null;
+    for (final c in _connections) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  Widget _wrapWithDock(Widget body) {
+    final conn = _activeConnectionObj;
+    if (conn == null) return body;
+    return GeneralDockShell(
+      connection: conn,
+      connManager: widget.connManager,
+      pet: false,
+      onCreate: _showAddDialog,
+      body: body,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).hermes;
     final s = Strings.of(context);
-    return Scaffold(
-      appBar: HermesAppBar(
-        title: Text(s.gwTitle),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.add, color: colors.accent),
-            onPressed: _showAddDialog,
-            tooltip: s.gwAddInstance,
-          ),
-        ],
-      ),
-      body: _buildBody(colors),
-    );
-  }
-
-  Widget _buildBody(HermesThemeColors colors) {
-    if (_connections.isEmpty) {
-      return _EmptyInstancesState(onAdd: _showAddDialog);
-    }
-
-    return RefreshIndicator(
-      color: colors.accent,
+    return HermesPage(
+      wrapBody: _wrapWithDock,
+      title: s.gwTitle,
+      listKey: const ValueKey('hermes-connections-scroll'),
+      bottomInset: 96,
+      actions: [
+        IconButton(
+          key: const ValueKey('hermes-add'),
+          tooltip: _connections.isEmpty ? s.homeAddInstance : s.gwAddInstance,
+          icon: Icon(Icons.add, color: colors.accent),
+          onPressed: _showAddDialog,
+        ),
+      ],
       onRefresh: () async {
         _refresh();
         await _checkAllHealth();
       },
-      child: ListView.builder(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-        itemCount: _connections.length,
-        itemBuilder: (context, index) {
-          final conn = _connections[index];
-          final isActive = conn.id == _activeId;
-          final isDefault = conn.id == _defaultId;
-          final status = _statuses[conn.id] ?? InstanceStatus.unknown;
-          return _InstanceCard(
-            connection: conn,
-            isActive: isActive,
-            isDefault: isDefault,
-            status: status,
-            onSelect: () => _setActive(conn),
-            onToggleDefault: () => _toggleDefault(conn),
-            onEdit: () => _showEditDialog(conn),
-            onDelete: () => _deleteConnection(conn),
-            onRecheck: () => _checkSingle(conn),
-          );
-        },
-      ),
-    );
-  }
-}
-
-// ─── Instance Card ────────────────────────────────────────────────────────────
-
-class _InstanceCard extends StatelessWidget {
-  final SavedConnection connection;
-  final bool isActive;
-  final bool isDefault;
-  final InstanceStatus status;
-  final VoidCallback onSelect;
-  final VoidCallback onToggleDefault;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
-  final VoidCallback onRecheck;
-
-  const _InstanceCard({
-    required this.connection,
-    required this.isActive,
-    required this.isDefault,
-    required this.status,
-    required this.onSelect,
-    required this.onToggleDefault,
-    required this.onEdit,
-    required this.onDelete,
-    required this.onRecheck,
-  });
-
-  static IconData _iconForKind(InstanceKind kind) => switch (kind) {
-    InstanceKind.vps => Icons.dns_outlined,
-    InstanceKind.homelab => Icons.storage_outlined,
-    InstanceKind.pc => Icons.computer_outlined,
-    InstanceKind.tailscale => Icons.vpn_lock_outlined,
-    InstanceKind.localhost => Icons.terminal_outlined,
-  };
-
-  static Color _statusColor(HermesThemeColors c, InstanceStatus s) =>
-      switch (s) {
-        InstanceStatus.online => c.success,
-        InstanceStatus.syncing => c.accent,
-        InstanceStatus.readOnly => c.warning,
-        InstanceStatus.error => c.error,
-        InstanceStatus.offline => c.textDisabled,
-        InstanceStatus.unknown => c.textSecondary,
-        InstanceStatus.checking => c.accent,
-      };
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).hermes;
-    final isOfflineOrError =
-        status == InstanceStatus.offline || status == InstanceStatus.error;
-
-    return AccentCard(
-      margin: const EdgeInsets.only(bottom: 7),
-      accent: isActive ? colors.accent.withValues(alpha: 0.85) : null,
-      accentWidth: 2.5,
-      // Minimalista: panel suave sin borde (la franja de acento ya lo define).
-      background: colors.surfaceVariant.withValues(alpha: 0.4),
-      borderRadius: const BorderRadius.all(Radius.circular(12)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onSelect,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 11, 6, 11),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        if (_connections.isEmpty) ...[
+          Text(s.homeNoInstances),
+          const SizedBox(height: HermesSpace.x6),
+          HermesPrimaryButton(
+            key: const ValueKey('hermes-add-empty'),
+            label: s.homeAddInstance,
+            icon: Icons.qr_code_scanner,
+            onTap: _showAddDialog,
+          ),
+        ] else ...[
+          HermesListGroup(
             children: [
-              HermesIconTile(
-                _iconForKind(connection.kind),
-                size: 36,
-                active: isActive,
-              ),
-              const SizedBox(width: 12),
-              // Label + URL + status
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Flexible(
-                          child: Text(
-                            connection.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
-                              color: colors.textPrimary,
-                            ),
-                          ),
-                        ),
-                        if (isDefault) ...[
-                          const SizedBox(width: 6),
-                          Tooltip(
-                            message: Strings.of(context).gwDefaultBadge,
-                            child: Icon(
-                              Icons.star,
-                              size: 14,
-                              color: colors.accent,
-                            ),
-                          ),
-                        ],
-                        const SizedBox(width: 9),
-                        // Estado plano: punto de color + texto legible.
-                        Container(
-                          width: 7,
-                          height: 7,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: _statusColor(colors, status),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          status.labelFor(context),
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w500,
-                            color: colors.textSecondary,
-                          ),
-                        ),
-                        if (isActive) ...[
-                          Text(
-                            '  ·  ',
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              color: colors.textDisabled,
-                            ),
-                          ),
-                          Text(
-                            Strings.of(context).gwActiveBadge,
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w600,
-                              color: colors.accent,
-                            ),
-                          ),
-                        ],
-                        if (connection.readOnly) ...[
-                          const SizedBox(width: 8),
-                          Text(
-                            Strings.of(context).gwReadOnly,
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w500,
-                              color: colors.warning,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        if (connection.useHttps)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Icon(
-                              Icons.lock_outline,
-                              size: 11,
-                              color: colors.success,
-                            ),
-                          ),
-                        Flexible(
-                          child: Text(
-                            '${connection.host}:${connection.port}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: colors.textSecondary,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              // Action buttons
-              if (isOfflineOrError)
-                IconButton(
-                  icon: Icon(
-                    Icons.refresh,
-                    size: 18,
-                    color: colors.textSecondary,
-                  ),
-                  onPressed: onRecheck,
-                  tooltip: Strings.of(context).gwReconnect,
-                  constraints: const BoxConstraints(
-                    minWidth: 36,
-                    minHeight: 36,
-                  ),
-                  padding: EdgeInsets.zero,
-                ),
-              _CardMenu(
-                onSelect: onSelect,
-                onToggleDefault: onToggleDefault,
-                onEdit: onEdit,
-                onTest: onRecheck,
-                onDelete: onDelete,
-                isActive: isActive,
-                isDefault: isDefault,
-              ),
+              for (final conn in _connections) _connectionRow(conn, s),
             ],
           ),
-        ),
+          const SizedBox(height: HermesSpace.x6),
+          HermesListRow(
+            key: const ValueKey('hermes-add-another'),
+            title: s.gwAddInstance,
+            icon: Icons.add,
+            onTap: _showAddDialog,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _connectionRow(SavedConnection conn, Strings s) {
+    final active = conn.id == _activeId;
+    final isDefault = conn.id == _defaultId;
+    final status = _statuses[conn.id] ?? InstanceStatus.unknown;
+    final statusLabel = _loginRequired.contains(conn.id)
+        ? s.statusLoginRequired
+        : status == InstanceStatus.online
+        ? s.sChatConnected
+        : status.labelFor(context);
+    return HermesListRow(
+      key: ValueKey('hermes-connection-${conn.id}'),
+      title: conn.label,
+      subtitle: [
+        conn.host,
+        statusLabel,
+        if (active) s.gwActiveBadge,
+        if (isDefault) s.gwDefaultBadge,
+        if (conn.readOnly) s.gwReadOnly,
+      ].join(' · '),
+      subtitleMaxLines: 3,
+      leading: HermesIconTile(
+        instanceKindIcon(conn.kind),
+        size: 40,
+        active: active,
+      ),
+      onTap: () => _showEditDialog(conn),
+      trailing: _CardMenu(
+        key: ValueKey('hermes-menu-${conn.id}'),
+        onSelect: () => _setActive(conn),
+        onToggleDefault: () => _toggleDefault(conn),
+        onTest: () => _checkSingle(conn),
+        onDelete: () => _deleteConnection(conn),
+        isActive: active,
+        isDefault: isDefault,
+        label: conn.label,
       ),
     );
   }
@@ -577,16 +372,17 @@ class _InstanceCard extends StatelessWidget {
 class _CardMenu extends StatelessWidget {
   final VoidCallback onSelect;
   final VoidCallback onToggleDefault;
-  final VoidCallback onEdit;
   final VoidCallback onTest;
   final VoidCallback onDelete;
   final bool isActive;
   final bool isDefault;
+  final String label;
 
   const _CardMenu({
+    super.key,
+    required this.label,
     required this.onSelect,
     required this.onToggleDefault,
-    required this.onEdit,
     required this.onTest,
     required this.onDelete,
     required this.isActive,
@@ -596,155 +392,49 @@ class _CardMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).hermes;
-    return PopupMenuButton<_MenuAction>(
+    return HermesMenuButton<_MenuAction>(
+      tooltip: Strings.of(context).sConnectionOptions(label),
       icon: Icon(Icons.more_vert, size: 20, color: colors.textSecondary),
-      color: colors.surface,
       onSelected: (action) {
         switch (action) {
           case _MenuAction.select:
             onSelect();
           case _MenuAction.toggleDefault:
             onToggleDefault();
-          case _MenuAction.edit:
-            onEdit();
           case _MenuAction.test:
             onTest();
           case _MenuAction.delete:
             onDelete();
         }
       },
-      itemBuilder: (_) => [
+      actions: (context) => [
         if (!isActive)
-          PopupMenuItem(
+          HermesAction(
             value: _MenuAction.select,
-            child: Row(
-              children: [
-                Icon(
-                  Icons.check_circle_outline,
-                  size: 18,
-                  color: colors.accent,
-                ),
-                const SizedBox(width: 10),
-                Text(Strings.of(context).gwSetActive),
-              ],
-            ),
+            label: Strings.of(context).gwSetActive,
+            icon: Icons.check_circle_outline,
           ),
-        PopupMenuItem(
+        HermesAction(
           value: _MenuAction.toggleDefault,
-          child: Row(
-            children: [
-              Icon(
-                isDefault ? Icons.star : Icons.star_outline,
-                size: 18,
-                color: colors.accent,
-              ),
-              const SizedBox(width: 10),
-              Text(
-                isDefault
-                    ? Strings.of(context).gwUnsetDefault
-                    : Strings.of(context).gwSetDefault,
-              ),
-            ],
-          ),
+          label: isDefault
+              ? Strings.of(context).gwUnsetDefault
+              : Strings.of(context).gwSetDefault,
+          icon: isDefault ? Icons.star : Icons.star_outline,
         ),
-        PopupMenuItem(
-          value: _MenuAction.edit,
-          child: Row(
-            children: [
-              Icon(Icons.edit_outlined, size: 18, color: colors.textSecondary),
-              const SizedBox(width: 10),
-              Text(Strings.of(context).commonEdit),
-            ],
-          ),
-        ),
-        PopupMenuItem(
+        HermesAction(
           value: _MenuAction.test,
-          child: Row(
-            children: [
-              Icon(Icons.wifi_tethering, size: 18, color: colors.textSecondary),
-              const SizedBox(width: 10),
-              Text(Strings.of(context).gwTestConnection),
-            ],
-          ),
+          label: Strings.of(context).gwTestConnection,
+          icon: Icons.wifi_tethering,
         ),
-        PopupMenuItem(
+        HermesAction(
           value: _MenuAction.delete,
-          child: Row(
-            children: [
-              Icon(Icons.delete_outline, size: 18, color: colors.error),
-              const SizedBox(width: 10),
-              Text(
-                Strings.of(context).gwDelete,
-                style: TextStyle(color: colors.error),
-              ),
-            ],
-          ),
+          label: Strings.of(context).gwDelete,
+          icon: Icons.delete_outline,
+          destructive: true,
         ),
       ],
     );
   }
 }
 
-enum _MenuAction { select, toggleDefault, edit, test, delete }
-
-// ─── Empty state ──────────────────────────────────────────────────────────────
-
-class _EmptyInstancesState extends StatelessWidget {
-  final VoidCallback onAdd;
-
-  const _EmptyInstancesState({required this.onAdd});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).hermes;
-    return Center(
-      child: TweenAnimationBuilder<double>(
-        tween: Tween(begin: 0, end: 1),
-        duration: const Duration(milliseconds: 450),
-        curve: Curves.easeOut,
-        builder: (context, t, child) => Opacity(
-          opacity: t,
-          child: Transform.translate(
-            offset: Offset(0, 8 * (1 - t)),
-            child: child,
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                color: colors.accent.withValues(alpha: 0.08),
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: colors.accent.withValues(alpha: 0.35),
-                ),
-              ),
-              child: Icon(Icons.dns_outlined, size: 26, color: colors.accent),
-            ),
-            const SizedBox(height: 18),
-            Text(
-              '▸ ${Strings.of(context).gwNoInstances}',
-              style: TextStyle(
-                fontSize: 13,
-                color: colors.textSecondary,
-                letterSpacing: 0.5,
-              ),
-            ),
-            const SizedBox(height: 14),
-            TextButton.icon(
-              onPressed: onAdd,
-              icon: Icon(Icons.add, size: 18, color: colors.accent),
-              label: Text(
-                Strings.of(context).gwAddInstanceLower,
-                style: TextStyle(color: colors.accent),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+enum _MenuAction { select, toggleDefault, test, delete }

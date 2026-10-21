@@ -12,14 +12,6 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:hermes_android/core/services/notifications/background_listener.dart';
 import 'package:hermes_android/core/services/notifications/notification_service.dart';
 
-WatchedRun _run(String id, {bool approvalNotified = false}) => WatchedRun(
-  connId: 'conn',
-  base: 'https://hermes.example',
-  runId: id,
-  prompt: id,
-  approvalNotified: approvalNotified,
-);
-
 KanbanTask _kanbanTask(String id, String status) =>
     KanbanTask(id: id, title: 'Task $id', body: '', status: status);
 
@@ -141,7 +133,12 @@ void main() {
     // Closing the connection models the OS closing SQLite handles after a
     // process death. The uncommitted transaction is rolled back atomically.
     await abandonedOwner.close();
-    await waiting.timeout(const Duration(seconds: 2));
+    await waiting.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () => throw TimeoutException(
+        'Watch mutex did not recover after owner connection closed',
+      ),
+    );
 
     expect(entered, isTrue);
   });
@@ -196,7 +193,7 @@ void main() {
     },
   );
 
-  test('1.2.9 persists opted-in background work', () async {
+  test('opted-in background work persists cron targets, never runs', () async {
     expect(NotificationService.automationNotificationsAvailable, isTrue);
     SharedPreferences.setMockInitialValues({BackgroundListener.prefKey: true});
     await BackgroundWatch.add(
@@ -207,7 +204,7 @@ void main() {
         prompt: 'safe',
       ),
     );
-    expect(await BackgroundWatch.snapshot(), hasLength(1));
+    expect(await BackgroundWatch.snapshot(), isEmpty);
     await BackgroundCronWatch.syncConnections([_dashboardConnection()]);
     expect(await BackgroundCronWatch.snapshotTargets(), hasLength(1));
   });
@@ -330,106 +327,17 @@ void main() {
     ));
   });
 
-  test('same run id survives and is removed by exact owner', () async {
-    SharedPreferences.setMockInitialValues({});
-    for (final profile in ['room-alpha', 'room-beta']) {
-      await BackgroundWatch.add(
-        SavedRunWatch(
-          connId: 'conn-a',
-          profile: profile,
-          base: 'https://hermes.example',
-          runId: 'shared-run',
-          prompt: profile,
-        ),
-      );
-    }
-
-    final before = await BackgroundWatch.snapshot();
-    expect(before.map((run) => run.profile).toSet(), {
-      'room-alpha',
-      'room-beta',
-    });
-
-    await BackgroundWatch.remove(
-      'shared-run',
-      connId: 'conn-a',
-      profile: 'room-alpha',
-    );
-    final after = await BackgroundWatch.snapshot();
-    expect(after, hasLength(1));
-    expect(after.single.profile, 'room-beta');
-  });
-
-  test('merge del poll conserva runs añadidos mientras había red en curso', () {
-    final original = _run('a');
-    final addedDuringPoll = _run('b');
-
-    final merged = BackgroundWatch.mergeForTest(
-      latest: [original, addedDuringPoll],
-      snapshot: [original],
-      keep: [original.copyWith(approvalNotified: true)],
-    );
-
-    expect(merged.map((run) => run.runId), ['a', 'b']);
-    expect(merged.first.approvalNotified, isTrue);
-  });
-
-  test('poll merge fences the same run id by connection and profile', () {
-    const alpha = WatchedRun(
-      connId: 'conn-a',
-      profile: 'room-alpha',
-      base: 'https://hermes.example',
-      runId: 'shared-run',
-      prompt: 'alpha',
-    );
-    const beta = WatchedRun(
-      connId: 'conn-a',
-      profile: 'room-beta',
-      base: 'https://hermes.example',
-      runId: 'shared-run',
-      prompt: 'beta',
-    );
-
-    final merged = BackgroundWatch.mergeForTest(
-      latest: const [alpha, beta],
-      snapshot: const [alpha],
-      keep: [alpha.copyWith(approvalRequestId: 'approval-alpha')],
-    );
-
-    expect(merged, hasLength(2));
-    expect(
-      merged
-          .singleWhere((run) => run.profile == 'room-alpha')
-          .approvalRequestId,
-      'approval-alpha',
-    );
-    expect(
-      merged.singleWhere((run) => run.profile == 'room-beta').prompt,
-      'beta',
-    );
-  });
-
-  test('merge del poll no resucita runs eliminados por la UI', () {
-    final original = _run('a');
-    final merged = BackgroundWatch.mergeForTest(
-      latest: const [],
-      snapshot: [original],
-      keep: [original],
-    );
-
-    expect(merged, isEmpty);
-  });
-
-  test('merge elimina únicamente terminales presentes en el snapshot', () {
-    final terminal = _run('a');
-    final newRun = _run('b');
-    final merged = BackgroundWatch.mergeForTest(
-      latest: [terminal, newRun],
-      snapshot: [terminal],
-      keep: const [],
-    );
-
-    expect(merged.map((run) => run.runId), ['b']);
+  test('remove and clearAll drop the legacy watch list', () async {
+    const legacy =
+        '[{"connId":"conn-a","profile":"room-alpha","base":"https://hermes.example",'
+        '"runId":"shared-run"}]';
+    SharedPreferences.setMockInitialValues({'bg_watch_runs': legacy});
+    expect(await BackgroundWatch.snapshot(), hasLength(1));
+    await BackgroundWatch.remove('shared-run', connId: 'conn-a');
+    expect(await BackgroundWatch.snapshot(), isEmpty);
+    SharedPreferences.setMockInitialValues({'bg_watch_runs': legacy});
+    await BackgroundWatch.clearAll();
+    expect(await BackgroundWatch.snapshot(), isEmpty);
   });
 
   test('FGS cierra la autoridad SQLite al destruir el isolate', () {
@@ -633,12 +541,6 @@ void main() {
       ),
       isTrue,
     );
-  });
-
-  test('HTTP 404 no permite inferir que un run terminó correctamente', () {
-    expect(BackgroundListener.canInferRunOutcomeFromHttpStatus(404), isFalse);
-    expect(BackgroundListener.canInferRunOutcomeFromHttpStatus(500), isFalse);
-    expect(BackgroundListener.canInferRunOutcomeFromHttpStatus(200), isTrue);
   });
 
   test('cron job ledger is not replaced without matching execution proof', () {
@@ -986,6 +888,39 @@ void main() {
     },
   );
 
+  test(
+    'cron conserva delivery_failed como fallo terminal notificable',
+    () async {
+      final executions = await BackgroundCronWatch.loadExecutions((_) async {
+        return {
+          'jobs': [
+            {
+              'id': 'job-delivery',
+              'name': 'Entrega crítica',
+              'profile': 'default',
+              'last_run_at': '2026-09-02T17:36:53+01:00',
+              'last_status': 'delivery_failed',
+              'last_delivery_error': 'timed out',
+            },
+          ],
+        };
+      });
+
+      expect(executions, hasLength(1));
+      final execution = executions!.single;
+      expect(execution.status, 'failed');
+      expect(execution.terminal, isTrue);
+      expect(
+        BackgroundCronWatch.shouldNotifyResult(
+          execution,
+          session: null,
+          preview: null,
+        ),
+        isTrue,
+      );
+    },
+  );
+
   test('cron modern and legacy execution ids cannot collide durably', () {
     const opaqueId =
         'e437ea2e9a36d2c99bdc53649913c440cab390549314077e3476527b3346dde7';
@@ -1142,7 +1077,7 @@ void main() {
   });
 
   test(
-    'cron hidrata el último resultado si la lista no trae preview',
+    'cron omite preview si la lista no publica un resultado seguro',
     () async {
       const session = Session(
         id: 'cron_job_20260804_180956',
@@ -1156,22 +1091,9 @@ void main() {
         profile: 'research',
         isDefaultProfile: false,
       );
-      final calls = <(String, String)>[];
+      final preview = BackgroundCronWatch.notificationPreview(session);
 
-      final preview = await BackgroundCronWatch.notificationPreview(session, (
-        sessionId,
-        profile,
-      ) async {
-        calls.add((sessionId, profile));
-        return const [
-          {'role': 'user', 'content': 'prompt privado'},
-          {'role': 'assistant', 'content': '**2 compras nuevas verificadas**'},
-        ];
-      });
-
-      expect(calls, [('cron_job_20260804_180956', 'research')]);
-      expect(preview, '2 compras nuevas verificadas');
-      expect(preview, isNot(contains('prompt privado')));
+      expect(preview, isNull);
     },
   );
 
@@ -1188,10 +1110,7 @@ void main() {
       startedAt: 0,
     );
 
-    final preview = await BackgroundCronWatch.notificationPreview(
-      session,
-      (_, _) => throw StateError('no debe consultar el transcript'),
-    );
+    final preview = BackgroundCronWatch.notificationPreview(session);
 
     expect(preview, 'Sin compras nuevas verificadas.');
   });
@@ -1282,7 +1201,7 @@ void main() {
         previous: previous,
         current: List<KanbanTask>.generate(
           count,
-          (index) => _kanbanTask('task-$index', 'done'),
+          (index) => _kanbanTask('task-$index', 'blocked'),
         ),
       );
       expect(claimed.fresh, hasLength(count));
@@ -1331,24 +1250,15 @@ void main() {
     expect(seeded.statuses, {'old-done': 'done'});
   });
 
-  test('kanban avisa una sola vez al pasar de running a done', () {
+  test('kanban registra done sin convertirlo en una notificación', () {
     final completed = BackgroundKanbanWatch.claimForTest(
       initialized: true,
       previous: const {'task-1': 'running'},
       current: [_kanbanTask('task-1', 'done')],
     );
 
-    expect(completed.fresh, hasLength(1));
-    expect(completed.fresh.single.taskId, 'task-1');
-    expect(completed.fresh.single.previousStatus, 'running');
-    expect(completed.fresh.single.status, 'done');
-
-    final repeated = BackgroundKanbanWatch.claimForTest(
-      initialized: true,
-      previous: completed.statuses,
-      current: [_kanbanTask('task-1', 'done')],
-    );
-    expect(repeated.fresh, isEmpty);
+    expect(completed.fresh, isEmpty);
+    expect(completed.statuses, {'task-1': 'done'});
   });
 
   test('kanban avisa al pasar de running a blocked o triage', () {

@@ -1,0 +1,67 @@
+name: Stage stable upstream RU update
+
+on:
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    if: github.repository == 'dedtsss/hermes-console'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Detect published stable release
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tool/fork/sync.py detect > "$RUNNER_TEMP/stable-release.json"
+          cat "$RUNNER_TEMP/stable-release.json" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '"behind=\(.behind)", "tag=\(.latest)"' "$RUNNER_TEMP/stable-release.json" >> "$GITHUB_OUTPUT"
+          pending="$(gh pr list --repo dedtsss/hermes-console --state open --json headRefName --jq '[.[] | select(.headRefName | startswith("sync/upstream-"))] | length')"
+          echo "pending=$pending" >> "$GITHUB_OUTPUT"
+      - name: Stage isolated update and translation delta
+        if: steps.detect.outputs.behind == 'true' && steps.detect.outputs.pending == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STABLE_TAG: ${{ steps.detect.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python3 tool/fork/sync.py stage --tag "$STABLE_TAG" --output "$RUNNER_TEMP/stable-sync"
+      - name: Push one source branch and create draft PR
+        if: steps.detect.outputs.behind == 'true' && steps.detect.outputs.pending == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STABLE_TAG: ${{ steps.detect.outputs.tag }}
+        run: |
+          set -euo pipefail
+          branch="sync/upstream-$STABLE_TAG"
+          git -C "$RUNNER_TEMP/stable-sync" -c credential.helper= \
+            -c 'credential.helper=!gh auth git-credential' \
+            push origin "HEAD:refs/heads/$branch"
+          gh pr create --repo dedtsss/hermes-console --base main --head "$branch" --draft \
+            --title "Sync stable upstream $STABLE_TAG (RU review required)" \
+            --body-file tool/fork/sync-pr.md
+          # GITHUB_TOKEN PR events do not trigger other workflows. Dispatch the
+          # same authoritative checks explicitly on the staged branch.
+          gh workflow run pr-quality.yml --repo dedtsss/hermes-console --ref "$branch"
+          gh workflow run fork-android-check.yml --repo dedtsss/hermes-console --ref "$branch"
+          gh workflow run e2e-real-gateway.yml --repo dedtsss/hermes-console --ref "$branch"

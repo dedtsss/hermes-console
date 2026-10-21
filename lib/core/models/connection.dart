@@ -22,7 +22,10 @@ enum AuthMode {
   final String storageKey;
   final String label;
 
-  static AuthMode fromStorage(String? value, {AuthMode fallback = AuthMode.unknown}) {
+  static AuthMode fromStorage(
+    String? value, {
+    AuthMode fallback = AuthMode.unknown,
+  }) {
     return AuthMode.values.firstWhere(
       (m) => m.storageKey == value,
       orElse: () => fallback,
@@ -30,7 +33,7 @@ enum AuthMode {
   }
 }
 
-/// Modo de chat para instancias locales (Termux / on-device bridge).
+/// Modo de chat para instancias locales (en el propio dispositivo).
 ///
 /// [auto] = la app elige según el modelo detectado (OlliteRT/Ollama pequeño →
 ///   simple, agente capaz → completo). Si no se puede detectar, usa [simple].
@@ -94,15 +97,14 @@ bool _checkAndroidEmulator() {
 /// On real devices this returns [host] unchanged.
 ///
 /// [onDeviceLoopback] desactiva la reescritura: el servicio corre en ESTE mismo
-/// dispositivo (p.ej. el agente local Termux, que escucha en 127.0.0.1 del
+/// dispositivo (p.ej. un Hermes local, que escucha en 127.0.0.1 del
 /// propio Android). Reescribir a 10.0.2.2 lo mandaría al host de desarrollo y
 /// nunca conectaría. Solo las instancias que apuntan al host del PC deben
 /// reescribirse.
 String _resolveHost(String host, {bool onDeviceLoopback = false}) {
   if (onDeviceLoopback) return host;
   _onAndroidEmulator ??= _checkAndroidEmulator();
-  if (_onAndroidEmulator! &&
-      (host == '127.0.0.1' || host == 'localhost')) {
+  if (_onAndroidEmulator! && (host == '127.0.0.1' || host == 'localhost')) {
     return '10.0.2.2';
   }
   return host;
@@ -110,7 +112,7 @@ String _resolveHost(String host, {bool onDeviceLoopback = false}) {
 
 /// Versión pública de la reescritura de loopback para servicios que viven en el
 /// HOST de desarrollo (no instancias [SavedConnection]). El caso de uso es
-/// Ollama: en un dispositivo real con Termux corre en `127.0.0.1` del propio
+/// Ollama: en un dispositivo real corre en `127.0.0.1` del propio
 /// Android (se devuelve sin tocar), pero en el emulador el daemon de Ollama
 /// corre en el host de desarrollo, accesible vía `10.0.2.2`.
 String resolveEmulatorLoopback(String host) => _resolveHost(host);
@@ -142,6 +144,76 @@ InstanceKind inferInstanceKind(String host) {
       if (a == 172 && b >= 16 && b <= 31) return InstanceKind.homelab;
     }
   }
+  return InstanceKind.vps;
+}
+
+/// The kinds a person can pick for a new connection, in the order they are
+/// shown. [InstanceKind.localhost] is the retired on-device agent: it is never
+/// offered, but a saved connection that has it keeps it and keeps its icon.
+const List<InstanceKind> kOfferedInstanceKinds = [
+  InstanceKind.homelab,
+  InstanceKind.vps,
+  InstanceKind.tailscale,
+  InstanceKind.pc,
+];
+
+/// The kind to preselect for a new connection, from its address alone (no
+/// network call). The person can always change it.
+///
+///   loopback (`localhost`, 127.0.0.0/8, `::1`, the emulator's 10.0.2.2)
+///                                                   -> [InstanceKind.pc]
+///   Tailscale: `*.ts.net`, 100.64.0.0/10 (CGNAT), fd7a:115c:a1e0::/48
+///                                                   -> [InstanceKind.tailscale]
+///   private LAN: 10/8, 172.16/12, 192.168/16, 169.254/16 (link-local),
+///   IPv6 fc00::/7 and fe80::/10, `*.local` (mDNS), `*.lan`, `*.home.arpa`,
+///   and a bare one-word name such as `nas`        -> [InstanceKind.homelab]
+///   anything else (a public address or a dotted hostname)
+///                                                   -> [InstanceKind.vps]
+///
+/// Unlike [inferInstanceKind] it never answers [InstanceKind.localhost], which
+/// is not offered any more, and it understands mDNS names and IPv6.
+InstanceKind suggestInstanceKind(String host) {
+  var h = host.trim().toLowerCase();
+  if (h.startsWith('[') && h.endsWith(']')) h = h.substring(1, h.length - 1);
+  final zone = h.indexOf('%');
+  if (zone >= 0) h = h.substring(0, zone);
+  while (h.endsWith('.')) {
+    h = h.substring(0, h.length - 1);
+  }
+  if (h.isEmpty) return InstanceKind.vps;
+  if (h == 'localhost' || h.endsWith('.localhost') || h == '10.0.2.2') {
+    return InstanceKind.pc;
+  }
+  if (h.endsWith('.ts.net')) return InstanceKind.tailscale;
+  final ip = InternetAddress.tryParse(h);
+  if (ip != null) {
+    if (ip.isLoopback) return InstanceKind.pc;
+    final b = ip.rawAddress;
+    if (ip.type == InternetAddressType.IPv4) {
+      if (b[0] == 100 && b[1] >= 64 && b[1] <= 127) {
+        return InstanceKind.tailscale;
+      }
+      if (b[0] == 10 ||
+          (b[0] == 192 && b[1] == 168) ||
+          (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
+          (b[0] == 169 && b[1] == 254)) {
+        return InstanceKind.homelab;
+      }
+      return InstanceKind.vps;
+    }
+    // IPv6: Tailscale's fd7a:115c:a1e0::/48 sits inside the unique-local range.
+    if (b[0] == 0xfd && b[1] == 0x7a && b[2] == 0x11 && b[3] == 0x5c) {
+      return InstanceKind.tailscale;
+    }
+    if ((b[0] & 0xfe) == 0xfc || (b[0] == 0xfe && (b[1] & 0xc0) == 0x80)) {
+      return InstanceKind.homelab;
+    }
+    return InstanceKind.vps;
+  }
+  if (h.endsWith('.local') || h.endsWith('.lan') || h.endsWith('.home.arpa')) {
+    return InstanceKind.homelab;
+  }
+  if (!h.contains('.') && !h.contains(':')) return InstanceKind.homelab;
   return InstanceKind.vps;
 }
 
@@ -192,7 +264,7 @@ class SavedConnection {
   final int? lastHealthCheckMs;
 
   /// Los servicios de esta instancia corren en ESTE mismo dispositivo (loopback
-  /// del propio Android), p.ej. el agente local Termux. Desactiva la reescritura
+  /// del propio Android), p.ej. un Hermes local. Desactiva la reescritura
   /// 127.0.0.1→10.0.2.2 del emulador, que solo aplica a servidores en el host.
   final bool onDeviceLoopback;
 
@@ -258,7 +330,8 @@ class SavedConnection {
 
   /// Reescribe el loopback según el entorno, salvo que la instancia sea
   /// on-device (sus servicios viven en este mismo Android).
-  String _resolved(String h) => _resolveHost(h, onDeviceLoopback: onDeviceLoopback);
+  String _resolved(String h) =>
+      _resolveHost(h, onDeviceLoopback: onDeviceLoopback);
 
   String get baseUrl {
     final scheme = useHttps ? 'https' : 'http';
@@ -268,16 +341,6 @@ class SavedConnection {
   /// Alias semántico: URL del Gateway API Server.
   String get gatewayUrl => baseUrl;
 
-  /// Puerto por defecto del Mobile Bridge (servicio opcional del servidor).
-  static const int defaultBridgePort = 9131;
-
-  /// URL derivada del Mobile Bridge: mismo host que el gateway, puerto 9131.
-  /// Permite autodetectar el bridge sin que el usuario teclee IP/puerto.
-  String get derivedBridgeUrl {
-    final scheme = useHttps ? 'https' : 'http';
-    return '$scheme://${_resolved(host)}:$defaultBridgePort';
-  }
-
   /// Dashboard/API-server topology differs between local LAN and HTTPS proxy
   /// setups. Local Gateway chat connections normally use 8642 while the
   /// dashboard lives on 9119. HTTPS reverse-proxy deployments usually expose
@@ -285,7 +348,9 @@ class SavedConnection {
   int get dashboardPort {
     final explicit = dashboardUri;
     if (explicit != null) {
-      return explicit.hasPort ? explicit.port : (explicit.scheme == 'https' ? 443 : 80);
+      return explicit.hasPort
+          ? explicit.port
+          : (explicit.scheme == 'https' ? 443 : 80);
     }
     return useHttps ? port : 9119;
   }
@@ -396,7 +461,8 @@ class SavedConnection {
     final isLoopback = hLower == '127.0.0.1' || hLower == 'localhost';
     // Migración: instancias localhost loopback guardadas antes de este campo
     // son el agente local on-device → no reescribir su loopback.
-    final onDeviceLoopback = map['on_device_loopback'] as bool? ??
+    final onDeviceLoopback =
+        map['on_device_loopback'] as bool? ??
         (kind == InstanceKind.localhost && isLoopback);
     return SavedConnection(
       id: map['id'] as String,

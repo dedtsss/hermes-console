@@ -1,0 +1,154 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="lw_ahora_name">Сейчас</string>
+    <string name="lw_ahora_description">Кто ждёт вас, что выполняется и когда всё спокойно</string>
+    <string name="lw_quick_name">Быстрый чат</string>
+    <string name="lw_quick_description">Новый чат или голосовой разговор одним нажатием</string>
+    <string name="lw_quick_wide_name">Быстрый чат (широкий)</string>
+    <string name="lw_cron_name">Расписание</string>
+    <string name="lw_cron_description">Ближайшая задача по расписанию; в большом виджете — все задачи с отметками об ошибках</string>
+    <string name="lw_new">Новый</string>
+    <string name="lw_ask_hint">Спросите Hermes…</string>
+    <string name="lw_new_description">Новый чат</string>
+    <string name="lw_voice_description">Новый голосовой чат</string>
+    <string name="lw_camera_description">Новый чат с камерой</string>
+    <string name="lw_open_description">Открыть Console</string>
+    <string name="lw_agent">Hermes</string>
+    <string name="lw_calm">Всё спокойно</string>
+    <string name="lw_setup">Настроить Hermes</string>
+    <string name="lw_setup_hint">Откройте Console для начала</string>
+    <string name="lw_no_connection">Нет соединения</string>
+    <string name="lw_since">с %1$s</string>
+    <string name="lw_since_one">с %1$s</string>
+    <string name="lw_since_yesterday">со вчера</string>
+    <string name="lw_since_day">с %1$s</string>
+    <string name="lw_asks_permission">%1$s запрашивает разрешение</string>
+    <string name="lw_asks_permission_short">запрашивает разрешение</string>
+    <string name="lw_asks_you">%1$s спрашивает вас</string>
+    <string name="lw_asks_you_short">спрашивает вас</string>
+    <string name="lw_needs_you_who">%1$s ждёт вас</string>
+    <string name="lw_needs_you_short">ждёт вас</string>
+    <string name="lw_needs_you_word">Ждёт вас</string>
+    <string name="lw_allow">Разрешить</string>
+    <string name="lw_deny">Отклонить</string>
+    <string name="lw_allow_short">Да</string>
+    <string name="lw_deny_short">Нет</string>
+    <string name="lw_open">Открыть</string>
+    <string name="lw_thinking">Размышляет</string>
+    <string name="lw_responding">Отвечает</string>
+    <string name="lw_working">Работает</string>
+    <string name="lw_finished">Завершено</string>
+    <string name="lw_failed">Ошибка</string>
+    <string name="lw_finished_at">%1$s завершил работу · %2$s</string>
+    <plurals name="lw_for_you">
+        <item quantity="one">Для вас: %1$d</item>
+        <item quantity="other">Для вас: %1$d</item>
+    </plurals>
+    <plurals name="lw_running">
+        <item quantity="one">Выполняются: %1$d</item>
+        <item quantity="other">Выполняются: %1$d</item>
+    </plurals>
+    <plurals name="lw_needs_you">
+        <item quantity="one">Ждут вас: %1$d</item>
+        <item quantity="other">Ждут вас: %1$d</item>
+    </plurals>
+    <string name="lw_cron">Расписание</string>
+    <string name="lw_cron_empty">Нет задач по расписанию</string>
+    <string name="lw_cron_unknown">Откройте расписание в Console, чтобы увидеть задачи здесь</string>
+    <string name="lw_cron_unknown_short">Пока нет данных</string>
+    <string name="lw_cron_last">Последний: %1$s</string>
+    <string name="lw_cron_failed_at">Ошибка %1$s</string>
+    <string name="lw_cron_running">Выполняется</string>
+    <string name="lw_cron_never">Ещё не запускалась</string>
+    <string name="lw_cron_paused">Приостановлена</string>
+    <plurals name="lw_cron_failed">
+        <item quantity="one">С ошибкой: %1$d</item>
+        <item quantity="other">С ошибкой: %1$d</item>
+    </plurals>
+    <string name="lw_bots_name">Боты</string>
+    <string name="lw_bots_description">Лица ваших ботов и кто ждёт вас; в большом виджете — занятие каждого</string>
+    <string name="lw_bots">Боты</string>
+    <string name="lw_bot_waits">%1$s ждёт вас</string>
+    <string name="lw_bot_works">%1$s работает</string>
+    <string name="lw_bots_calm">Всё спокойно</string>
+    <string name="lw_bot_needs_you">Ждёт вас</string>
+    <string name="lw_bot_free">свободен</string>
+    <string name="lw_bots_unknown">Откройте «Боты» в Console, чтобы увидеть их здесь</string>
+    <string name="lw_bots_unknown_short">Пока нет данных</string>
+    <string name="lw_bots_empty">Ботов пока нет</string>
+    <plurals name="lw_bots_working">
+        <item quantity="one">Работают: %1$d</item>
+        <item quantity="other">Работают: %1$d</item>
+    </plurals>
+    <plurals name="lw_bots_waiting">
+        <item quantity="one">Ждут вас: %1$d</item>
+        <item quantity="other">Ждут вас: %1$d</item>
+    </plurals>
+    <string name="lw_rooms_name">Комнаты</string>
+    <string name="lw_rooms_description">Активная комната и кто отвечает; в большом виджете — больше комнат с последним сообщением</string>
+    <string name="lw_rooms">Комнаты</string>
+    <string name="lw_room_answers">%1$s отвечает</string>
+    <string name="lw_room_needs_you">%1$s ждёт вас</string>
+    <string name="lw_room_then">затем %1$s</string>
+    <string name="lw_room_said">%1$s: %2$s</string>
+    <string name="lw_room_quiet">Тихо</string>
+    <string name="lw_rooms_empty">Комнат пока нет</string>
+    <plurals name="lw_rooms_answering">
+        <item quantity="one">Отвечают: %1$d</item>
+        <item quantity="other">Отвечают: %1$d</item>
+    </plurals>
+    <plurals name="lw_rooms_waiting">
+        <item quantity="one">Ждут вас: %1$d</item>
+        <item quantity="other">Ждут вас: %1$d</item>
+    </plurals>
+    <string name="lw_tasks_name">Задачи</string>
+    <string name="lw_tasks_description">Текущая задача; в большом виджете — сначала выполняемые, затем ожидающие</string>
+    <string name="lw_tasks">Задачи</string>
+    <string name="lw_task_running">выполняется</string>
+    <string name="lw_task_attention">Ждёт вас</string>
+    <string name="lw_task_pending">Ожидает</string>
+    <string name="lw_tasks_empty">Нет ожидающих задач</string>
+    <string name="lw_tasks_unknown">Откройте «Задачи» в Console, чтобы увидеть их здесь</string>
+    <plurals name="lw_task_pending_more">
+        <item quantity="one">Ожидают · +%1$d</item>
+        <item quantity="other">Ожидают · +%1$d</item>
+    </plurals>
+    <plurals name="lw_tasks_running">
+        <item quantity="one">Выполняются: %1$d</item>
+        <item quantity="other">Выполняются: %1$d</item>
+    </plurals>
+    <plurals name="lw_tasks_attention">
+        <item quantity="one">Ждут вас: %1$d</item>
+        <item quantity="other">Ждут вас: %1$d</item>
+    </plurals>
+    <plurals name="lw_tasks_pending">
+        <item quantity="one">Ожидают: %1$d</item>
+        <item quantity="other">Ожидают: %1$d</item>
+    </plurals>
+    <string name="lw_chats_name">Чаты</string>
+    <string name="lw_chats_description">Активный разговор; в большом виджете — недавние разговоры и их состояние</string>
+    <string name="lw_chats">Чаты</string>
+    <string name="lw_chat_working">Работает</string>
+    <string name="lw_chat_finished">Завершён · %1$s</string>
+    <string name="lw_asks_permission_word">Запрашивает разрешение</string>
+    <string name="lw_asks_you_word">Спрашивает вас</string>
+    <string name="lw_view">Посмотреть</string>
+    <string name="lw_chats_empty">Чатов пока нет</string>
+    <string name="lw_chats_unknown">Откройте «Чаты» в Console, чтобы увидеть их здесь</string>
+    <string name="lw_today">сегодня</string>
+    <string name="lw_tomorrow">завтра</string>
+    <string name="lw_yesterday">вчера</string>
+    <string name="lw_day_time">%1$s %2$s</string>
+    <string name="lw_day_at_time">%1$s в %2$s</string>
+    <string name="lw_day_at_time_one">%1$s в %2$s</string>
+    <string name="lw_sample_cron_job">Ежедневная сводка</string>
+    <string name="lw_sample_cron_next">сегодня 21:00</string>
+    <string name="lw_sample_chat">План на неделю</string>
+    <string name="lw_sample_chat_line">Работает · 0:42</string>
+    <string name="lw_sample_room">Команда</string>
+    <string name="lw_sample_task">Опубликовать релиз</string>
+    <string name="lw_sample_task_line">Сборщик · выполняется</string>
+    <string name="lw_sample_room_line">Сборщик отвечает</string>
+    <string name="lw_sample_run_title">Hermes · Терминал</string>
+    <string name="lw_sample_run_about">Еженедельный отчёт</string>
+</resources>

@@ -3,59 +3,6 @@ import 'connection_manager.dart';
 
 enum CronProfileScope { active, all }
 
-const _cronCleanupPageSize = 100;
-const _cronCleanupBatchSize = 500;
-
-/// Snapshot que el usuario confirma antes de borrar conversaciones de Cron.
-///
-/// Conserva las sesiones, y no solo el contador, para que la acción destructiva
-/// borre exactamente la selección que se mostró en el diálogo. Una ejecución
-/// nueva creada después de la confirmación queda fuera.
-class CronConversationCleanupPreview {
-  final List<Session> sessions;
-
-  CronConversationCleanupPreview(Iterable<Session> sessions)
-    : sessions = List<Session>.unmodifiable(sessions);
-
-  int get count => sessions.length;
-  bool get isEmpty => sessions.isEmpty;
-}
-
-class CronConversationCleanupResult {
-  final int requested;
-  final int deleted;
-
-  const CronConversationCleanupResult({
-    required this.requested,
-    required this.deleted,
-  });
-
-  int get preserved => requested - deleted;
-}
-
-/// Defensa local adicional al filtro `source=cron` del Dashboard.
-///
-/// Deduplica por ID y nunca permite que una respuesta defectuosa mezcle una
-/// conversación normal en la selección destructiva. `isActive` es la señal
-/// autoritativa del Dashboard: las versiones actuales la apagan cuando una
-/// fila sin `ended_at` lleva más de cinco minutos sin actividad. Así se pueden
-/// limpiar huérfanas antiguas sin tratar como borrable una ejecución viva. En
-/// servidores legacy que no publican `is_active`, [Session.fromJson] sigue
-/// fallando cerrado y deriva `true` de la ausencia de `ended_at`.
-List<Session> cronSessionsSafeForCleanup(Iterable<Session> sessions) {
-  final byId = <String, Session>{};
-  for (final session in sessions) {
-    if (!session.isJob ||
-        session.id.trim().isEmpty ||
-        session.isActive ||
-        session.pinned == true) {
-      continue;
-    }
-    byId.putIfAbsent(session.id, () => session);
-  }
-  return List<Session>.unmodifiable(byId.values);
-}
-
 class CronJobListing {
   final List<CronJob> jobs;
   final CronProfileScope requestedScope;
@@ -72,13 +19,9 @@ class CronJobListing {
 class CronRepository {
   final DashboardClient client;
   final String profile;
+  final bool botRoutines;
 
-  const CronRepository(this.client, {this.profile = ''});
-
-  String get _cleanupProfile {
-    final selected = profile.trim();
-    return selected.isEmpty ? 'default' : selected;
-  }
+  const CronRepository(this.client, {this.profile = '', this.botRoutines = false});
 
   String _query({bool hasQuery = false}) {
     if (profile.isEmpty) return '';
@@ -118,11 +61,59 @@ class CronRepository {
         ? ''
         : '?profile=${Uri.encodeQueryComponent(selectedProfile)}';
     final data = await client.apiGetList('cron/jobs$suffix');
+    // Record where each job was read from. The server's per-job `profile`
+    // wins; without it a named read came from that profile and an unscoped
+    // read from the server's default store. An aggregated read (`all`)
+    // without it records nothing, so actions fall back to the bot owner or
+    // refuse.
+    final listed = switch (selectedProfile) {
+      'all' => null,
+      '' => 'default',
+      final named => named,
+    };
     return data
         .whereType<Map>()
-        .map((value) => CronJob.fromJson(value.cast<String, dynamic>()))
+        .map(
+          (value) => CronJob.fromJson(
+            value.cast<String, dynamic>(),
+          ).withSourceProfile(listed),
+        )
         .where((job) => job.id.isNotEmpty)
         .toList(growable: false);
+  }
+
+  /// `?profile=` (or `&profile=`) for an action on [job]: the profile that
+  /// owns it, never this repository's screen profile. The default profile
+  /// sends no query, the same as every other default-profile call.
+  static String _ownerQuery(CronJob job, {bool hasQuery = false}) {
+    final owner = ownerProfileOf(job);
+    if (owner == 'default') return '';
+    return '${hasQuery ? '&' : '?'}profile=${Uri.encodeQueryComponent(owner)}';
+  }
+
+  /// Profile that owns [job]; throws [CronJobOwnerUnknownException] when it
+  /// cannot be told, so nothing is sent to a guessed profile.
+  static String ownerProfileOf(CronJob job) {
+    final owner = job.targetProfile;
+    if (owner == null) throw CronJobOwnerUnknownException(job.id);
+    return owner;
+  }
+
+  /// Runs an action on [job] in its owner profile. A 404 there means the
+  /// job is not in that profile: typed, never a success.
+  static Future<CronJob> _onOwner(
+    CronJob job,
+    Future<Map<String, dynamic>> Function(String query) send, {
+    bool hasQuery = false,
+  }) async {
+    final query = _ownerQuery(job, hasQuery: hasQuery);
+    final owner = ownerProfileOf(job);
+    try {
+      return CronJob.fromJson(await send(query)).withSourceProfile(owner);
+    } on DashboardHttpException catch (error) {
+      if (error.statusCode == 404) throw CronJobNotFoundException(owner);
+      rethrow;
+    }
   }
 
   static bool _isUnsupportedAllProfiles(int statusCode) =>
@@ -132,10 +123,22 @@ class CronRepository {
       statusCode == 422 ||
       statusCode == 501;
 
-  Future<CronJob?> getJob(String id) async {
+  /// [profile] is the job's owner when known (see [CronJob.targetProfile]);
+  /// otherwise this repository's profile is used.
+  Future<CronJob?> getJob(String id, {String? profile}) async {
+    final owner = profile?.trim() ?? '';
+    final query = owner.isEmpty
+        ? _query()
+        : owner == 'default'
+        ? ''
+        : '?profile=${Uri.encodeQueryComponent(owner)}';
     try {
       final job = CronJob.fromJson(
-        await client.apiGet('cron/jobs/${Uri.encodeComponent(id)}${_query()}'),
+        await client.apiGet('cron/jobs/${Uri.encodeComponent(id)}$query'),
+      ).withSourceProfile(
+        owner.isNotEmpty
+            ? owner
+            : (this.profile.isEmpty ? 'default' : this.profile),
       );
       return job.id.isEmpty ? null : job;
     } on DashboardHttpException catch (error) {
@@ -162,202 +165,6 @@ class CronRepository {
       rethrow;
     }
   }
-
-  /// Carga todas las conversaciones Cron del perfil activo, incluidas las
-  /// archivadas, sin tocar programaciones. El endpoint y la paginación son los
-  /// mismos del Dashboard oficial de Hermes Agent 0.20.
-  Future<List<Session>> _listCronConversationSessions() async {
-    final sessionsById = <String, Session>{};
-    var offset = 0;
-    int? expectedTotal;
-
-    while (true) {
-      final params = <String, String>{
-        'source': 'cron',
-        'archived': 'include',
-        'order': 'recent',
-        'limit': '$_cronCleanupPageSize',
-        'offset': '$offset',
-        'min_messages': '0',
-        'full': '0',
-        'profile': _cleanupProfile,
-      };
-      final data = await client.apiGet(
-        'sessions?${Uri(queryParameters: params).query}',
-      );
-      final rawRows = data['sessions'];
-      if (rawRows is! List) {
-        throw const FormatException('Invalid Cron session listing');
-      }
-
-      final previousCount = sessionsById.length;
-      for (final rawRow in rawRows) {
-        final session = Session.tryParse(rawRow);
-        if (session == null ||
-            !session.isJob ||
-            session.id.trim().isEmpty ||
-            sessionsById.containsKey(session.id)) {
-          throw const FormatException('Ambiguous Cron session listing');
-        }
-        sessionsById[session.id] = session;
-      }
-
-      final rawTotal = data['total'];
-      if (rawTotal != null) {
-        if (rawTotal is! num ||
-            !rawTotal.isFinite ||
-            rawTotal < 0 ||
-            rawTotal.toInt() != rawTotal) {
-          throw const FormatException('Invalid Cron session total');
-        }
-        final pageTotal = rawTotal.toInt();
-        if (expectedTotal != null && expectedTotal != pageTotal) {
-          throw const FormatException('Cron session total changed');
-        }
-        expectedTotal = pageTotal;
-      }
-
-      if (rawRows.isEmpty) {
-        if (expectedTotal != null && offset < expectedTotal) {
-          throw const FormatException('Incomplete Cron session listing');
-        }
-        break;
-      }
-
-      offset += _cronCleanupPageSize;
-      if (expectedTotal != null) {
-        if (offset >= expectedTotal) break;
-        if (sessionsById.length == previousCount) {
-          throw const FormatException(
-            'Cron session pagination did not advance',
-          );
-        }
-      } else if (rawRows.length < _cronCleanupPageSize) {
-        break;
-      } else if (sessionsById.length == previousCount) {
-        throw const FormatException('Cron session pagination did not advance');
-      }
-    }
-
-    if (expectedTotal != null && sessionsById.length != expectedTotal) {
-      throw const FormatException('Cron session total does not match rows');
-    }
-    return List<Session>.unmodifiable(sessionsById.values);
-  }
-
-  Future<CronConversationCleanupPreview> previewConversationCleanup() async {
-    final sessions = await _listCronConversationSessions();
-    return CronConversationCleanupPreview(cronSessionsSafeForCleanup(sessions));
-  }
-
-  /// Borra exclusivamente el snapshot de conversaciones Cron confirmado por
-  /// el usuario. `POST /api/sessions/bulk-delete` limita cada transacción a
-  /// 500 IDs; servidores antiguos degradan al DELETE individual que usa
-  /// Hermes Desktop. Ningún camino llama a `/api/cron/jobs`.
-  Future<CronConversationCleanupResult> deleteCronConversations(
-    CronConversationCleanupPreview preview,
-  ) async {
-    final safeSessions = cronSessionsSafeForCleanup(preview.sessions);
-    final previewIds = preview.sessions.map((session) => session.id).toSet();
-    if (safeSessions.length != previewIds.length) {
-      throw StateError('Cron cleanup selection contains a non-Cron session');
-    }
-    if (safeSessions.isEmpty) {
-      return const CronConversationCleanupResult(requested: 0, deleted: 0);
-    }
-
-    final confirmedLogicalIds = safeSessions
-        .map((session) => session.logicalId)
-        .toSet();
-    // Revalida el snapshot antes del primer DELETE. Una conversación que pasó
-    // a activa/fijada o un listado cuyo total ya no es coherente falla cerrado
-    // o queda preservado sin alcanzar el endpoint destructivo.
-    var inventory = await _listCronConversationSessions();
-    var pending = cronSessionsSafeForCleanup(
-      inventory.where(
-        (session) => confirmedLogicalIds.contains(session.logicalId),
-      ),
-    );
-    var lineagePasses = 0;
-
-    while (pending.isNotEmpty && lineagePasses < 64) {
-      lineagePasses++;
-      final attemptedIds = pending.map((session) => session.id).toSet();
-      await _deleteCronSessionIds(pending);
-
-      // El listado proyecta una cadena compactada a su punta. Al borrar esa
-      // punta, la raíz o una continuación anterior puede volver a aflorar. Se
-      // elimina únicamente si conserva el logicalId que el usuario confirmó;
-      // una ejecución nueva de la misma tarea tiene otro logicalId y queda fuera.
-      inventory = await _listCronConversationSessions();
-      final matching = inventory.where(
-        (session) => confirmedLogicalIds.contains(session.logicalId),
-      );
-      final nextPending = cronSessionsSafeForCleanup(matching);
-      final nextIds = nextPending.map((session) => session.id).toSet();
-      if (nextIds.isEmpty || nextIds.difference(attemptedIds).isEmpty) break;
-      pending = nextPending;
-    }
-
-    final remainingLogicalIds = inventory
-        .where((session) => confirmedLogicalIds.contains(session.logicalId))
-        .map((session) => session.logicalId)
-        .toSet();
-    return CronConversationCleanupResult(
-      requested: confirmedLogicalIds.length,
-      deleted: confirmedLogicalIds.length - remainingLogicalIds.length,
-    );
-  }
-
-  Future<void> _deleteCronSessionIds(List<Session> safeSessions) async {
-    var bulkDeleteSupported = true;
-    for (
-      var start = 0;
-      start < safeSessions.length;
-      start += _cronCleanupBatchSize
-    ) {
-      final end = (start + _cronCleanupBatchSize).clamp(0, safeSessions.length);
-      final batch = safeSessions.sublist(start, end);
-      final ids = batch.map((session) => session.id).toList(growable: false);
-
-      if (bulkDeleteSupported) {
-        try {
-          final response = await client.apiPost(
-            'sessions/bulk-delete',
-            body: {'ids': ids, 'profile': _cleanupProfile},
-          );
-          final rawDeleted = response['deleted'];
-          if (response['ok'] != true ||
-              rawDeleted is! num ||
-              !rawDeleted.isFinite ||
-              rawDeleted < 0 ||
-              rawDeleted > ids.length) {
-            throw const FormatException('Invalid Cron bulk-delete response');
-          }
-          continue;
-        } on DashboardHttpException catch (error) {
-          if (!_isUnsupportedBulkDelete(error.statusCode)) rethrow;
-          bulkDeleteSupported = false;
-        }
-      }
-
-      for (final id in ids) {
-        try {
-          await client.apiDelete(
-            'sessions/${Uri.encodeComponent(id)}?profile='
-            '${Uri.encodeQueryComponent(_cleanupProfile)}',
-          );
-        } on DashboardHttpException catch (error) {
-          // Carrera idempotente: otra pestaña pudo borrar la fila tras el
-          // preview. Cualquier otro estado se propaga y no se disfraza.
-          if (error.statusCode != 404) rethrow;
-        }
-      }
-    }
-  }
-
-  static bool _isUnsupportedBulkDelete(int statusCode) =>
-      statusCode == 404 || statusCode == 405 || statusCode == 501;
 
   Future<List<CronDeliveryTarget>> deliveryTargets() async {
     try {
@@ -458,13 +265,17 @@ class CronRepository {
       body: {
         'prompt': prompt,
         'schedule': schedule,
-        if (name.isNotEmpty) 'name': name,
+        if (botRoutines) 'name': botRoutineName(profile, name, prompt)
+        else if (name.isNotEmpty) 'name': name,
         'deliver': deliver.isEmpty ? 'local' : deliver,
         if (model.isNotEmpty) 'model': model,
         if (model.isNotEmpty && provider.isNotEmpty) 'provider': provider,
       },
     );
-    return CronJob.fromJson(data);
+    // Created in this repository's profile.
+    return CronJob.fromJson(
+      data,
+    ).withSourceProfile(profile.isEmpty ? 'default' : profile);
   }
 
   Future<CronJob> update(
@@ -476,35 +287,47 @@ class CronRepository {
     required String model,
     required String provider,
   }) async {
+    final owner = ownerProfileOf(job);
     final updates = <String, dynamic>{
-      'name': name,
+      'name': botRoutines ? botRoutineName(owner, name, prompt) : name,
       'schedule': schedule,
       'deliver': deliver,
       if (!job.isScriptOnly || prompt.isNotEmpty) 'prompt': prompt,
       if (!job.isScriptOnly) 'model': model.isEmpty ? null : model,
       if (!job.isScriptOnly) 'provider': provider.isEmpty ? null : provider,
     };
-    final data = await client.apiPut(
-      'cron/jobs/${Uri.encodeComponent(job.id)}${_query()}',
-      body: {'updates': updates},
+    return _onOwner(
+      job,
+      (query) => client.apiPut(
+        'cron/jobs/${Uri.encodeComponent(job.id)}$query',
+        body: {'updates': updates},
+      ),
     );
-    return CronJob.fromJson(data);
   }
 
-  Future<CronJob> pauseOrResume(CronJob job) async {
+  Future<CronJob> pauseOrResume(CronJob job) {
     final action = job.isPaused ? 'resume' : 'pause';
-    final data = await client.apiPost(
-      'cron/jobs/${Uri.encodeComponent(job.id)}/$action${_query()}',
+    return _onOwner(
+      job,
+      (query) => client.apiPost(
+        'cron/jobs/${Uri.encodeComponent(job.id)}/$action$query',
+      ),
     );
-    return CronJob.fromJson(data);
   }
 
-  Future<CronJob> trigger(CronJob job) async {
-    final data = await client.apiPost(
-      'cron/jobs/${Uri.encodeComponent(job.id)}/trigger${_query()}',
+  /// Runs job [id] now (notification "Retry"); same endpoint as [trigger].
+  Future<void> triggerById(String id) async {
+    await client.apiPost(
+      'cron/jobs/${Uri.encodeComponent(id)}/trigger${_query()}',
     );
-    return CronJob.fromJson(data);
   }
+
+  Future<CronJob> trigger(CronJob job) => _onOwner(
+    job,
+    (query) => client.apiPost(
+      'cron/jobs/${Uri.encodeComponent(job.id)}/trigger$query',
+    ),
+  );
 
   Future<CronJob> instantiateBlueprint(
     AutomationBlueprint blueprint,
@@ -515,6 +338,14 @@ class CronRepository {
       'cron/blueprints/instantiate?profile=${Uri.encodeQueryComponent(targetProfile)}',
       body: {'blueprint': blueprint.key, 'values': values},
     );
-    return CronJob.fromJson(data);
+    return CronJob.fromJson(data).withSourceProfile(targetProfile);
   }
+}
+
+String botRoutineName(String profile, String name, String prompt) {
+  final owner = profile.trim().isEmpty ? 'default' : profile.trim();
+  final prefix = '[bot:$owner] ';
+  if (name.startsWith(prefix)) return name;
+  final title = name.trim().isNotEmpty ? name.trim() : prompt.trim().split('\n').first;
+  return '$prefix${title.length > 80 ? title.substring(0, 80) : title}';
 }

@@ -2,13 +2,18 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 import '../theme/component_profile.dart';
+import '../theme/motion.dart';
+import '../design/floating.dart';
+import '../design/modal.dart' show showHermesSurface;
 
-/// Abre una superficie modal centrada sin depender de `showDialog`.
+/// Legacy entry point of the ONE floating modal container (spec 080).
 ///
-/// La ruta conserva un [FocusScopeNode] propio y lo libera antes de cerrarse.
-/// Esto permite alojar buscadores y editores sin mantener un `EditableText`
-/// enlazado al overlay que ya se está desmontando. La geometría es la misma en
-/// móvil y tablet: margen seguro, ancho acotado y scroll a cargo del contenido.
+/// Delegates to [showHermesSurface]: rounded 22, content-sized, scrim,
+/// IME-aware, clamped inner scrolling, anchored to [anchorKey]/[originRect]
+/// when given and centred otherwise. Never a bottom sheet. Legacy callers are
+/// mostly forms and details that become pages in spec 080 steps 6–8, so this
+/// wrapper keeps their 0.88 height cap; new pickers use [showHermesSurface]
+/// (70 %) or [showHermesOptions].
 Future<T?> showHermesFloatingSurface<T>({
   required BuildContext context,
   required WidgetBuilder builder,
@@ -18,147 +23,208 @@ Future<T?> showHermesFloatingSurface<T>({
   bool barrierDismissible = true,
   bool systemDismissible = true,
   bool useRootNavigator = false,
-}) {
-  assert(maxWidth > 0);
-  assert(maxHeightFactor > 0 && maxHeightFactor <= 1);
-  final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-  final focusScopeNode = FocusScopeNode(debugLabel: 'HermesFloatingSurface');
-  return Navigator.of(context, rootNavigator: useRootNavigator).push<T>(
-    _HermesFloatingSurfaceRoute<T>(
-      builder: builder,
-      focusScopeNode: focusScopeNode,
-      surfaceKey: surfaceKey,
-      maxWidth: maxWidth,
-      maxHeightFactor: maxHeightFactor,
-      barrierDismissible: barrierDismissible,
-      systemDismissible: systemDismissible,
-      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
-      reduceMotion: reduceMotion,
-    ),
-  );
-}
+  GlobalKey? anchorKey,
+  Rect? originRect,
+}) => showHermesSurface<T>(
+  context: context,
+  builder: builder,
+  surfaceKey: surfaceKey,
+  maxWidth: maxWidth,
+  maxHeightFactor: maxHeightFactor,
+  barrierDismissible: barrierDismissible,
+  systemDismissible: systemDismissible,
+  useRootNavigator: useRootNavigator,
+  anchorKey: anchorKey,
+  originRect: originRect,
+);
 
-class _HermesFloatingSurfaceRoute<T> extends PageRouteBuilder<T> {
-  _HermesFloatingSurfaceRoute({
-    required WidgetBuilder builder,
-    required FocusScopeNode focusScopeNode,
-    required Key surfaceKey,
-    required double maxWidth,
-    required double maxHeightFactor,
-    required super.barrierDismissible,
-    required bool systemDismissible,
-    required String barrierLabel,
-    required bool reduceMotion,
-  }) : _focusScopeNode = focusScopeNode,
-       super(
-         opaque: false,
-         barrierColor: Colors.black.withValues(alpha: 0.56),
-         barrierLabel: barrierLabel,
-         maintainState: true,
-         transitionDuration: reduceMotion
-             ? Duration.zero
-             : const Duration(milliseconds: 220),
-         reverseTransitionDuration: reduceMotion
-             ? Duration.zero
-             : const Duration(milliseconds: 170),
-         pageBuilder: (context, animation, secondaryAnimation) => PopScope(
-           canPop: systemDismissible,
-           child: FocusScope(
-             node: focusScopeNode,
-             child: _HermesFloatingSurfaceFrame(
-               surfaceKey: surfaceKey,
-               maxWidth: maxWidth,
-               maxHeightFactor: maxHeightFactor,
-               reduceMotion: reduceMotion,
-               child: builder(context),
-             ),
-           ),
-         ),
-         transitionsBuilder: (context, animation, secondaryAnimation, child) {
-           if (reduceMotion) return child;
-           final curved = CurvedAnimation(
-             parent: animation,
-             curve: Curves.easeOutCubic,
-             reverseCurve: Curves.easeInCubic,
-           );
-           return FadeTransition(
-             opacity: curved,
-             child: ScaleTransition(
-               scale: Tween<double>(begin: 0.97, end: 1).animate(curved),
-               child: child,
-             ),
-           );
-         },
-       );
+/// Disposes [controllers] exactly when this widget actually leaves the
+/// tree, instead of on a fixed delay guessed to outlast whatever route
+/// closing animation currently wraps it.
+///
+/// `Navigator.push`'s returned future completes the instant `pop()` is
+/// called — not when the route's reverse transition finishes removing its
+/// widget subtree. A form's own `TextEditingController`s are commonly local
+/// variables owned by the function that opened the route (not by a widget
+/// with its own lifecycle), so disposing them right after that future
+/// resolves races the still-mounted `TextField` against its now-disposed
+/// controller. Wrapping the route content here ties disposal to the actual
+/// unmount instead of a magic duration.
+class DisposeControllersOnUnmount extends StatefulWidget {
+  const DisposeControllersOnUnmount({
+    super.key,
+    required this.controllers,
+    required this.child,
+  });
 
-  final FocusScopeNode _focusScopeNode;
+  final List<ChangeNotifier> controllers;
+  final Widget child;
 
   @override
-  bool didPop(T? result) {
-    _focusScopeNode.unfocus(disposition: UnfocusDisposition.scope);
-    return super.didPop(result);
-  }
+  State<DisposeControllersOnUnmount> createState() =>
+      _DisposeControllersOnUnmountState();
+}
+
+class _DisposeControllersOnUnmountState
+    extends State<DisposeControllersOnUnmount> {
+  @override
+  Widget build(BuildContext context) => widget.child;
 
   @override
   void dispose() {
-    _focusScopeNode.dispose();
+    for (final controller in widget.controllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 }
 
-class _HermesFloatingSurfaceFrame extends StatelessWidget {
-  const _HermesFloatingSurfaceFrame({
-    required this.surfaceKey,
-    required this.maxWidth,
-    required this.maxHeightFactor,
-    required this.reduceMotion,
-    required this.child,
+/// Floating confirmation dialog: the app's one confirm-dialog shell.
+///
+/// Reuses [showHermesFloatingSurface] for the actual chrome (opaque surface,
+/// radius 22, soft shadow) so every confirmation in the app shares the same
+/// shell instead of hand-rolling `AlertDialog`. No divider sits above the
+/// actions; the destructive action renders as a filled pill in
+/// [HermesThemeColors.error] rather than a boxed Material button.
+Future<bool> showHermesConfirmDialog({
+  required BuildContext context,
+  required String title,
+  required String message,
+  required String confirmLabel,
+  required String cancelLabel,
+  bool destructive = false,
+  bool useRootNavigator = false,
+}) async {
+  final result = await showHermesFloatingSurface<bool>(
+    context: context,
+    surfaceKey: const ValueKey('hermes-confirm-dialog'),
+    maxWidth: 400,
+    maxHeightFactor: 0.5,
+    useRootNavigator: useRootNavigator,
+    builder: (dialogCtx) => _HermesConfirmDialogBody(
+      title: title,
+      message: message,
+      confirmLabel: confirmLabel,
+      cancelLabel: cancelLabel,
+      destructive: destructive,
+    ),
+  );
+  return result == true;
+}
+
+class _HermesConfirmDialogBody extends StatelessWidget {
+  const _HermesConfirmDialogBody({
+    required this.title,
+    required this.message,
+    required this.confirmLabel,
+    required this.cancelLabel,
+    required this.destructive,
   });
 
-  final Key surfaceKey;
-  final double maxWidth;
-  final double maxHeightFactor;
-  final bool reduceMotion;
-  final Widget child;
+  final String title;
+  final String message;
+  final String confirmLabel;
+  final String cancelLabel;
+  final bool destructive;
 
   @override
   Widget build(BuildContext context) {
-    final media = MediaQuery.of(context);
-    final availableHeight =
-        media.size.height -
-        media.viewInsets.bottom -
-        media.padding.vertical -
-        32;
-    final maxHeight = availableHeight <= 0
-        ? 0.0
-        : availableHeight * maxHeightFactor;
-    final theme = Theme.of(context);
-    final shape =
-        theme.dialogTheme.shape ??
-        RoundedRectangleBorder(borderRadius: BorderRadius.circular(22));
-
-    return AnimatedPadding(
-      duration: reduceMotion
-          ? Duration.zero
-          : const Duration(milliseconds: 180),
-      curve: Curves.easeOutCubic,
-      padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
-      child: SafeArea(
-        minimum: const EdgeInsets.all(16),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: maxWidth,
-              maxHeight: maxHeight,
+    final colors = Theme.of(context).hermes;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 22, 18, 14),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Semantics(
+            header: true,
+            child: Text(
+              title,
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+                color: colors.textPrimary,
+              ),
             ),
-            child: Material(
-              key: surfaceKey,
-              color: theme.dialogTheme.backgroundColor,
-              surfaceTintColor: Colors.transparent,
-              elevation: theme.dialogTheme.elevation ?? 12,
-              shape: shape,
-              clipBehavior: Clip.antiAlias,
-              child: child,
+          ),
+          const SizedBox(height: 10),
+          Text(
+            message,
+            style: TextStyle(
+              fontSize: 13.5,
+              height: 1.5,
+              color: colors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              _HermesDialogTextPill(
+                key: const ValueKey('hermes-confirm-dialog-cancel'),
+                label: cancelLabel,
+                foreground: colors.textPrimary,
+                onTap: () => Navigator.of(context).pop(false),
+              ),
+              const SizedBox(width: 4),
+              _HermesDialogTextPill(
+                key: const ValueKey('hermes-confirm-dialog-confirm'),
+                label: confirmLabel,
+                foreground: destructive
+                    ? _contrastOn(colors.error)
+                    : colors.onAccent,
+                background: destructive ? colors.error : colors.accent,
+                onTap: () => Navigator.of(context).pop(true),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static Color _contrastOn(Color background) =>
+      ThemeData.estimateBrightnessForColor(background) == Brightness.dark
+      ? Colors.white
+      : Colors.black;
+}
+
+class _HermesDialogTextPill extends StatelessWidget {
+  const _HermesDialogTextPill({
+    required this.label,
+    required this.foreground,
+    required this.onTap,
+    this.background,
+    super.key,
+  });
+
+  final String label;
+  final Color foreground;
+  final Color? background;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: background ?? Colors.transparent,
+      shape: const StadiumBorder(),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+          alignment: Alignment.center,
+          padding: EdgeInsets.symmetric(
+            horizontal: background == null ? 16 : 22,
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: background == null
+                  ? FontWeight.w500
+                  : FontWeight.w600,
+              color: foreground,
             ),
           ),
         ),
@@ -376,6 +442,9 @@ class HermesListRow extends StatelessWidget {
   final Color? iconColor;
   final Widget? leading;
   final String title;
+
+  /// Lines the title may take before it ends in an ellipsis.
+  final int titleMaxLines;
   final String? subtitle;
   final Widget? trailing;
   final VoidCallback? onTap;
@@ -389,6 +458,7 @@ class HermesListRow extends StatelessWidget {
 
   const HermesListRow({
     required this.title,
+    this.titleMaxLines = 2,
     this.icon,
     this.iconColor,
     this.leading,
@@ -404,6 +474,38 @@ class HermesListRow extends StatelessWidget {
     this.padding = const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     super.key,
   });
+
+  /// Title text style of a list row. Rows that cannot be a
+  /// [HermesListRow] (e.g. an [ExpansionTile] header) use it so they match
+  /// their sibling rows.
+  static TextStyle? titleStyle(
+    ThemeData theme, {
+    required Color color,
+    bool selected = false,
+  }) => theme.textTheme.bodyLarge?.copyWith(
+    color: color,
+    fontSize: 15,
+    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+    height: 1.2,
+    letterSpacing: -0.1,
+  );
+
+  /// Subtitle text style of a list row; see [titleStyle].
+  static TextStyle? subtitleStyle(ThemeData theme, {required Color color}) =>
+      theme.textTheme.bodySmall?.copyWith(color: color, height: 1.3);
+
+  /// Width of the leading icon slot of a list row.
+  static const double leadingExtent = 30;
+
+  /// Gap between the leading icon and the text of a list row.
+  static const double leadingGap = 11;
+
+  /// Gives a [ListTile]-based row (e.g. an [ExpansionTile] header) whose
+  /// leading is a [leadingExtent] icon slot the same gap as a
+  /// [HermesListRow], so its text starts where the sibling rows' does.
+  /// ListTile's default 16 dp gap pushed it to the right.
+  static Widget alignTile({required Widget child}) =>
+      ListTileTheme.merge(horizontalTitleGap: leadingGap, child: child);
 
   @override
   Widget build(BuildContext context) {
@@ -453,13 +555,13 @@ class HermesListRow extends StatelessWidget {
                     leading!
                   else if (icon != null)
                     SizedBox.square(
-                      dimension: 30,
+                      dimension: leadingExtent,
                       child: ExcludeSemantics(
                         child: Icon(icon, size: 21, color: effectiveIconColor),
                       ),
                     ),
                   if (leading != null || icon != null)
-                    const SizedBox(width: 11),
+                    const SizedBox(width: leadingGap),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -467,16 +569,12 @@ class HermesListRow extends StatelessWidget {
                       children: [
                         Text(
                           title,
-                          maxLines: 2,
+                          maxLines: titleMaxLines,
                           overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyLarge?.copyWith(
+                          style: titleStyle(
+                            theme,
                             color: foreground,
-                            fontSize: 15,
-                            fontWeight: selected
-                                ? FontWeight.w600
-                                : FontWeight.w500,
-                            height: 1.2,
-                            letterSpacing: -0.1,
+                            selected: selected,
                           ),
                         ),
                         if (subtitle != null && subtitle!.isNotEmpty) ...[
@@ -485,10 +583,7 @@ class HermesListRow extends StatelessWidget {
                             subtitle!,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: secondary,
-                              height: 1.3,
-                            ),
+                            style: subtitleStyle(theme, color: secondary),
                           ),
                         ],
                       ],
@@ -641,6 +736,10 @@ class HermesSegment<T> {
   final int flex;
   final double horizontalPadding;
 
+  /// A segment that is shown but cannot be chosen right now. A disabled
+  /// segment may still be the selected one.
+  final bool enabled;
+
   const HermesSegment({
     required this.value,
     required this.label,
@@ -648,6 +747,7 @@ class HermesSegment<T> {
     this.key,
     this.flex = 1,
     this.horizontalPadding = 13,
+    this.enabled = true,
   }) : assert(flex > 0),
        assert(horizontalPadding >= 0);
 }
@@ -658,11 +758,16 @@ class HermesSegmentedControl<T> extends StatelessWidget {
   final ValueChanged<T> onChanged;
   final String? semanticLabel;
 
+  /// True paints the track as floating chrome: for a view switch that stays
+  /// in place over a list scrolling under it.
+  final bool floating;
+
   const HermesSegmentedControl({
     required this.value,
     required this.segments,
     required this.onChanged,
     this.semanticLabel,
+    this.floating = false,
     super.key,
   });
 
@@ -676,40 +781,46 @@ class HermesSegmentedControl<T> extends StatelessWidget {
           key: segment.key,
           segment: segment,
           selected: segment.value == value,
-          onTap: () => onChanged(segment.value),
+          round: floating,
+          onTap: segment.enabled ? () => onChanged(segment.value) : null,
         ),
     ];
 
+    final radius = BorderRadius.circular(
+      Theme.of(context).hermesComponents.profile.shape.fieldRadius,
+    );
+    final track = Padding(
+      padding: const EdgeInsets.all(3),
+      child: useScrollable
+          ? SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: children),
+            )
+          : Row(
+              children: [
+                for (var index = 0; index < children.length; index++)
+                  Expanded(flex: segments[index].flex, child: children[index]),
+              ],
+            ),
+    );
     return Semantics(
       container: true,
       label: semanticLabel,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: Theme.of(
-            context,
-          ).hermes.surfaceVariant.withValues(alpha: 0.46),
-          borderRadius: BorderRadius.circular(
-            Theme.of(context).hermesComponents.profile.shape.fieldRadius,
-          ),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(3),
-          child: useScrollable
-              ? SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(children: children),
-                )
-              : Row(
-                  children: [
-                    for (var index = 0; index < children.length; index++)
-                      Expanded(
-                        flex: segments[index].flex,
-                        child: children[index],
-                      ),
-                  ],
-                ),
-        ),
-      ),
+      child: floating
+          // Floating, it is a pill like every other floating piece.
+          ? HermesFloatingSurface(
+              key: const ValueKey('hermes-segmented-floating'),
+              child: track,
+            )
+          : DecoratedBox(
+              decoration: BoxDecoration(
+                color: Theme.of(
+                  context,
+                ).hermes.surfaceVariant.withValues(alpha: 0.46),
+                borderRadius: radius,
+              ),
+              child: track,
+            ),
     );
   }
 }
@@ -717,12 +828,16 @@ class HermesSegmentedControl<T> extends StatelessWidget {
 class _HermesSegmentButton<T> extends StatelessWidget {
   final HermesSegment<T> segment;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
+
+  /// True rounds the segment fully, inside a track that is a pill.
+  final bool round;
 
   const _HermesSegmentButton({
     required this.segment,
     required this.selected,
     required this.onTap,
+    this.round = false,
     super.key,
   });
 
@@ -734,16 +849,32 @@ class _HermesSegmentButton<T> extends StatelessWidget {
     final label = segment.count == null
         ? segment.label
         : '${segment.label} ${segment.count}';
+    final corner = BorderRadius.circular(
+      round ? 999 : profile.shape.fieldRadius - 3,
+    );
+    final text = Text(
+      label,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: theme.textTheme.labelLarge?.copyWith(
+        color: selected ? colors.textPrimary : colors.textSecondary,
+        fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+        letterSpacing: 0,
+      ),
+    );
 
     return Semantics(
       button: true,
       selected: selected,
+      // Only a segment that cannot be chosen says so; the rest keep the
+      // semantics they always had.
+      enabled: onTap == null ? false : null,
       label: label,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(profile.shape.fieldRadius - 3),
+          borderRadius: corner,
           child: AnimatedContainer(
             duration: Duration(
               milliseconds: MediaQuery.disableAnimationsOf(context)
@@ -762,9 +893,7 @@ class _HermesSegmentButton<T> extends StatelessWidget {
               color: selected
                   ? colors.surface.withValues(alpha: 0.94)
                   : Colors.transparent,
-              borderRadius: BorderRadius.circular(
-                profile.shape.fieldRadius - 3,
-              ),
+              borderRadius: corner,
               boxShadow: selected && profile.elevation.resting > 0
                   ? [
                       BoxShadow(
@@ -777,16 +906,9 @@ class _HermesSegmentButton<T> extends StatelessWidget {
             ),
             alignment: Alignment.center,
             child: ExcludeSemantics(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: selected ? colors.textPrimary : colors.textSecondary,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                  letterSpacing: 0,
-                ),
-              ),
+              // Only a segment that cannot be chosen is dimmed; every other
+              // segment is built exactly as before.
+              child: onTap == null ? Opacity(opacity: 0.45, child: text) : text,
             ),
           ),
         ),
@@ -868,6 +990,8 @@ class HermesInlineActivity extends StatelessWidget {
   const HermesInlineActivity({
     required this.title,
     this.summary,
+    this.titleMaxLines,
+    this.summaryMaxLines,
     this.leading,
     this.status,
     this.detail,
@@ -878,7 +1002,9 @@ class HermesInlineActivity extends StatelessWidget {
     this.semanticLabel,
     this.semanticHint,
     this.enabled = true,
+    this.flexibleDetail = false,
     this.padding = const EdgeInsets.fromLTRB(12, 4, 12, 6),
+    this.floating = false,
     super.key,
   }) : assert(
          onExpansionChanged == null || detail != null,
@@ -891,6 +1017,8 @@ class HermesInlineActivity extends StatelessWidget {
 
   final String title;
   final String? summary;
+  final int? titleMaxLines;
+  final int? summaryMaxLines;
   final Widget? leading;
   final Widget? status;
   final Widget? detail;
@@ -901,13 +1029,24 @@ class HermesInlineActivity extends StatelessWidget {
   final String? semanticLabel;
   final String? semanticHint;
   final bool enabled;
+  final bool flexibleDetail;
   final EdgeInsetsGeometry padding;
+
+  /// When true, renders as a self-contained floating pill (opaque surface,
+  /// rounded shell, soft shadow) instead of the flat inline block, and
+  /// cross-fades its text in place when [title]/[summary] change. Used to
+  /// host this row as an overlay anchored above other content instead of a
+  /// `Column` child, without altering the default flat presentation used
+  /// elsewhere.
+  final bool floating;
 
   @override
   Widget build(BuildContext context) {
     return _HermesEditorialBlock(
       title: title,
       summary: summary,
+      titleMaxLines: titleMaxLines,
+      summaryMaxLines: summaryMaxLines,
       leading: leading,
       status: status,
       detail: detail,
@@ -918,8 +1057,100 @@ class HermesInlineActivity extends StatelessWidget {
       semanticLabel: semanticLabel,
       semanticHint: semanticHint,
       enabled: enabled,
+      flexibleDetail: flexibleDetail,
       padding: padding,
+      floating: floating,
       density: _HermesEditorialDensity.activity,
+    );
+  }
+}
+
+/// Cross-fades the header title/summary for the `floating` pill variant of
+/// [HermesInlineActivity] (e.g. the rotating "tip" text shown while a
+/// subagent works).
+///
+/// The naive approach — keying the switched child by `'$title|$summary'`
+/// alone — breaks when the rotation cycles back to a value that's still
+/// fading out from an earlier step: `AnimatedSwitcher`'s custom
+/// `layoutBuilder` here stacks `[...previousChildren, ?currentChild]`, and
+/// two entries sharing the same `ValueKey` crash with "Duplicate keys
+/// found" (surfaced in tests as an uncaught `FlutterError` that aborts the
+/// test mid-animation, leaking its `Ticker`/`AnimationController` into
+/// later tests in the same run). Tracking a monotonic `_revision` bumped
+/// only when the content actually changes keeps every switch's key unique
+/// regardless of repeats.
+class _HermesRotatingHeaderText extends StatefulWidget {
+  const _HermesRotatingHeaderText({
+    required this.title,
+    required this.summary,
+    required this.titleMaxLines,
+    required this.summaryMaxLines,
+    required this.titleStyle,
+    required this.summaryStyle,
+    required this.isDecision,
+    required this.reduceMotion,
+  });
+
+  final String title;
+  final String? summary;
+  final int? titleMaxLines;
+  final int? summaryMaxLines;
+  final TextStyle? titleStyle;
+  final TextStyle? summaryStyle;
+  final bool isDecision;
+  final bool reduceMotion;
+
+  @override
+  State<_HermesRotatingHeaderText> createState() =>
+      _HermesRotatingHeaderTextState();
+}
+
+/// One value the rotating header has shown, tracked so a repeat can be
+/// told apart from a genuinely new one — see [_HermesRotatingHeaderTextState].
+class _HermesRotatingHeaderTextState extends State<_HermesRotatingHeaderText> {
+  int _revision = 0;
+
+  @override
+  void didUpdateWidget(covariant _HermesRotatingHeaderText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.title != widget.title ||
+        oldWidget.summary != widget.summary) {
+      _revision++;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: widget.reduceMotion
+          ? Duration.zero
+          : const Duration(milliseconds: 220),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      layoutBuilder: (currentChild, previousChildren) => Stack(
+        alignment: AlignmentDirectional.centerStart,
+        children: [...previousChildren, ?currentChild],
+      ),
+      child: _HermesEditorialHeaderText(
+        // Keyed by a monotonic revision (bumped only when content actually
+        // changes from the immediately preceding build) rather than by
+        // content alone: a rotating tip can legitimately repeat a value
+        // while an earlier occurrence of that same text is still fading
+        // out, and two Stack children can never share a key. This can
+        // still show the same text twice for a brief moment when a value
+        // reverts within a couple of rapid, same-frame rebuilds (see the
+        // "actividad nativa..." test in chat_screen_test.dart), which is
+        // an acceptable, narrow cosmetic tradeoff against ever crashing
+        // the tree.
+        key: ValueKey('$_revision:${widget.title}|${widget.summary}'),
+        title: widget.title,
+        summary: widget.summary,
+        titleMaxLines: widget.titleMaxLines,
+        summaryMaxLines: widget.summaryMaxLines,
+        titleStyle: widget.titleStyle,
+        summaryStyle: widget.summaryStyle,
+        isDecision: widget.isDecision,
+      ),
     );
   }
 }
@@ -930,6 +1161,8 @@ class _HermesEditorialBlock extends StatelessWidget {
   const _HermesEditorialBlock({
     required this.title,
     required this.summary,
+    this.titleMaxLines,
+    this.summaryMaxLines,
     required this.leading,
     required this.status,
     required this.detail,
@@ -940,8 +1173,10 @@ class _HermesEditorialBlock extends StatelessWidget {
     required this.semanticLabel,
     required this.semanticHint,
     required this.enabled,
+    this.flexibleDetail = false,
     required this.padding,
     required this.density,
+    this.floating = false,
   });
 
   final String title;
@@ -956,8 +1191,12 @@ class _HermesEditorialBlock extends StatelessWidget {
   final String? semanticLabel;
   final String? semanticHint;
   final bool enabled;
+  final bool flexibleDetail;
   final EdgeInsetsGeometry padding;
   final _HermesEditorialDensity density;
+  final int? titleMaxLines;
+  final int? summaryMaxLines;
+  final bool floating;
 
   bool get _hasDisclosure =>
       detail != null && onExpansionChanged != null && disclosureLabel != null;
@@ -969,7 +1208,8 @@ class _HermesEditorialBlock extends StatelessWidget {
     final profile = theme.hermesComponents.profile;
     final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final textScale = MediaQuery.textScalerOf(context).scale(1);
-    final stackStatus = status != null && textScale > 1.3;
+    final overlayStatus = status != null && flexibleDetail;
+    final stackStatus = status != null && textScale > 1.3 && !overlayStatus;
     final isDecision = density == _HermesEditorialDensity.decision;
     final showDetail = detail != null && (!_hasDisclosure || expanded);
     final titleStyle =
@@ -1006,22 +1246,28 @@ class _HermesEditorialBlock extends StatelessWidget {
           const SizedBox(width: 10),
         ],
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Semantics(
-                header: isDecision,
-                child: Text(title, style: titleStyle),
-              ),
-              if (summary != null && summary!.trim().isNotEmpty) ...[
-                const SizedBox(height: 3),
-                Text(summary!, style: summaryStyle),
-              ],
-            ],
-          ),
+          child: !floating
+              ? _HermesEditorialHeaderText(
+                  title: title,
+                  summary: summary,
+                  titleMaxLines: titleMaxLines,
+                  summaryMaxLines: summaryMaxLines,
+                  titleStyle: titleStyle,
+                  summaryStyle: summaryStyle,
+                  isDecision: isDecision,
+                )
+              : _HermesRotatingHeaderText(
+                  title: title,
+                  summary: summary,
+                  titleMaxLines: titleMaxLines,
+                  summaryMaxLines: summaryMaxLines,
+                  titleStyle: titleStyle,
+                  summaryStyle: summaryStyle,
+                  isDecision: isDecision,
+                  reduceMotion: reduceMotion,
+                ),
         ),
-        if (status != null && !stackStatus) ...[
+        if (status != null && !stackStatus && !overlayStatus) ...[
           const SizedBox(width: 10),
           Flexible(
             child: Align(
@@ -1045,9 +1291,20 @@ class _HermesEditorialBlock extends StatelessWidget {
           ),
         ],
       );
+    } else if (overlayStatus) {
+      header = Stack(
+        children: [
+          header,
+          PositionedDirectional(
+            top: 7,
+            end: 0,
+            child: _HermesEditorialStatus(child: status!),
+          ),
+        ],
+      );
     }
 
-    return Semantics(
+    final content = Semantics(
       container: true,
       explicitChildNodes: true,
       enabled: enabled,
@@ -1113,12 +1370,32 @@ class _HermesEditorialBlock extends StatelessWidget {
                 ),
               ),
             ],
-            if (detail != null)
+            if (detail != null && flexibleDetail)
+              Expanded(
+                child: AnimatedSize(
+                  duration: reduceMotion ? Duration.zero : Motion.base,
+                  curve: Motion.enter,
+                  alignment: AlignmentDirectional.topStart,
+                  child: showDetail
+                      ? Padding(
+                          padding: EdgeInsets.only(
+                            top: _hasDisclosure ? 2 : 10,
+                          ),
+                          child: DefaultTextStyle.merge(
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colors.textSecondary,
+                              height: 1.42,
+                            ),
+                            child: detail!,
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              )
+            else if (detail != null)
               AnimatedSize(
-                duration: reduceMotion
-                    ? Duration.zero
-                    : const Duration(milliseconds: 200),
-                curve: Curves.easeOutCubic,
+                duration: reduceMotion ? Duration.zero : Motion.base,
+                curve: Motion.enter,
                 alignment: AlignmentDirectional.topStart,
                 child: showDetail
                     ? Padding(
@@ -1155,6 +1432,82 @@ class _HermesEditorialBlock extends StatelessWidget {
           ],
         ),
       ),
+    );
+
+    if (!floating) return content;
+
+    // Floating chrome: an opaque, shadowed shell so this row can be
+    // anchored as an overlay (e.g. above a chat composer) instead of
+    // sitting flat inside a Column. Radius 22 mirrors the app's other
+    // floating surfaces and still reads as a pill at a compact height.
+    // The shadow lives on an outer, unclipped box so the inner Material's
+    // antialiased clip never crops it.
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.32),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Material(
+        color: colors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        clipBehavior: Clip.antiAlias,
+        child: content,
+      ),
+    );
+  }
+}
+
+class _HermesEditorialHeaderText extends StatelessWidget {
+  const _HermesEditorialHeaderText({
+    required this.title,
+    required this.summary,
+    required this.titleMaxLines,
+    required this.summaryMaxLines,
+    required this.titleStyle,
+    required this.summaryStyle,
+    required this.isDecision,
+    super.key,
+  });
+
+  final String title;
+  final String? summary;
+  final int? titleMaxLines;
+  final int? summaryMaxLines;
+  final TextStyle? titleStyle;
+  final TextStyle? summaryStyle;
+  final bool isDecision;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Semantics(
+          header: isDecision,
+          child: Text(
+            title,
+            maxLines: titleMaxLines,
+            overflow: titleMaxLines == null ? null : TextOverflow.ellipsis,
+            style: titleStyle,
+          ),
+        ),
+        if (summary != null && summary!.trim().isNotEmpty) ...[
+          const SizedBox(height: 3),
+          Text(
+            summary!,
+            maxLines: summaryMaxLines,
+            overflow: summaryMaxLines == null ? null : TextOverflow.ellipsis,
+            style: summaryStyle,
+          ),
+        ],
+      ],
     );
   }
 }
@@ -1267,26 +1620,28 @@ class _HermesShimmerTextState extends State<HermesShimmerText>
       excludeSemantics: true,
       child: !widget.enabled || _reduceMotion
           ? staticText
-          : AnimatedBuilder(
-              animation: _controller,
-              child: staticText,
-              builder: (context, child) {
-                final position = (_controller.value * 2.4) - 1.2;
-                return ShaderMask(
-                  blendMode: BlendMode.srcIn,
-                  shaderCallback: (bounds) => LinearGradient(
-                    begin: Alignment(position - 0.75, 0),
-                    end: Alignment(position + 0.75, 0),
-                    colors: [
-                      colors.textSecondary.withValues(alpha: 0.58),
-                      colors.textPrimary,
-                      colors.textSecondary.withValues(alpha: 0.58),
-                    ],
-                    stops: const [0.22, 0.5, 0.78],
-                  ).createShader(bounds),
-                  child: child,
-                );
-              },
+          : RepaintBoundary(
+              child: AnimatedBuilder(
+                animation: _controller,
+                child: staticText,
+                builder: (context, child) {
+                  final position = (_controller.value * 2.4) - 1.2;
+                  return ShaderMask(
+                    blendMode: BlendMode.srcIn,
+                    shaderCallback: (bounds) => LinearGradient(
+                      begin: Alignment(position - 0.75, 0),
+                      end: Alignment(position + 0.75, 0),
+                      colors: [
+                        colors.textSecondary.withValues(alpha: 0.58),
+                        colors.textPrimary,
+                        colors.textSecondary.withValues(alpha: 0.58),
+                      ],
+                      stops: const [0.22, 0.5, 0.78],
+                    ).createShader(bounds),
+                    child: child,
+                  );
+                },
+              ),
             ),
     );
   }
@@ -1305,6 +1660,10 @@ class HermesComposerSurface extends StatelessWidget {
     this.unfocusedHorizontalInset = 4,
     super.key,
   }) : assert(unfocusedHorizontalInset >= 0);
+
+  /// How solid the capsule is: what scrolls behind it must not read through
+  /// what is written in it.
+  static const double fillOpacity = 0.97;
 
   final Widget child;
   final bool focused;
@@ -1331,7 +1690,7 @@ class HermesComposerSurface extends StatelessWidget {
         constraints: const BoxConstraints(minHeight: 48),
         padding: padding,
         decoration: BoxDecoration(
-          color: colors.surfaceVariant.withValues(alpha: 0.90),
+          color: colors.surfaceVariant.withValues(alpha: fillOpacity),
           borderRadius: BorderRadius.circular(28),
           border: Border.all(
             color: focused
@@ -1371,6 +1730,7 @@ class HermesTactileAction extends StatefulWidget {
     required this.icon,
     required this.semanticLabel,
     required this.onPressed,
+    this.onLongPress,
     this.backgroundColor,
     this.foregroundColor,
     this.size = 44,
@@ -1383,6 +1743,7 @@ class HermesTactileAction extends StatefulWidget {
   final IconData icon;
   final String semanticLabel;
   final VoidCallback? onPressed;
+  final VoidCallback? onLongPress;
   final Color? backgroundColor;
   final Color? foregroundColor;
   final double size;
@@ -1436,6 +1797,7 @@ class _HermesTactileActionState extends State<HermesTactileAction> {
               focusColor: foreground.withValues(alpha: 0.18),
               onHighlightChanged: enabled ? _setPressed : null,
               onTap: enabled ? widget.onPressed : null,
+              onLongPress: enabled ? widget.onLongPress : null,
               child: Center(
                 child: AnimatedScale(
                   scale: _pressed && enabled ? 0.94 : 1,

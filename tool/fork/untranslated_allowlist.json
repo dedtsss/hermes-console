@@ -1,0 +1,146 @@
+{
+  "android/string/app_name": {
+    "translation": "Hermes Console RU",
+    "reason": "Product name or placeholder-only display format: string/app_name"
+  },
+  "android/string/lw_agent": {
+    "translation": "Hermes",
+    "reason": "Product name or placeholder-only display format: string/lw_agent"
+  },
+  "android/string/lw_day_time": {
+    "translation": "%1$s %2$s",
+    "reason": "Product name or placeholder-only display format: string/lw_day_time"
+  },
+  "android/string/lw_room_said": {
+    "translation": "%1$s: %2$s",
+    "reason": "Product name or placeholder-only display format: string/lw_room_said"
+  },
+  "android/string/rich_brand": {
+    "translation": "Hermes",
+    "reason": "Product name or placeholder-only display format: string/rich_brand"
+  },
+  "arb/aboutUpdatesGithub": {
+    "translation": "GitHub / Obtainium",
+    "reason": "GitHub and Obtainium are the unchanged product names of the release/update channels."
+  },
+  "arb/aboutUpdatesPlay": {
+    "translation": "Google Play",
+    "reason": "Google Play is the unchanged official product/store name."
+  },
+  "arb/chaContextCategoryMcp": {
+    "translation": "MCP",
+    "reason": "MCP is the protocol acronym Model Context Protocol."
+  },
+  "arb/chaDetailId": {
+    "translation": "ID",
+    "reason": "ID is the standard identifier label; there is no prose to translate."
+  },
+  "arb/cphRowUrl": {
+    "translation": "URL",
+    "reason": "URL is the standard network-address acronym."
+  },
+  "arb/dotsA11yBot": {
+    "translation": "{name}, {status}",
+    "reason": "Placeholder-only accessibility format; the bot name and localized status are supplied at runtime."
+  },
+  "arb/extensionsCenterChangeBody": {
+    "translation": "{action} “{name}” {scope}.",
+    "reason": "Placeholder-only sentence composition; action and scope are localized separately and name is runtime content."
+  },
+  "arb/extensionsCenterMcpSection": {
+    "translation": "MCP",
+    "reason": "MCP is the protocol acronym Model Context Protocol."
+  },
+  "arb/extensionsCenterPluginVersion": {
+    "translation": "v{version}",
+    "reason": "Version format uses the conventional v prefix plus the runtime version; no prose."
+  },
+  "arb/fh1215GalleryPosition": {
+    "translation": "{index} / {count}",
+    "reason": "Numeric position/count format consists only of runtime placeholders and punctuation."
+  },
+  "arb/fsImportSourceClaude": {
+    "translation": "Claude",
+    "reason": "Claude is the unchanged source product name."
+  },
+  "arb/fsImportSourceCodex": {
+    "translation": "Codex",
+    "reason": "Codex is the unchanged source product name."
+  },
+  "arb/hwKindCron": {
+    "translation": "Cron",
+    "reason": "Cron is the name of the scheduling subsystem displayed by this widget."
+  },
+  "arb/lm1215RuntimeReady": {
+    "translation": "llama.cpp {tag} · {backend}",
+    "reason": "llama.cpp is the runtime product name; tag and backend are runtime identifiers."
+  },
+  "arb/mascotNoticeFrom": {
+    "translation": "{place}: {text}",
+    "reason": "Placeholder-only notification format; place and message text are supplied at runtime."
+  },
+  "arb/mdlMcp": {
+    "translation": "MCP",
+    "reason": "MCP is the protocol acronym Model Context Protocol."
+  },
+  "arb/modeYolo": {
+    "translation": "YOLO",
+    "reason": "YOLO is the established approval-mode acronym and matches the yolo mode identifier."
+  },
+  "arb/o2Windows": {
+    "translation": "Windows",
+    "reason": "Windows is the unchanged operating-system product name."
+  },
+  "arb/pj1215AgoDate": {
+    "translation": "{date}",
+    "reason": "Date-only timeline label supplied by the localized date formatter; Russian does not require the English preposition on."
+  },
+  "arb/rosterMemberSaid": {
+    "translation": "{handle}: {text}",
+    "reason": "Placeholder-only speaker/message format; handle and message text are runtime content."
+  },
+  "arb/sesCtxId": {
+    "translation": "id",
+    "reason": "id is the identifier field label; no prose to translate."
+  },
+  "arb/sesPrTag": {
+    "translation": "PR #{number} · {state}",
+    "reason": "PR is the standard pull-request acronym; number and localized state are runtime placeholders."
+  },
+  "arb/tc1215BgAnswerTitle": {
+    "translation": "bg {taskId}",
+    "reason": "bg is the literal /bg command identifier; taskId is the runtime task identifier."
+  },
+  "arb/tc1215BtwAnswerNoQuestion": {
+    "translation": "btw",
+    "reason": "btw is the literal /btw command identifier used as the answer label."
+  },
+  "arb/tc1215BtwAnswerTitle": {
+    "translation": "btw «{question}»",
+    "reason": "btw is the literal /btw command identifier; the question is runtime user content."
+  },
+  "arb/tc1215SlashArgBg": {
+    "translation": "<task>",
+    "reason": "<task> is the preserved command-syntax argument placeholder token; it is not English UI prose."
+  },
+  "arb/tc1215SlashArgBtw": {
+    "translation": "<question>",
+    "reason": "<question> is the preserved command-syntax argument placeholder token; it is not English UI prose."
+  },
+  "arb/themesConsoleSection": {
+    "translation": "Hermes Console · {count}",
+    "reason": "Hermes Console is the unchanged product name; count is the runtime theme count."
+  },
+  "arb/themesDesktopSection": {
+    "translation": "Hermes Desktop · {count}",
+    "reason": "Hermes Desktop is the unchanged product name; count is the runtime theme count."
+  },
+  "arb/videoPlayerSpeedValue": {
+    "translation": "{speed}×",
+    "reason": "Playback-rate format consists only of the runtime number and multiplication symbol."
+  },
+  "arb/voiceGptLiveTitle": {
+    "translation": "GPT-Live",
+    "reason": "GPT-Live is the unchanged voice-engine product name."
+  }
+}

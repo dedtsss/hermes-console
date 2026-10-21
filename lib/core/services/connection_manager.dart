@@ -1,42 +1,51 @@
+import 'bot_mention_roster.dart';
+import 'bot_roster_store.dart';
 // ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'origin_bound_http_client.dart';
+import 'transcript_rehydrate_cost.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+
+import 'mobile_oauth.dart';
+import 'native_session_store.dart';
 import '../models/agent_profile.dart';
 import '../models/capability_matrix.dart';
 import '../models/connection.dart';
+import '../models/cron_job.dart';
+import '../models/core_read.dart';
 import '../utils/transport_privacy.dart';
 import '../models/memory_info.dart';
 import '../models/model_active_info.dart';
-import '../models/model_info.dart';
 import '../models/model_provider.dart';
+import '../config/flavor.dart';
 import '../models/moa_config.dart';
 import '../models/session.dart';
 import 'chat_draft_store.dart';
-import 'bridge_client.dart';
+import 'local_transcript_store.dart';
 import 'mission_bot_chat_store.dart';
 import 'secure_storage.dart';
+import 'session_repository.dart' show deleteDashboardSession;
+import 'server_restart_signal.dart';
 import 'turn_outbox_store.dart';
+import '../utils/byte_bounded_lru_cache.dart';
 
 // Re-export for convenience
 export '../models/capability_matrix.dart';
 export '../models/connection.dart';
 export '../models/memory_info.dart';
 export '../models/model_active_info.dart';
-export '../models/model_info.dart';
 export '../models/model_provider.dart';
 export '../models/session.dart';
 
-typedef BridgeClientFactory =
-    BridgeClient Function({required String baseUrl, required String token});
-typedef BridgeProvisioner =
-    Future<String?> Function(String baseUrl, String gatewayKey);
 typedef DashboardClientFactory =
     DashboardClient Function(SavedConnection connection);
 typedef ClearCancelledTurnsForConnection = Future<int> Function(String id);
@@ -62,6 +71,18 @@ bool supportsKanbanTrackedCreateVersion(String? rawVersion) {
   return major >= 2000 ? atLeast(2026, 5, 7) : atLeast(0, 13, 0);
 }
 
+class _ConnectionWillChangeNotifier extends ChangeNotifier {
+  void emit() => notifyListeners();
+}
+
+/// Frontera de una superficie de configuración concreta.
+///
+/// No representa la identidad de la conexión: solo permite que el editor que
+/// consume `/api/config` cierre su cliente antes de que cambie su acceso.
+class _ConfigAccessWillChangeNotifier extends ChangeNotifier {
+  void emit() => notifyListeners();
+}
+
 /// Manages saved remote connections.
 ///
 /// Connection metadata (label, host, port) is stored in SharedPreferences.
@@ -84,8 +105,6 @@ class ConnectionManager {
 
   final SharedPreferences prefs;
   final SecureStorage _secure;
-  final BridgeClientFactory _bridgeClientFactory;
-  final BridgeProvisioner _bridgeProvisioner;
   final DashboardClientFactory _dashboardClientFactory;
   final ClearCancelledTurnsForConnection? _clearCancelledTurns;
   // In-memory cache populated by [_loadApiKeys]. Keeps getConnections() sync.
@@ -95,6 +114,30 @@ class ConnectionManager {
   /// = perfil por defecto (sin scoping). Notifica para que Modelos/Skills y la
   /// cabecera reaccionen al cambio.
   final ValueNotifier<String?> activeProfile = ValueNotifier<String?>(null);
+
+  /// Revisión del perfil guardado para cada instancia.
+  ///
+  /// [activeProfile] conserva el valor global heredado y por ello no notifica
+  /// cuando dos instancias terminan usando el mismo nombre. Esta señal separada
+  /// permite que consumidores ligados a una conexión concreta vuelvan a leer
+  /// su scope aunque el valor global coincida.
+  final Map<String, ValueNotifier<int>> _activeProfileRevisions = {};
+
+  /// Revisión material aislada por instancia.
+  final Map<String, ValueNotifier<int>> _connectionRevisions = {};
+
+  /// Frontera síncrona previa a cambios que invalidan clientes autenticados.
+  final Map<String, _ConnectionWillChangeNotifier> _connectionWillChange = {};
+
+  /// Revisión aislada del acceso a `/api/config` que consume la tarjeta de
+  /// autocompresión. Los probes de capacidades no son cambios de identidad de
+  /// la conexión y nunca deben rearmar chats, outbox ni ownership de turnos.
+  final Map<String, ValueNotifier<int>> _configAccessRevisions = {};
+
+  /// Frontera previa a una transición material de configRead/configWrite.
+  final Map<String, _ConfigAccessWillChangeNotifier> _configAccessWillChange =
+      {};
+  bool _disposed = false;
 
   /// Id de la instancia activa. Cambia al activar otra instancia desde cualquier
   /// pantalla; el home (y quien escuche) se entera al instante sin reiniciar la
@@ -114,16 +157,9 @@ class ConnectionManager {
   ConnectionManager._(
     this.prefs,
     this._secure, {
-    BridgeClientFactory? bridgeClientFactory,
-    BridgeProvisioner? bridgeProvisioner,
     DashboardClientFactory? dashboardClientFactory,
     ClearCancelledTurnsForConnection? clearCancelledTurns,
-  }) : _bridgeClientFactory =
-           bridgeClientFactory ??
-           (({required baseUrl, required token}) =>
-               BridgeClient(baseUrl: baseUrl, token: token)),
-       _bridgeProvisioner = bridgeProvisioner ?? BridgeClient.provision,
-       _dashboardClientFactory = dashboardClientFactory ?? DashboardClient.lazy,
+  }) : _dashboardClientFactory = dashboardClientFactory ?? DashboardClient.lazy,
        _clearCancelledTurns = clearCancelledTurns;
 
   static String _activeProfileKey(String connId) => 'active_profile_$connId';
@@ -132,152 +168,139 @@ class ConnectionManager {
   String activeProfileFor(String connId) =>
       prefs.getString(_activeProfileKey(connId)) ?? '';
 
+  void _ensureNotDisposed() {
+    if (_disposed) throw StateError('ConnectionManager has been disposed');
+  }
+
+  ValueNotifier<int> _activeProfileRevisionNotifierFor(String connId) {
+    _ensureNotDisposed();
+    return _activeProfileRevisions.putIfAbsent(
+      connId,
+      () => ValueNotifier<int>(0),
+    );
+  }
+
+  /// Señal monotónica del perfil de [connId].
+  ValueListenable<int> activeProfileRevisionFor(String connId) =>
+      _activeProfileRevisionNotifierFor(connId);
+
+  ValueNotifier<int> _connectionRevisionNotifierFor(String connId) {
+    _ensureNotDisposed();
+    return _connectionRevisions.putIfAbsent(
+      connId,
+      () => ValueNotifier<int>(0),
+    );
+  }
+
+  /// Señal monotónica de cambios de metadatos o credenciales de [connId].
+  ValueListenable<int> connectionRevisionFor(String connId) =>
+      _connectionRevisionNotifierFor(connId);
+
+  _ConnectionWillChangeNotifier _connectionWillChangeNotifierFor(
+    String connId,
+  ) {
+    _ensureNotDisposed();
+    return _connectionWillChange.putIfAbsent(
+      connId,
+      _ConnectionWillChangeNotifier.new,
+    );
+  }
+
+  Listenable connectionWillChangeFor(String connId) =>
+      _connectionWillChangeNotifierFor(connId);
+
+  void _publishConnectionWillChange(String connId) {
+    _connectionWillChangeNotifierFor(connId).emit();
+  }
+
+  void _publishConnectionRevision(String connId) {
+    final revision = _connectionRevisionNotifierFor(connId);
+    revision.value += 1;
+  }
+
+  ValueNotifier<int> _configAccessRevisionNotifierFor(String connId) {
+    _ensureNotDisposed();
+    return _configAccessRevisions.putIfAbsent(
+      connId,
+      () => ValueNotifier<int>(0),
+    );
+  }
+
+  /// Revisión monotónica exclusiva de cambios de configRead/configWrite.
+  ///
+  /// Los consumidores deben reconstruir solo la superficie de Ajustes que
+  /// usa `/api/config`; no es una señal para ciclo de vida de chats.
+  ValueListenable<int> configAccessRevisionFor(String connId) =>
+      _configAccessRevisionNotifierFor(connId);
+
+  _ConfigAccessWillChangeNotifier _configAccessWillChangeNotifierFor(
+    String connId,
+  ) {
+    _ensureNotDisposed();
+    return _configAccessWillChange.putIfAbsent(
+      connId,
+      _ConfigAccessWillChangeNotifier.new,
+    );
+  }
+
+  /// Se emite antes de persistir un cambio material de acceso a `/api/config`.
+  Listenable configAccessWillChangeFor(String connId) =>
+      _configAccessWillChangeNotifierFor(connId);
+
+  void _publishConfigAccessWillChange(String connId) {
+    _configAccessWillChangeNotifierFor(connId).emit();
+  }
+
+  void _publishConfigAccessRevision(String connId) {
+    final revision = _configAccessRevisionNotifierFor(connId);
+    revision.value += 1;
+  }
+
+  void _disposeConnectionNotifiers(String connId) {
+    _activeProfileRevisions.remove(connId)?.dispose();
+    _connectionRevisions.remove(connId)?.dispose();
+    _connectionWillChange.remove(connId)?.dispose();
+    _configAccessRevisions.remove(connId)?.dispose();
+    _configAccessWillChange.remove(connId)?.dispose();
+  }
+
   /// Fija el perfil activo de [connId]. Pasa vacío/`default` para volver al
   /// home por defecto.
   Future<void> setActiveProfile(String connId, String profile) async {
     final normalized = (profile == 'default') ? '' : profile;
+    final previous = activeProfileFor(connId);
+    final changed = previous != normalized;
+    if (changed) _publishConnectionWillChange(connId);
     if (normalized.isEmpty) {
       await prefs.remove(_activeProfileKey(connId));
     } else {
       await prefs.setString(_activeProfileKey(connId), normalized);
     }
+    if (changed) {
+      PrivateRenderCaches.clearAll();
+      final revision = _activeProfileRevisionNotifierFor(connId);
+      revision.value += 1;
+    }
     activeProfile.value = normalized.isEmpty ? null : normalized;
   }
 
-  /// Detiene una tarea programada usando primero el Mobile Bridge (comando
-  /// oficial de Hermes) y conservando el Dashboard como fallback para
-  /// servidores antiguos. Nunca rota ni reconfigura credenciales.
+  /// Deletes the cron job linked to a session through the Dashboard
+  /// (`DELETE /api/cron/jobs/{id}?profile=`), the same route Desktop uses
+  /// (`apps/desktop/src/api/cron.ts`). The Mobile Bridge is no longer
+  /// consulted. Never rotates or reconfigures credentials.
   Future<void> deleteLinkedCronJob(
     SavedConnection connection,
     String jobId, {
     String? profile,
   }) async {
-    // Debe ocurrir antes de leer secretos, provisionar o construir clientes.
+    // Validate before building any client.
     final id = validateCronJobId(jobId);
     final scopedProfile = validateCronProfile(profile);
-    Future<void> deleteWithDashboard() async {
-      final dashboard = _dashboardClientFactory(connection);
-      try {
-        await dashboard.deleteCronJob(id, profile: scopedProfile);
-      } finally {
-        dashboard.close();
-      }
-    }
-
-    Object? bridgeError;
-    Object? dashboardFirstError;
-    BridgeClient? bridge;
-    var bridgeUrl = connection.derivedBridgeUrl;
-    String? bridgeToken;
+    final dashboard = _dashboardClientFactory(connection);
     try {
-      final storedBridgeUrl = await _secure.readBridge(connection.id, 'url');
-      if (storedBridgeUrl != null && storedBridgeUrl.trim().isNotEmpty) {
-        bridgeUrl = storedBridgeUrl.trim();
-      }
-      bridgeToken = await _secure.readBridge(connection.id, 'token');
-    } catch (error) {
-      bridgeError = error;
-    }
-
-    final hadStoredBridgeToken = bridgeToken?.isNotEmpty == true;
-    if (!hadStoredBridgeToken) {
-      // Sin una instalación Bridge ya autenticada, el Dashboard es la ruta
-      // normal y disponible en todas las instancias. Probarlo primero evita
-      // esperar el timeout de provisión contra hosts (p. ej. workers.dev) que
-      // nunca pueden publicar el puerto 9131.
-      try {
-        await deleteWithDashboard();
-        return;
-      } on ArgumentError {
-        rethrow;
-      } on CronDeleteRejectedException {
-        rethrow;
-      } catch (error) {
-        dashboardFirstError = error;
-      }
-
-      if (connection.apiKey.trim().isNotEmpty) {
-        try {
-          bridgeToken = await _bridgeProvisioner(
-            bridgeUrl,
-            connection.apiKey.trim(),
-          );
-          if (bridgeToken != null && bridgeToken.isNotEmpty) {
-            await _secure.writeBridge(connection.id, 'token', bridgeToken);
-          }
-        } on ArgumentError {
-          rethrow;
-        } catch (error) {
-          bridgeError = error;
-        }
-      }
-    }
-
-    try {
-      if (bridgeToken != null && bridgeToken.isNotEmpty) {
-        bridge = _bridgeClientFactory(baseUrl: bridgeUrl, token: bridgeToken);
-        final capabilities = await bridge.detect();
-        if (capabilities.cronDelete) {
-          await bridge.deleteCronJob(id, profile: scopedProfile);
-          return;
-        }
-      }
-    } on ArgumentError {
-      rethrow;
-    } on BridgeException catch (error) {
-      bridgeError = error;
-      // Un token GUARDADO puede haber cambiado tras reinstalar el servicio.
-      // Si acabamos de provisionarlo en esta misma llamada no lo repetimos.
-      if (hadStoredBridgeToken &&
-          error.kind == BridgeErrorKind.auth &&
-          connection.apiKey.trim().isNotEmpty) {
-        try {
-          bridge?.close();
-          bridge = null;
-          final freshToken = await _bridgeProvisioner(
-            bridgeUrl,
-            connection.apiKey.trim(),
-          );
-          if (freshToken != null && freshToken.isNotEmpty) {
-            await _secure.writeBridge(connection.id, 'token', freshToken);
-            bridge = _bridgeClientFactory(
-              baseUrl: bridgeUrl,
-              token: freshToken,
-            );
-            final capabilities = await bridge.detect();
-            if (capabilities.cronDelete) {
-              await bridge.deleteCronJob(id, profile: scopedProfile);
-              return;
-            }
-          }
-        } on ArgumentError {
-          rethrow;
-        } catch (retryError) {
-          bridgeError = retryError;
-        }
-      }
-    } catch (error) {
-      bridgeError = error;
+      await dashboard.deleteCronJob(id, profile: scopedProfile);
     } finally {
-      bridge?.close();
-    }
-
-    if (dashboardFirstError != null) {
-      if (bridgeError == null) throw dashboardFirstError;
-      throw Exception(
-        'Dashboard: $dashboardFirstError; Mobile Bridge: $bridgeError',
-      );
-    }
-
-    try {
-      await deleteWithDashboard();
-    } on CronDeleteRejectedException {
-      rethrow;
-    } catch (dashboardError) {
-      if (bridgeError == null) rethrow;
-      throw Exception(
-        'Mobile Bridge: $bridgeError; Dashboard: $dashboardError',
-      );
+      dashboard.close();
     }
   }
 
@@ -307,6 +330,10 @@ class ConnectionManager {
   /// propague aunque se haga desde fuera del home.
   Future<void> setActiveConnection(String id) async {
     if (id.isEmpty) return;
+    final previous = activeConnectionId.value ?? prefs.getString(lastConnKey);
+    if (previous != null && previous.isNotEmpty && previous != id) {
+      _publishConnectionWillChange(previous);
+    }
     await prefs.setString(lastConnKey, id);
     activeConnectionId.value = id;
   }
@@ -330,20 +357,19 @@ class ConnectionManager {
   /// still present in SharedPreferences into Android Keystore.
   static Future<ConnectionManager> create(
     SharedPreferences prefs, {
-    BridgeClientFactory? bridgeClientFactory,
-    BridgeProvisioner? bridgeProvisioner,
     DashboardClientFactory? dashboardClientFactory,
     ClearCancelledTurnsForConnection? clearCancelledTurns,
   }) async {
     final manager = ConnectionManager._(
       prefs,
       SecureStorage(),
-      bridgeClientFactory: bridgeClientFactory,
-      bridgeProvisioner: bridgeProvisioner,
       dashboardClientFactory: dashboardClientFactory,
       clearCancelledTurns: clearCancelledTurns,
     );
     await manager._loadApiKeys();
+    // Cold start: every screen sees the last known bot roster until its
+    // first live read lands.
+    BotRosterRegistry.shared.attachPersistence(prefs, manager.getConnections());
     // Poda silenciosa de datos huérfanos de instancias borradas (no toca nada
     // de las conexiones vivas ni ajustes globales). Falla suave.
     try {
@@ -358,13 +384,13 @@ class ConnectionManager {
     final jsonList = prefs.getStringList(_key) ?? [];
     var needsResave = false;
     final validConnections = <SavedConnection>[];
+    final keystoreLoads = <Future<void>>[];
 
     for (final j in jsonList) {
+      final Map<String, dynamic> map;
+      final SavedConnection conn;
       try {
-        final map = jsonDecode(j) as Map<String, dynamic>;
-        // Migración: el agente local exponía el chat/estado en :8642 (gateway de
-        // mensajería), pero esa API la sirve el dashboard en :9119. Reapuntamos
-        // las conexiones locales antiguas para que "online" y el chat funcionen.
+        map = jsonDecode(j) as Map<String, dynamic>;
         final storedKind = (map['kind'] as String?)?.trim();
         final isLegacyLocalKind =
             storedKind == null ||
@@ -377,34 +403,36 @@ class ConnectionManager {
           map['dashboard_url'] = 'http://127.0.0.1:9119';
           needsResave = true;
         }
-        final conn = SavedConnection.fromMap(map);
-        validConnections.add(conn);
-
-        final plainKey = (map['api_key'] as String?) ?? '';
+        conn = SavedConnection.fromMap(map);
+      } catch (error) {
+        // FormatException can include the original JSON, including a legacy
+        // plaintext key. Never log its source or exception message.
+        debugPrint('[connection] invalid metadata (${error.runtimeType})');
+        needsResave = true;
+        continue;
+      }
+      final plainKey = (map['api_key'] as String?) ?? '';
+      if (plainKey.isNotEmpty) needsResave = true;
+      validConnections.add(conn);
+      keystoreLoads.add(() async {
         if (plainKey.isNotEmpty) {
-          // Migration: plaintext key found in JSON → move to Keystore
           await _secure.writeApiKey(conn.id, plainKey);
           _apiKeyCache[conn.id] = plainKey;
-          needsResave = true;
         } else {
           final stored = await _secure.readApiKey(conn.id);
           if (stored != null && stored.isNotEmpty) {
             _apiKeyCache[conn.id] = stored;
           }
         }
-      } catch (e) {
-        debugPrint(
-          '[connection] excepción silenciada (se continúa sin propagar): $e',
-        );
-        // Corrupt SharedPrefs entry — exclude from re-save
-        needsResave = true;
-        continue;
-      }
+      }());
     }
-
-    if (needsResave) {
-      await _saveAll(validConnections);
-    }
+    // Keystore round trips run concurrently; every one settles before the
+    // first failure is rethrown. Storage failures are not corrupt metadata:
+    // abort initialization before rewriting prefs or pruning anything, so a
+    // migration never removes the only remaining copy of a key when the
+    // Keystore write failed.
+    await Future.wait(keystoreLoads);
+    if (needsResave) await _saveAll(validConnections);
   }
 
   /// Returns connections with API keys injected from the in-memory cache.
@@ -452,6 +480,25 @@ class ConnectionManager {
     return null;
   }
 
+  /// The one Gateway-era connection (a key, or port 8642 with no Dashboard)
+  /// whose host is [host]; null when none or several match.
+  SavedConnection? findGatewayEraByHost(String host) {
+    final wanted = host.trim().toLowerCase();
+    final found = getConnections().where(
+      (c) =>
+          c.host.trim().toLowerCase() == wanted &&
+          (c.apiKey.trim().isNotEmpty ||
+              (c.port == 8642 && (c.dashboardUrl ?? '').trim().isEmpty)),
+    );
+    return found.length == 1 ? found.first : null;
+  }
+
+  /// Forgets the Gateway key of [id] on this phone (the server is untouched).
+  Future<void> dropGatewayKey(String id) async {
+    await _secure.deleteApiKey(id);
+    _apiKeyCache.remove(id);
+  }
+
   Future<void> saveConnection(
     String label,
     String host,
@@ -475,13 +522,16 @@ class ConnectionManager {
     _apiKeyCache[conn.id] = apiKey;
     final current = getConnections();
     current.insert(0, conn);
-    await _saveAll(current);
+    await _saveAll(current, changedConnectionId: conn.id);
   }
 
   Future<void> updateApiKey(String connId, String apiKey) async {
+    if (apiKey.trim().isEmpty) return;
+    _publishConnectionWillChange(connId);
     await _secure.writeApiKey(connId, apiKey);
     _apiKeyCache[connId] = apiKey;
     // SharedPrefs metadata does not include api_key — no update needed there
+    _publishConnectionRevision(connId);
     connectionsRevision.value += 1;
   }
 
@@ -497,42 +547,69 @@ class ConnectionManager {
     String? apiKey,
     bool? readOnly,
   }) async {
-    if (apiKey != null && apiKey.isNotEmpty) {
-      await _secure.writeApiKey(id, apiKey);
-      _apiKeyCache[id] = apiKey;
-    }
     final current = getConnections();
     final idx = current.indexWhere((c) => c.id == id);
     if (idx == -1) return;
     final existing = current[idx];
-    final updated = SavedConnection(
-      id: id,
+    final nextApiKey = apiKey != null && apiKey.trim().isNotEmpty
+        ? apiKey
+        : existing.apiKey;
+    final updated = existing.copyWith(
       label: label,
       host: host,
       port: port,
-      apiKey: _apiKeyCache[id] ?? existing.apiKey,
+      apiKey: nextApiKey,
       useHttps: useHttps,
       readOnly: readOnly ?? existing.readOnly,
       onDeviceLoopback: existing.onDeviceLoopback,
       kind: kind,
     );
+    final metadataChanged = !_samePersistedConnection(existing, updated);
+    final apiKeyChanged =
+        apiKey != null && apiKey.trim().isNotEmpty && apiKey != existing.apiKey;
+    if (!metadataChanged && !apiKeyChanged) return;
+    BotMentionRoster.shared.remove(id);
+
+    // La tarjeta de Ajustes puede tener un debounce pendiente. La frontera se
+    // publica antes de tocar Keystore o prefs para que nunca use el cliente
+    // autenticado que corresponde a los metadatos anteriores.
+    _publishConnectionWillChange(id);
+    if (apiKeyChanged) {
+      await _secure.writeApiKey(id, nextApiKey);
+      _apiKeyCache[id] = nextApiKey;
+    }
     if (!_sameGatewayEndpoint(existing, updated)) {
       await prefs.remove(_capsKey(id));
     }
     current[idx] = updated;
-    await _saveAll(current);
+    await _saveAll(current, changedConnectionId: id);
   }
 
   /// Inserta o reemplaza una conexión completa (formato nuevo del editor de
   /// instancias). Los secretos van por separado: la API key del Gateway con
   /// [apiKey] y los del Dashboard con [setDashboardSecrets].
   Future<void> upsertConnection(SavedConnection conn) async {
-    if (conn.apiKey.isNotEmpty) {
+    final current = getConnections();
+    final idx = current.indexWhere((c) => c.id == conn.id);
+    final existing = idx == -1 ? null : current[idx];
+    final metadataChanged =
+        existing != null && !_samePersistedConnection(existing, conn);
+    final apiKeyChanged =
+        existing != null &&
+        conn.apiKey.trim().isNotEmpty &&
+        conn.apiKey != existing.apiKey;
+    if (existing != null && !metadataChanged && !apiKeyChanged) return;
+
+    if (metadataChanged || apiKeyChanged) {
+      // Debe ocurrir antes de cualquier await de Keystore: los cambios de
+      // URL/auth/read-only no pueden dejar un PUT pendiente con el cliente
+      // autenticado anterior.
+      _publishConnectionWillChange(conn.id);
+    }
+    if (conn.apiKey.trim().isNotEmpty) {
       await _secure.writeApiKey(conn.id, conn.apiKey);
       _apiKeyCache[conn.id] = conn.apiKey;
     }
-    final current = getConnections();
-    final idx = current.indexWhere((c) => c.id == conn.id);
     if (idx == -1) {
       // Un id nuevo no puede heredar una matriz abandonada de otra instancia.
       await prefs.remove(_capsKey(conn.id));
@@ -543,74 +620,122 @@ class ConnectionManager {
       }
       current[idx] = conn;
     }
-    await _saveAll(current);
+    await _saveAll(current, changedConnectionId: conn.id);
   }
 
   // ── Secretos del Dashboard (Keystore) ─────────────────────────────────
 
-  Future<DashboardSecrets> getDashboardSecrets(String connId) async {
-    return DashboardSecrets(
-      sessionToken: await _secure.readDashboardSecret(connId, 'token'),
-      username: await _secure.readDashboardSecret(connId, 'user'),
-      password: await _secure.readDashboardSecret(connId, 'pass'),
+  Future<DashboardSecrets> getDashboardSecrets(String connId) {
+    // Serialize reads too: a login must not observe a new username paired
+    // with the old password while a save is between secure-storage writes.
+    final reading = _dashboardAccessTail.then(
+      (_) async => DashboardSecrets(
+        sessionToken: await _secure.readDashboardSecret(connId, 'token'),
+        username: await _secure.readDashboardSecret(connId, 'user'),
+        password: await _secure.readDashboardSecret(connId, 'pass'),
+      ),
     );
+    _dashboardAccessTail = reading.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return reading;
   }
+
+  Future<void> _dashboardAccessTail = Future<void>.value();
 
   Future<void> setDashboardSecrets(
     String connId, {
     String? sessionToken,
     String? username,
     String? password,
-  }) async {
-    var changed = false;
-    if (sessionToken != null) {
-      await _secure.writeDashboardSecret(connId, 'token', sessionToken);
-      changed = true;
+  }) {
+    final edits = <String, String>{
+      if (sessionToken != null && sessionToken.trim().isNotEmpty)
+        'token': sessionToken,
+      if (username != null && username.trim().isNotEmpty) 'user': username,
+      if (password != null && password.isNotEmpty) 'pass': password,
+    };
+    if (edits.isEmpty) return Future<void>.value();
+    final replacesPassword =
+        MobileOAuthSession.carriesRefresh(edits['token']) &&
+        !edits.containsKey('user') &&
+        !edits.containsKey('pass');
+    // Fence pending authenticated writes synchronously, before queueing any
+    // storage access (the settings debounce relies on this boundary).
+    _publishConnectionWillChange(connId);
+    // A login or manual token replaces the stored session: a renewal that
+    // began earlier must not store or publish anything over it.
+    if (edits.containsKey('token')) {
+      NativeSessionCoordinator.instance.invalidate(connId);
     }
-    if (username != null) {
-      await _secure.writeDashboardSecret(connId, 'user', username);
-      changed = true;
-    }
-    if (password != null) {
-      await _secure.writeDashboardSecret(connId, 'pass', password);
-      changed = true;
-    }
-    if (changed) connectionsRevision.value += 1;
-  }
-
-  // ── Mobile Bridge (Keystore) ──────────────────────────────────────────
-
-  /// Configuración privada del Mobile Bridge asociada a una instancia.
-  ///
-  /// La URL vacía significa "usar la derivada del host del Gateway". El token
-  /// nunca se incorpora al modelo serializable ni a SharedPreferences.
-  Future<({String url, String token})> getBridgeConfig(String connId) async {
-    return (
-      url: (await _secure.readBridge(connId, 'url') ?? '').trim(),
-      token: (await _secure.readBridge(connId, 'token') ?? '').trim(),
+    final saving = _dashboardAccessTail.then((_) async {
+      final previous = <String, String?>{};
+      for (final field in edits.keys) {
+        previous[field] = await _secure.readDashboardSecret(connId, field);
+      }
+      final written = <String>[];
+      try {
+        for (final edit in edits.entries) {
+          written.add(edit.key);
+          if (edit.key == 'token' &&
+              MobileOAuthSession.carriesRefresh(edit.value)) {
+            await _secure.writeDashboardSecretDurable(
+              connId,
+              edit.key,
+              edit.value,
+            );
+          } else {
+            await _secure.writeDashboardSecret(connId, edit.key, edit.value);
+          }
+        }
+        // Browser sign-in that kept a refresh token: the v2 envelope must read
+        // back intact before the typed password is dropped (write → verify →
+        // delete; a failed write leaves the password where it was).
+        if (replacesPassword &&
+            await _secure.readDashboardSecret(connId, 'token') !=
+                edits['token']) {
+          throw StateError('Dashboard session envelope did not persist');
+        }
+      } catch (_) {
+        var restored = true;
+        for (final field in written.reversed) {
+          try {
+            final value = previous[field];
+            if (value == null) {
+              await _secure.deleteDashboardSecret(connId, field);
+            } else {
+              await _secure.writeDashboardSecret(connId, field, value);
+            }
+          } catch (_) {
+            restored = false;
+          }
+        }
+        // Invalidate readers even when the storage device rejected rollback.
+        _publishConnectionRevision(connId);
+        connectionsRevision.value += 1;
+        if (!restored) throw StateError('Dashboard credential rollback failed');
+        rethrow;
+      }
+      if (replacesPassword) {
+        for (final field in const ['user', 'pass']) {
+          try {
+            await _secure.deleteDashboardSecret(connId, field);
+          } catch (_) {
+            // The session is saved and the mode is sessionToken: a stale
+            // password is unused, so a failed delete must not fail the login.
+          }
+        }
+      }
+      _publishConnectionRevision(connId);
+      connectionsRevision.value += 1;
+    });
+    _dashboardAccessTail = saving.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
     );
+    return saving;
   }
-
-  /// Guarda cambios del Bridge sin borrar secretos accidentalmente.
-  ///
-  /// - [url] no nula reemplaza el override; vacía vuelve a la autodetección.
-  /// - [token] solo reemplaza el secreto si contiene un valor. Así, al editar
-  ///   una instancia, dejar el campo secreto vacío conserva el token anterior.
-  Future<void> setBridgeConfig(
-    String connId, {
-    String? url,
-    String? token,
-  }) async {
-    if (url != null) {
-      await _secure.writeBridge(connId, 'url', url.trim());
-    }
-    final normalizedToken = token?.trim() ?? '';
-    if (normalizedToken.isNotEmpty) {
-      await _secure.writeBridge(connId, 'token', normalizedToken);
-    }
-  }
-
-  Future<void> clearBridgeConfig(String connId) => _secure.deleteBridge(connId);
 
   // ── Matriz de capacidades (prefs, JSON por instancia) ─────────────────
 
@@ -625,6 +750,11 @@ class ConnectionManager {
       previous.port == next.port &&
       previous.useHttps == next.useHttps;
 
+  static bool _samePersistedConnection(
+    SavedConnection previous,
+    SavedConnection next,
+  ) => mapEquals(previous.toMap(), next.toMap());
+
   CapabilityMatrix loadCapabilities(String connId) {
     final raw = prefs.getString(_capsKey(connId));
     if (raw == null) return const CapabilityMatrix();
@@ -638,8 +768,24 @@ class ConnectionManager {
     }
   }
 
-  Future<void> saveCapabilities(String connId, CapabilityMatrix matrix) =>
-      prefs.setString(_capsKey(connId), jsonEncode(matrix.toJson()));
+  Future<void> saveCapabilities(String connId, CapabilityMatrix matrix) async {
+    final serialized = jsonEncode(matrix.toJson());
+    if (prefs.getString(_capsKey(connId)) == serialized) return;
+    final previous = loadCapabilities(connId);
+    final configAccessChanged =
+        previous.configRead != matrix.configRead ||
+        previous.configWrite != matrix.configWrite;
+    if (configAccessChanged) {
+      // La tarjeta puede tener un debounce o un PUT en curso. Cerrarla antes
+      // de persistir evita que escriba con permisos que ya no son válidos,
+      // pero no propaga una falsa invalidación de URL/auth al chat.
+      _publishConfigAccessWillChange(connId);
+    }
+    await prefs.setString(_capsKey(connId), serialized);
+    if (configAccessChanged) {
+      _publishConfigAccessRevision(connId);
+    }
+  }
 
   /// Marca streaming como confirmado tras el primer chat SSE exitoso.
   /// Estático porque ChatScreen no sostiene el manager.
@@ -711,8 +857,19 @@ class ConnectionManager {
   /// los metadatos de conexión. Tras esto, cada instancia pedirá la clave de
   /// nuevo.
   Future<void> wipeAllApiKeys() async {
+    final connectionIds = getConnections().map((connection) => connection.id);
+    for (final id in connectionIds) {
+      _publishConnectionWillChange(id);
+    }
     await _secure.clearAllConnectionSecrets();
     _apiKeyCache.clear();
+    PrivateRenderCaches.clearAll();
+    // Invalida clientes ya hidratados: pueden conservar tokens/cookies aunque
+    // el Keystore se haya vaciado correctamente.
+    for (final id in connectionIds) {
+      _publishConnectionRevision(id);
+    }
+    connectionsRevision.value += 1;
   }
 
   // Prefijos de claves de SharedPreferences ligadas a UNA conexión (id UUID).
@@ -720,6 +877,8 @@ class ConnectionManager {
   // huérfanas de borrados antiguos al arrancar (evita basura tras updates del
   // APK, que conservan los datos a propósito).
   static const List<String> _connScopedPrefixes = [
+    // HermesUpdateSession.prefsPrefix (a running server update).
+    'hermes_update_session_v1.',
     'capabilities_',
     'active_profile_',
     'runs_',
@@ -727,6 +886,10 @@ class ConnectionManager {
     'approval_rules_',
     'archived_sessions_',
     'hidden_sessions_',
+    'hidden_rows_',
+    'deleted_sessions_',
+    'session_auto_titles_',
+    'pr_scanned_ids_',
     'mission_control.organizations.v1.',
     'mission_control.rooms.v1.',
     'mission_control.bot_chat_pins.v1.',
@@ -739,6 +902,7 @@ class ConnectionManager {
   // sin puntos) es el segmento tras el prefijo y antes del primer punto.
   static const List<String> _connScopedDottedPrefixes = [
     'companion.selected_slug.',
+    'companion.identity.',
     'companion.enabled.',
     'companion.scale.',
     'companion.size_multiplier.',
@@ -779,30 +943,49 @@ class ConnectionManager {
   /// las conexiones vivas y todos los ajustes globales. Devuelve cuántas quitó.
   Future<int> pruneOrphanData() async {
     final valid = getConnections().map((c) => c.id).toSet();
-    var removed = 0;
-    for (final k in prefs.getKeys().toList()) {
+    final orphans = prefs.getKeys().where((k) {
       final id = _connIdOfKey(k);
-      if (id != null && id.isNotEmpty && !valid.contains(id)) {
-        await prefs.remove(k);
-        removed++;
-      }
-    }
-    return removed;
+      return id != null && id.isNotEmpty && !valid.contains(id);
+    }).toList();
+    // Independent keys: issue the removals together instead of one platform
+    // round trip per key on the startup path.
+    await Future.wait(orphans.map(prefs.remove));
+    return orphans.length;
   }
 
   Future<void> deleteConnection(String id) async {
-    // El resto de recovery local se mantiene best-effort por compatibilidad.
-    try {
-      await ChatDraftStore(prefs).deleteForConnection(id);
-      await TurnOutboxStore().deleteForConnection(id);
-      await MissionBotChatStore(prefs).deleteForConnection(id);
-    } catch (error) {
-      // Borrar la instancia no debe quedar bloqueado por un Keystore dañado.
-      // No se registra contenido, ids ni detalles del plugin.
-      debugPrint('[connection] recovery cleanup failed (${error.runtimeType})');
+    BotMentionRoster.shared.remove(id);
+    _publishConnectionWillChange(id);
+    PrivateRenderCaches.clearAll();
+    // Cada authority local se limpia de forma independiente: un plugin dañado
+    // no puede impedir que los demás stores olviden la conexión.
+    Future<void> bestEffortCleanup(Future<void> Function() cleanup) async {
+      try {
+        await cleanup();
+      } catch (error) {
+        // Borrar la instancia no debe quedar bloqueado por un Keystore dañado.
+        // No se registra contenido, ids ni detalles del plugin.
+        debugPrint(
+          '[connection] recovery cleanup failed (${error.runtimeType})',
+        );
+      }
     }
+
+    await bestEffortCleanup(
+      () async => ChatDraftStore(prefs).deleteForConnection(id),
+    );
+    await bestEffortCleanup(
+      () async => TurnOutboxStore().deleteForConnection(id),
+    );
+    await bestEffortCleanup(
+      () async => LocalTranscriptStore.deleteForConnection(id),
+    );
+    await bestEffortCleanup(
+      () async => MissionBotChatStore(prefs).deleteForConnection(id),
+    );
     // Credenciales (Keystore).
     await _secure.deleteApiKey(id);
+    NativeSessionCoordinator.instance.invalidate(id);
     await _secure.deleteDashboardSecrets(id);
     await _secure.deleteBridge(id);
     // Todos los datos con ámbito de esta conexión (caps, perfil activo, runs,
@@ -826,6 +1009,7 @@ class ConnectionManager {
     }
     // La baja de la conexión se completa incluso si el cleanup quedó encolado.
     await _saveAll(current);
+    _disposeConnectionNotifiers(id);
     if (cleanupError != null) {
       debugPrint(
         '[connection] cancelled-turn cleanup queued after delete: '
@@ -834,11 +1018,45 @@ class ConnectionManager {
     }
   }
 
-  Future<void> _saveAll(List<SavedConnection> list) async {
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    for (final notifier in _activeProfileRevisions.values) {
+      notifier.dispose();
+    }
+    for (final notifier in _connectionRevisions.values) {
+      notifier.dispose();
+    }
+    for (final notifier in _connectionWillChange.values) {
+      notifier.dispose();
+    }
+    for (final notifier in _configAccessRevisions.values) {
+      notifier.dispose();
+    }
+    for (final notifier in _configAccessWillChange.values) {
+      notifier.dispose();
+    }
+    _activeProfileRevisions.clear();
+    _connectionRevisions.clear();
+    _connectionWillChange.clear();
+    _configAccessRevisions.clear();
+    _configAccessWillChange.clear();
+    activeProfile.dispose();
+    activeConnectionId.dispose();
+    connectionsRevision.dispose();
+  }
+
+  Future<void> _saveAll(
+    List<SavedConnection> list, {
+    String? changedConnectionId,
+  }) async {
     await prefs.setStringList(
       _key,
       list.map((c) => jsonEncode(c.toMap())).toList(),
     );
+    if (changedConnectionId != null) {
+      _publishConnectionRevision(changedConnectionId);
+    }
     connectionsRevision.value += 1;
   }
 }
@@ -876,9 +1094,25 @@ class SessionMessagesPage {
   /// anunció `pagination`, aunque su contenido estuviera incompleto o corrupto.
   final bool paginationProvided;
 
-  /// Solo es true si la metadata ausente es realmente legacy o si `limit` y
-  /// `offset` son enteros válidos (limit positivo y offset no negativo).
+  /// Solo es true si la metadata ausente es realmente legacy o si `limit`,
+  /// `offset` y cualquier `returned` presente son enteros válidos (limit
+  /// positivo; offset y returned no negativos).
   final bool paginationFullyParsed;
+
+  /// Number of upstream rows consumed by this page. Unlike the visible list,
+  /// this is safe to use as the next `latest` offset.
+  final int returned;
+
+  /// Tip selected by Hermes after resolving the requested stored session.
+  final String? resolvedTipId;
+
+  /// Honest limitations of this source; REST 8642 is tip-only and omits
+  /// display_metadata even when every returned row parsed successfully.
+  final Set<CoreReadCoverage> coverage;
+
+  /// Authoritative lookahead evidence supplied by the transcript loader.
+  /// Null means the page shape alone decides whether an older page may exist.
+  final bool? hasEarlier;
 
   SessionMessagesPage({
     required this.messages,
@@ -886,7 +1120,14 @@ class SessionMessagesPage {
     bool? paginationProvided,
     int? rawMessageCount,
     bool? messagesFullyParsed,
+    this.resolvedTipId,
+    this.coverage = const <CoreReadCoverage>{},
+    this.hasEarlier,
   }) : rawMessageCount = rawMessageCount ?? messages.length,
+       returned =
+           _pageInt(pagination, 'returned') ??
+           rawMessageCount ??
+           messages.length,
        messagesFullyParsed =
            (messagesFullyParsed ?? true) &&
            (rawMessageCount == null || rawMessageCount == messages.length),
@@ -915,6 +1156,10 @@ class SessionMessagesPage {
     required Object? rawMessages,
     required Object? pagination,
     bool? paginationProvided,
+    int? requestedLimit,
+    int? requestedOffset,
+    String? resolvedTipId,
+    Set<CoreReadCoverage> coverage = const <CoreReadCoverage>{},
   }) {
     if (rawMessages is! List) {
       throw const FormatException('Invalid session transcript page');
@@ -932,12 +1177,21 @@ class SessionMessagesPage {
         fullyParsed = false;
       }
     }
+    final returned = _pageInt(pagination, 'returned');
+    final responseLimit = _pageInt(pagination, 'limit');
+    final responseOffset = _pageInt(pagination, 'offset');
+    final paginationConsistent =
+        (returned == null || returned == rawMessages.length) &&
+        (requestedLimit == null || responseLimit == requestedLimit) &&
+        (requestedOffset == null || responseOffset == requestedOffset);
     return SessionMessagesPage(
       messages: List.unmodifiable(messages),
-      pagination: pagination,
+      pagination: paginationConsistent ? pagination : const <String, Object?>{},
       paginationProvided: paginationProvided,
       rawMessageCount: rawMessages.length,
       messagesFullyParsed: fullyParsed,
+      resolvedTipId: resolvedTipId,
+      coverage: Set<CoreReadCoverage>.unmodifiable(coverage),
     );
   }
 
@@ -948,9 +1202,14 @@ class SessionMessagesPage {
     bool paginationProvided,
   ) {
     if (!paginationProvided) return true;
+    if (pagination is! Map) return false;
     final limit = _pageInt(pagination, 'limit');
     final offset = _pageInt(pagination, 'offset');
-    return limit != null && limit > 0 && offset != null;
+    final returned = _pageInt(pagination, 'returned');
+    return limit != null &&
+        limit > 0 &&
+        offset != null &&
+        (!pagination.containsKey('returned') || returned != null);
   }
 
   static int? _pageInt(Object? pagination, String key) {
@@ -979,12 +1238,24 @@ List<Map<String, dynamic>> _strictTranscriptMessages(Object? rawMessages) {
   return List.unmodifiable(messages);
 }
 
+/// A transcript read passed its character cap ([ApiClient.getMessages]).
+final class SessionTranscriptTooLargeException implements Exception {
+  const SessionTranscriptTooLargeException();
+
+  @override
+  String toString() => 'SessionTranscriptTooLargeException';
+}
+
 class ApiClient {
   static const Duration _requestTimeout = Duration(seconds: 15);
-  final http.Client _http;
+  final OriginBoundHttpClient _http;
   final String baseUrl;
   final String _apiKey;
   final String? _connectionId;
+
+  /// Dashboard that serves a named profile's session list (see
+  /// [getSessions]). Owned: [close] closes it.
+  final DashboardClient? _profileDashboard;
 
   // Keep the public parameter name `apiKey` while storing it privately.
   ApiClient({
@@ -992,19 +1263,50 @@ class ApiClient {
     required String apiKey,
     String? connectionId,
     http.Client? httpClient,
+    DashboardClient? profileDashboard,
   }) : _apiKey = apiKey,
        _connectionId = connectionId,
+       _profileDashboard = profileDashboard,
        baseUrl = TransportPrivacy.requireAllowed(
          baseUrl.endsWith('/')
              ? baseUrl.substring(0, baseUrl.length - 1)
              : baseUrl,
        ),
-       _http = httpClient ?? http.Client();
+       _http = OriginBoundHttpClient(httpClient, _requestTimeout);
+
+  /// A client for [connection] with its Dashboard attached, so the reads
+  /// Desktop makes against the Dashboard (session list, detail, transcript,
+  /// reachability) never go to the Gateway port.
+  factory ApiClient.forConnection(
+    SavedConnection connection, {
+    http.Client? httpClient,
+  }) => ApiClient(
+    baseUrl: connection.baseUrl,
+    apiKey: connection.apiKey,
+    connectionId: connection.id,
+    httpClient: httpClient,
+    profileDashboard: DashboardClient.lazy(
+      connection,
+      httpClientOverride: httpClient,
+    ),
+  );
+
+  /// Whether this client has the Dashboard attached. With one, session reads
+  /// and deletes go to it and never to the Gateway, as in Desktop.
+  bool get hasDashboard => _profileDashboard != null;
 
   Map<String, String> get _headers => {
     'Authorization': 'Bearer $_apiKey',
     'Content-Type': 'application/json',
   };
+
+  /// Hermes selects a non-default runtime profile from the URL namespace.
+  /// Empty/default preserve the historical unprefixed API surface.
+  static String profileEndpoint(String endpoint, {String? profile}) {
+    final owner = validateCronProfile(profile);
+    if (owner == null) return endpoint;
+    return 'p/${Uri.encodeComponent(owner)}/$endpoint';
+  }
 
   // ── Session listing ──────────────────────────────────────────────────
 
@@ -1013,44 +1315,243 @@ class ApiClient {
   /// quedan ocultas y no se pueden borrar desde la app. [includeChildren] pide
   /// `?include_children=true` para ver TODAS (necesario para limpiar de verdad).
   /// `limit=200` evita el tope por defecto de 50 del servidor.
-  Future<List<Session>> getSessions({bool includeChildren = false}) async {
-    final res = await _http
-        .get(
-          Uri.parse(
-            '$baseUrl/api/sessions?limit=200'
-            '${includeChildren ? '&include_children=true' : ''}',
-          ),
-          headers: _headers,
-        )
-        .timeout(_requestTimeout);
-    if (res.statusCode != 200) {
-      throw Exception('HTTP ${res.statusCode}: ${res.body}');
+  ///
+  /// [pageSize] and [enough] bound the walk for surfaces that only show the
+  /// newest rows (Home, drawer): the read stops after the first page for
+  /// which `enough(sessionsSoFar)` is true, or after [maxPages] pages. Without
+  /// them every page is read, as cleanup and lineage resolution require.
+  ///
+  /// With a Dashboard attached ([profileDashboard]) every list is read from
+  /// it, as Desktop does: `listSessions()` sends `/api/sessions` (plus
+  /// `?profile=<name>` for a named profile) to the Dashboard. The API server's
+  /// `/p/<name>/` mirror only accepts that profile's own `API_SERVER_KEY`
+  /// and answers 401 when it has none, so the connection's key cannot read it.
+  Future<List<Session>> getSessions({
+    bool includeChildren = false,
+    String? profile,
+    int pageSize = 200,
+    bool Function(List<Session> sessions)? enough,
+    int? maxPages,
+  }) async {
+    var pagesRead = 0;
+    final owner = validateCronProfile(profile);
+    // The Dashboard list never returns continuation rows and has no
+    // `include_children`; the lineage delete order needs them, so that read
+    // of the default profile stays on the Gateway.
+    final dashboard = includeChildren && owner == null
+        ? null
+        : _profileDashboard;
+    // The Dashboard caps `limit` at 100 (422 above it).
+    final pageLimit = pageSize.clamp(1, dashboard == null ? 200 : 100);
+    final endpoint = profileEndpoint('api/sessions', profile: owner);
+    final sessions = <Session>[];
+    final observed = <String>{};
+    final pageSignatures = <String>{};
+    int? positivePageInt(Object? value) =>
+        value is int && value > 0 ? value : null;
+    var offset = 0;
+
+    while (true) {
+      CoreReadException readFailure(int status) =>
+          CoreReadException(switch (status) {
+            401 => CoreReadErrorKind.auth,
+            403 => CoreReadErrorKind.forbidden,
+            404 when owner != null => CoreReadErrorKind.profileUnavailable,
+            404 => CoreReadErrorKind.notFound,
+            503 => CoreReadErrorKind.temporarilyUnavailable,
+            _ => CoreReadErrorKind.malformed,
+          }, statusCode: status);
+      final Map<String, dynamic> data;
+      if (dashboard != null) {
+        // Desktop `listSessions(limit)`: one recent-first page per call.
+        final query = Uri(
+          queryParameters: {
+            'limit': '$pageLimit',
+            'offset': '$offset',
+            'min_messages': '0',
+            'archived': 'exclude',
+            'order': 'recent',
+            'profile': ?owner,
+          },
+        ).query;
+        try {
+          data = await dashboard.apiGet('sessions?$query');
+        } on DashboardHttpException catch (error) {
+          throw readFailure(error.statusCode);
+        } on DashboardAuthException {
+          if (owner != null) rethrow;
+          throw readFailure(401);
+        }
+      } else {
+        final query = <String, String>{
+          'limit': '$pageLimit',
+          'offset': '$offset',
+          if (includeChildren) 'include_children': 'true',
+        };
+        final uri = Uri.parse(
+          '$baseUrl/$endpoint',
+        ).replace(queryParameters: query);
+        final res = await _http
+            .within(_requestTimeout)
+            .get(uri, headers: _headers);
+        if (res.statusCode != 200) throw readFailure(res.statusCode);
+        data = jsonDecode(res.body) as Map<String, dynamic>;
+      }
+      final rawRows = dashboard != null ? data['sessions'] : data['data'];
+      if (rawRows is! List) {
+        throw const FormatException('Invalid Gateway session page');
+      }
+      final pagination = data['pagination'];
+      final pageLimitPublished =
+          positivePageInt(data['limit']) ??
+          (pagination is Map ? positivePageInt(pagination['limit']) : null) ??
+          pageLimit;
+      final total = data['total'];
+      final serverSaysMore = dashboard != null
+          ? (total is int
+                ? offset + rawRows.length < total
+                : rawRows.length >= pageLimitPublished)
+          : data['has_more'] == true ||
+                (pagination is Map && pagination['has_more'] == true);
+      // The Gateway derives `has_more` from the UNPINNED rows of the window
+      // only, so pinned chats among the newest rows report `false` on a full
+      // page and every older row (automation runs first) went unread. A full
+      // page always asks for the next one; that page ends the listing.
+      final hasMore =
+          serverSaysMore ||
+          (dashboard == null && rawRows.length >= pageLimitPublished);
+      final signature = rawRows
+          .map((row) => row is Map ? row['id']?.toString() ?? '' : '')
+          .join('\u001f');
+      if (serverSaysMore && !pageSignatures.add(signature)) {
+        throw const CoreReadException(CoreReadErrorKind.paginationStalled);
+      }
+
+      var added = 0;
+      for (final row in rawRows.whereType<Map>()) {
+        final session = Session.fromJson(Map<String, dynamic>.from(row));
+        final publishedOwner = session.profile?.trim();
+        if (owner != null &&
+            publishedOwner != null &&
+            publishedOwner.isNotEmpty &&
+            publishedOwner != owner) {
+          throw const FormatException(
+            'Gateway session owner conflicts with the requested profile',
+          );
+        }
+        final scoped = owner != null && publishedOwner?.isNotEmpty != true
+            ? session.copyWith(profile: owner)
+            : session;
+        if (scoped.id.startsWith('mob-aux-')) continue;
+        final scopeOwner = Session.profileOwner(
+          scoped.profile,
+          fallback: owner,
+        );
+        if (observed.add('$scopeOwner\u001f${scoped.id}')) {
+          sessions.add(scoped);
+          added += 1;
+        }
+      }
+      if (!hasMore) return sessions;
+      pagesRead += 1;
+      if (enough != null && enough(sessions)) return sessions;
+      if (maxPages != null && pagesRead >= maxPages) return sessions;
+      // An inferred extra page that brings nothing new (back-filled pins, a
+      // repeated page) is the end of the listing, not a stalled server.
+      if (added == 0 && !serverSaysMore) return sessions;
+      if (added == 0 || pageLimitPublished <= 0) {
+        throw const CoreReadException(CoreReadErrorKind.paginationStalled);
+      }
+      offset += pageLimitPublished;
     }
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    final list = data['data'] as List? ?? [];
-    return list
-        .whereType<Map<String, dynamic>>()
-        .map((s) => Session.fromJson(s))
-        // Compatibilidad de limpieza: versiones experimentales antiguas crearon
-        // sesiones internas con este prefijo. Nunca fueron chats del usuario.
-        .where((s) => !s.id.startsWith('mob-aux-'))
-        .toList();
   }
 
   // ── Messages ─────────────────────────────────────────────────────────
 
-  Future<List<Map<String, dynamic>>> getMessages(String sessionId) async {
-    final res = await _http
-        .get(
-          Uri.parse('$baseUrl/api/sessions/$sessionId/messages'),
-          headers: _headers,
-        )
-        .timeout(_requestTimeout);
-    if (res.statusCode != 200) {
-      throw Exception('HTTP ${res.statusCode}: ${res.body}');
+  /// The whole transcript, oldest first. [maxJsonChars] bounds what is read:
+  /// once the messages read so far encode to more characters than that, it
+  /// stops with [SessionTranscriptTooLargeException] instead of paging on.
+  Future<List<Map<String, dynamic>>> getMessages(
+    String sessionId, {
+    String? profile,
+    int? maxJsonChars,
+  }) async {
+    const limit = 500;
+    var offset = 0;
+    var jsonChars = 0;
+    final pagesNewestFirst = <List<Map<String, dynamic>>>[];
+    final signatures = <String>{};
+    while (true) {
+      final page = maxJsonChars == null
+          ? await getMessagesPage(
+              sessionId,
+              profile: profile,
+              limit: limit,
+              offset: offset,
+            )
+          : await _readMessagesPage(
+              sessionId,
+              profile: profile,
+              limit: limit,
+              offset: offset,
+              maxBodyBytes: (maxJsonChars - jsonChars + 1) * _utf8BytesPerChar,
+            );
+      if (!page.messagesFullyParsed || !page.paginationFullyParsed) {
+        throw const CoreReadException(CoreReadErrorKind.malformed);
+      }
+      if (maxJsonChars != null) {
+        jsonChars += jsonEncode(page.messages).length;
+        if (jsonChars > maxJsonChars) {
+          throw const SessionTranscriptTooLargeException();
+        }
+      }
+      pagesNewestFirst.add(page.messages);
+      if (!page.paginationProvided) break;
+      final responseLimit = page.limit;
+      if (responseLimit == null || responseLimit != limit) {
+        throw const CoreReadException(CoreReadErrorKind.malformed);
+      }
+      if (page.returned < responseLimit) break;
+      if (page.returned <= 0) {
+        throw const CoreReadException(CoreReadErrorKind.paginationStalled);
+      }
+      final signature = page.messages
+          .map((row) => '${row['message_id'] ?? ''}\u001f${row['id'] ?? ''}')
+          .join('\u001e');
+      if (!signatures.add(signature)) {
+        throw const CoreReadException(CoreReadErrorKind.paginationStalled);
+      }
+      offset += page.returned;
     }
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    return _strictTranscriptMessages(data['data']);
+    return List<Map<String, dynamic>>.unmodifiable([
+      for (final page in pagesNewestFirst.reversed) ...page,
+    ]);
+  }
+
+  /// UTF-8 needs at most this many bytes per character, so a body under
+  /// `chars * _utf8BytesPerChar` bytes can still be under the character cap.
+  static const int _utf8BytesPerChar = 4;
+
+  /// GET that gives up as soon as the body passes [maxBytes], by the declared
+  /// length or by what has arrived, without buffering the rest.
+  Future<http.Response> _getBounded(Uri uri, int maxBytes) async {
+    final request = http.Request('GET', uri)..headers.addAll(_headers);
+    final streamed = await _http.send(request).timeout(_requestTimeout);
+    if (streamed.statusCode != 200) {
+      return http.Response('', streamed.statusCode);
+    }
+    final declared = streamed.contentLength;
+    if (declared != null && declared > maxBytes) {
+      throw const SessionTranscriptTooLargeException();
+    }
+    final bytes = <int>[];
+    await for (final chunk in streamed.stream.timeout(_requestTimeout)) {
+      bytes.addAll(chunk);
+      if (bytes.length > maxBytes) {
+        throw const SessionTranscriptTooLargeException();
+      }
+    }
+    return http.Response.bytes(bytes, 200, headers: streamed.headers);
   }
 
   /// Una página del transcript con la semántica `order=latest` de Hermes
@@ -1061,113 +1562,162 @@ class ApiClient {
   /// lo trata como historial completo.
   Future<SessionMessagesPage> getMessagesPage(
     String sessionId, {
+    String? profile,
     int limit = 120,
     int offset = 0,
+  }) => _readMessagesPage(
+    sessionId,
+    profile: profile,
+    limit: limit,
+    offset: offset,
+  );
+
+  Future<SessionMessagesPage> _readMessagesPage(
+    String sessionId, {
+    String? profile,
+    required int limit,
+    required int offset,
+    int? maxBodyBytes,
   }) async {
-    final res = await _http
-        .get(
-          Uri.parse(
-            '$baseUrl/api/sessions/$sessionId/messages'
-            '?limit=$limit&order=latest&offset=$offset',
-          ),
-          headers: _headers,
-        )
-        .timeout(_requestTimeout);
-    if (res.statusCode != 200) {
-      throw Exception('HTTP ${res.statusCode}: ${res.body}');
+    if (offset < 0) {
+      throw const CoreReadException(CoreReadErrorKind.malformed);
     }
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    final owner = validateCronProfile(profile);
+    final boundedLimit = limit.clamp(1, 500);
+    final uri = Uri.parse(
+      '$baseUrl/${profileEndpoint('api/sessions/${Uri.encodeComponent(sessionId)}/messages', profile: owner)}'
+      '?limit=$boundedLimit&order=latest&offset=$offset'
+      '&include_compacted=true',
+    );
+    CoreReadException failure(int status) => CoreReadException(switch (status) {
+      400 => CoreReadErrorKind.malformed,
+      401 => CoreReadErrorKind.auth,
+      403 => CoreReadErrorKind.forbidden,
+      404 when owner != null => CoreReadErrorKind.profileUnavailable,
+      404 => CoreReadErrorKind.notFound,
+      503 => CoreReadErrorKind.temporarilyUnavailable,
+      _ => CoreReadErrorKind.temporarilyUnavailable,
+    }, statusCode: status);
+    final Map<String, dynamic> data;
+    final dashboard = owner == null ? _profileDashboard : null;
+    if (dashboard != null) {
+      // Desktop `getSessionMessages`: the Dashboard serves the default
+      // profile's transcript too. Its pages are capped at 500 rows, so the
+      // body size is bounded without the streaming read below.
+      try {
+        data = await dashboard.apiGet(
+          'sessions/${Uri.encodeComponent(sessionId)}/messages'
+          '?limit=$boundedLimit&order=latest&offset=$offset'
+          '&include_compacted=true',
+        );
+      } on DashboardHttpException catch (error) {
+        throw failure(error.statusCode);
+      } on DashboardAuthException {
+        throw failure(401);
+      }
+    } else {
+      final res = maxBodyBytes == null
+          ? await _http.within(_requestTimeout).get(uri, headers: _headers)
+          : await _getBounded(uri, maxBodyBytes);
+      if (res.statusCode != 200) throw failure(res.statusCode);
+      data = jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    final resolved = data['session_id'];
+    final rawMessages = data.containsKey('messages')
+        ? data['messages']
+        : data['data'];
+    final compactedProjectionProven =
+        resolved == sessionId &&
+        data.containsKey('messages') &&
+        rawMessages is List &&
+        rawMessages.whereType<Map>().any((message) {
+          final compacted = message['compacted'];
+          final active = message['active'];
+          return (compacted == true || compacted == 1) &&
+              (active == false || active == 0);
+        });
     return SessionMessagesPage.fromRaw(
-      rawMessages: data['data'],
+      rawMessages: rawMessages,
       pagination: data['pagination'],
       paginationProvided: data.containsKey('pagination'),
+      requestedLimit: boundedLimit,
+      requestedOffset: offset,
+      resolvedTipId: resolved is String && resolved.trim().isNotEmpty
+          ? resolved.trim()
+          : null,
+      coverage: compactedProjectionProven
+          ? const {CoreReadCoverage.full}
+          : const {CoreReadCoverage.tipOnly, CoreReadCoverage.metadataPartial},
     );
-  }
-
-  // ── Models ───────────────────────────────────────────────────────────
-
-  /// Fetches available models from GET /v1/models (OpenAI-compatible).
-  /// Returns a fallback list with 'hermes-agent' when the endpoint is
-  /// unreachable or returns a non-200 status.
-  Future<List<ModelInfo>> getModelInfoList() async {
-    try {
-      final res = await _http
-          .get(Uri.parse('$baseUrl/v1/models'), headers: _headers)
-          .timeout(const Duration(seconds: 10));
-      if (res.statusCode != 200) {
-        return [const ModelInfo(id: 'hermes-agent')];
-      }
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      final list = data['data'] as List? ?? [];
-      final models = list
-          .whereType<Map<String, dynamic>>()
-          .map(ModelInfo.fromJson)
-          .toList();
-      return models.isEmpty ? [const ModelInfo(id: 'hermes-agent')] : models;
-    } catch (e) {
-      debugPrint(
-        '[connection] excepción silenciada (se continúa sin propagar): $e',
-      );
-      return [const ModelInfo(id: 'hermes-agent')];
-    }
-  }
-
-  /// Convenience wrapper: returns just model IDs. Use [getModelInfoList] for
-  /// richer metadata (created, owned_by).
-  Future<List<String>> getModels() async {
-    final models = await getModelInfoList();
-    return models.map((m) => m.id).toList();
-  }
-
-  /// Sonda best-effort de los modelos del backend Ollama del MISMO host, vía
-  /// `GET http://<host>:<port>/api/tags`. Hermes solo anuncia el alias
-  /// `hermes-agent` en `/v1/models`, así que esto es lo que permite elegir el
-  /// "cerebro" real (p.ej. `gemma4:e4b`) para el modo voz. Devuelve [] en
-  /// silencio si no hay Ollama o no es alcanzable (usuarios sin Ollama no se
-  /// ven afectados). El puerto por defecto es el estándar de Ollama (11434).
-  Future<List<String>> getBackendModels({int port = 11434}) async {
-    try {
-      final base = Uri.parse(baseUrl);
-      final uri = Uri(
-        scheme: base.scheme.isEmpty ? 'http' : base.scheme,
-        host: base.host,
-        port: port,
-        path: '/api/tags',
-      );
-      final res = await _http.get(uri).timeout(const Duration(seconds: 4));
-      if (res.statusCode != 200) return const [];
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      final list = data['models'] as List? ?? const [];
-      return list
-          .whereType<Map<String, dynamic>>()
-          .map((m) => (m['name'] ?? '').toString())
-          .where((n) => n.isNotEmpty)
-          .toList();
-    } catch (e) {
-      debugPrint(
-        '[connection] excepción silenciada (se devuelve lista vacía): $e',
-      );
-      return const [];
-    }
   }
 
   // ── Health check ─────────────────────────────────────────────────────
 
-  Future<bool> healthCheck() async {
+  /// The health endpoint alone, for callers whose next request is itself an
+  /// authenticated read (Home's paged session list): that read is the auth
+  /// proof, so [healthCheck]'s extra `/api/sessions` fetch would only repeat
+  /// it in series.
+  Future<bool> healthReachable() async {
+    final dashboard = _profileDashboard;
+    if (dashboard != null) return _dashboardReachable(dashboard);
     try {
       final health = await _http
-          .get(Uri.parse('$baseUrl/health'), headers: _headers)
-          .timeout(const Duration(seconds: 10));
+          .within(const Duration(seconds: 10))
+          .get(Uri.parse('$baseUrl/health'), headers: _headers); // U6b
+      return health.statusCode == 200;
+    } catch (e) {
+      debugPrint('[connection] excepción silenciada (se asume false): $e');
+      return false;
+    }
+  }
+
+  Future<bool> healthCheck() async {
+    // The Dashboard's public `/api/status` is Desktop's liveness probe; the
+    // list read that follows is the authentication proof.
+    final dashboard = _profileDashboard;
+    if (dashboard != null) return _dashboardReachable(dashboard);
+    try {
+      final health = await _http
+          .within(const Duration(seconds: 10))
+          .get(Uri.parse('$baseUrl/health'), headers: _headers); // U6b
       if (health.statusCode == 401 || health.statusCode == 403) return false;
       if (health.statusCode != 200) return false;
-
-      // /health may be intentionally public on some deployments. Confirm that
-      // the saved API key can also reach an authenticated endpoint before the
-      // add/update connection dialogs accept it as valid.
+    } catch (e) {
+      debugPrint('[connection] excepción silenciada (se asume false): $e');
+      return false;
+    }
+    // The health endpoint may be intentionally public on some deployments. Confirm that
+    // the saved API key can also reach an authenticated endpoint. Only an
+    // answer refutes it: a timeout, reset or 408/429/5xx from a server that
+    // just answered it is load, not an outage (#1215).
+    try {
       final sessions = await _http
-          .get(Uri.parse('$baseUrl/api/sessions'), headers: _headers)
-          .timeout(const Duration(seconds: 10));
-      return sessions.statusCode == 200;
+          .within(const Duration(seconds: 10))
+          .get(Uri.parse('$baseUrl/api/sessions'), headers: _headers);
+      final status = sessions.statusCode;
+      return status == 200 || status == 408 || status == 429 || status >= 500;
+    } on TimeoutException {
+      return true;
+    } on http.ClientException {
+      return true;
+    } on SocketException {
+      return true;
+    } catch (e) {
+      debugPrint('[connection] excepción silenciada (se asume false): $e');
+      return false;
+    }
+  }
+
+  /// True when the Dashboard answered, even to refuse: a 401/403 means the
+  /// server is there and the login is what is missing, never an outage.
+  Future<bool> _dashboardReachable(DashboardClient dashboard) async {
+    try {
+      await dashboard.getServerStatus().timeout(const Duration(seconds: 10));
+      return true;
+    } on DashboardAuthException {
+      return true;
+    } on DashboardHttpException catch (error) {
+      return error.statusCode == 401 || error.statusCode == 403;
     } catch (e) {
       debugPrint('[connection] excepción silenciada (se asume false): $e');
       return false;
@@ -1175,15 +1725,20 @@ class ApiClient {
   }
 
   /// Calienta la conexión keep-alive al gateway (Fase 0 HCR). Un GET ligero a
-  /// `/health` abre el socket TCP + handshake TLS y deja la conexión en el pool
+  /// el endpoint de salud abre el socket TCP + handshake TLS y deja la conexión en el pool
   /// del `http.Client` compartido, para que el PRIMER turno de voz no arranque
   /// en frío (DNS/TLS) — que es justo cuando "se queda pensando" más. Es
   /// best-effort: traga cualquier error y no bloquea (fire-and-forget).
   Future<void> warmUp() async {
     try {
+      final dashboard = _profileDashboard;
+      if (dashboard != null) {
+        await dashboard.getServerStatus().timeout(const Duration(seconds: 4));
+        return;
+      }
       await _http
-          .get(Uri.parse('$baseUrl/health'), headers: _headers)
-          .timeout(const Duration(seconds: 4));
+          .within(const Duration(seconds: 4))
+          .get(Uri.parse('$baseUrl/health'), headers: _headers); // U6b
     } catch (_) {
       // Calentamiento opcional: si falla, el turno real reportará el error.
     }
@@ -1193,16 +1748,16 @@ class ApiClient {
 
   Future<Map<String, dynamic>> apiGet(String endpoint) async {
     final res = await _http
-        .get(Uri.parse('$baseUrl/$endpoint'), headers: _headers)
-        .timeout(_requestTimeout);
+        .within(_requestTimeout)
+        .get(Uri.parse('$baseUrl/$endpoint'), headers: _headers);
     if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
   Future<List<dynamic>> apiGetList(String endpoint) async {
     final res = await _http
-        .get(Uri.parse('$baseUrl/$endpoint'), headers: _headers)
-        .timeout(_requestTimeout);
+        .within(_requestTimeout)
+        .get(Uri.parse('$baseUrl/$endpoint'), headers: _headers);
     if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
     return jsonDecode(res.body) as List<dynamic>;
   }
@@ -1212,12 +1767,12 @@ class ApiClient {
     Map<String, dynamic>? body,
   }) async {
     final res = await _http
+        .within(_requestTimeout)
         .post(
           Uri.parse('$baseUrl/$endpoint'),
           headers: _headers,
           body: body != null ? jsonEncode(body) : null,
-        )
-        .timeout(_requestTimeout);
+        );
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('HTTP ${res.statusCode}');
     }
@@ -1226,8 +1781,8 @@ class ApiClient {
 
   Future<void> apiDelete(String endpoint) async {
     final res = await _http
-        .delete(Uri.parse('$baseUrl/$endpoint'), headers: _headers)
-        .timeout(_requestTimeout);
+        .within(_requestTimeout)
+        .delete(Uri.parse('$baseUrl/$endpoint'), headers: _headers);
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('HTTP ${res.statusCode}');
     }
@@ -1240,15 +1795,38 @@ class ApiClient {
   /// borró (p.ej. recreada por un canal activo). Un 404 es éxito idempotente:
   /// la sesión ya no existe y se puede retirar su recuperación local. Lanza en
   /// los demás errores HTTP.
-  Future<bool> deleteSession(String sessionId) async {
+  Future<bool> deleteSession(String sessionId, {String? profile}) async {
+    final dashboard = _profileDashboard;
+    if (dashboard != null) {
+      // Desktop `deleteSession` (sessions.ts:709): one DELETE to the Dashboard,
+      // which removes the whole compression chain and delegated children. A
+      // failure is never retried on the Gateway: a partly deleted chain would
+      // come back as a new root.
+      final Map<String, dynamic> body;
+      try {
+        body = await deleteDashboardSession(
+          dashboard,
+          sessionId,
+          validateCronProfile(profile),
+        );
+      } on DashboardHttpException catch (error) {
+        // 409: a turn or a compression is running, the row stays.
+        if (error.statusCode == 409) return false;
+        rethrow;
+      }
+      final deleted = body['ok'] == true;
+      if (deleted) await _clearSessionRecovery(sessionId, profile: profile);
+      return deleted;
+    }
+    final endpoint = profileEndpoint(
+      'api/sessions/${Uri.encodeComponent(sessionId)}',
+      profile: profile,
+    );
     final res = await _http
-        .delete(
-          Uri.parse('$baseUrl/api/sessions/$sessionId'),
-          headers: _headers,
-        )
-        .timeout(_requestTimeout);
+        .within(_requestTimeout)
+        .delete(Uri.parse('$baseUrl/$endpoint'), headers: _headers);
     if (res.statusCode == 404) {
-      await _clearSessionRecovery(sessionId);
+      await _clearSessionRecovery(sessionId, profile: profile);
       return true;
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -1257,22 +1835,37 @@ class ApiClient {
     bool deleted;
     try {
       final data = jsonDecode(res.body) as Map<String, dynamic>;
-      deleted = data['deleted'] != false; // ausente → asumir borrada
+      deleted = data['deleted'] == true;
     } catch (e) {
-      debugPrint('[connection] excepción silenciada (se asume true): $e');
-      deleted = true;
+      // Un cuerpo que no se puede parsear (p.ej. un proxy o un gateway a
+      // medio reiniciar devolviendo HTML/vacío con 200) no es evidencia de
+      // que se borró — asumir `true` aquí anunciaba "conversación borrada"
+      // con la fila todavía en el servidor. `false` la manda al cubo
+      // "rechazada" de deleteRemoteSession en vez de darla por buena.
+      debugPrint('[connection] invalid delete response (${e.runtimeType})');
+      deleted = false;
     }
-    if (deleted) await _clearSessionRecovery(sessionId);
+    if (deleted) await _clearSessionRecovery(sessionId, profile: profile);
     return deleted;
   }
 
-  Future<void> _clearSessionRecovery(String sessionId) async {
+  Future<void> _clearSessionRecovery(
+    String sessionId, {
+    required String? profile,
+  }) async {
     final connectionId = _connectionId;
     if (connectionId == null || connectionId.isEmpty) return;
+    final ownerProfile = Session.profileOwner(profile);
     try {
       final prefs = await SharedPreferences.getInstance();
-      await ChatDraftStore(prefs).clearForSession(connectionId, sessionId);
-      await TurnOutboxStore().deleteForChat(connectionId, sessionId);
+      await ChatDraftStore(
+        prefs,
+      ).clear(connectionId, sessionId, profile: ownerProfile);
+      await TurnOutboxStore().deleteForChat(
+        connectionId,
+        sessionId,
+        profile: ownerProfile,
+      );
     } catch (error) {
       // El servidor ya confirmó el borrado: un fallo local de Keystore no debe
       // convertir esa operación remota correcta en un falso error de UI.
@@ -1283,452 +1876,23 @@ class ApiClient {
   }
 
   /// GET /api/sessions/{id} — detalle con métricas (tokens, coste, lineage).
-  Future<Session> getSession(String sessionId) async {
-    final data = await apiGet('api/sessions/$sessionId');
-    return Session.fromJson((data['session'] as Map<String, dynamic>?) ?? data);
-  }
-
-  /// POST /api/sessions/{id}/fork — ramifica una sesión (semántica /branch
-  /// del CLI: la original queda end_reason="branched" y la hija hereda el
-  /// transcript con parent_session_id). Verificado en vivo (api_server.py).
-  Future<Session> forkSession(String sessionId, {String? title}) async {
-    final data = await apiPost(
-      'api/sessions/$sessionId/fork',
-      body: {if (title != null && title.isNotEmpty) 'title': title},
+  Future<Session> getSession(String sessionId, {String? profile}) async {
+    final dashboard = _profileDashboard;
+    if (dashboard != null && validateCronProfile(profile) == null) {
+      return dashboard.getSessionDetail(sessionId);
+    }
+    final data = await apiGet(
+      profileEndpoint(
+        'api/sessions/${Uri.encodeComponent(sessionId)}',
+        profile: profile,
+      ),
     );
     return Session.fromJson((data['session'] as Map<String, dynamic>?) ?? data);
   }
 
-  // ── Runs (/v1/runs — ejecuciones de agente con aprobaciones) ──────────
-  //
-  // Contrato verificado contra api_server.py del upstream y el servidor
-  // vivo: el gateway NO expone listado de runs (GET /v1/runs → 405) y los
-  // estados viven en memoria (tras completar/reiniciar → 404 run_not_found).
-
-  /// POST /v1/runs — lanza una ejecución; devuelve el run_id (HTTP 202).
-  ///
-  /// [history] es la conversación previa (turnos anteriores) en formato
-  /// OpenAI `[{role, content}]`, orden cronológico (más antiguo primero), SIN
-  /// el turno actual (que va en [input]).
-  ///
-  /// IMPORTANTE (verificado en api_server.py del upstream): `/v1/runs` es
-  /// STATELESS respecto a la conversación. El campo [sessionId] solo etiqueta el
-  /// run (se usa como `task_id`/clave de aprobación), pero el gateway NO carga el
-  /// transcript de la sesión ni reinyecta los turnos previos en el contexto del
-  /// LLM. El ÚNICO modo de mantener el hilo es enviar [history] en el campo
-  /// **`conversation_history`** (es lo que el handler pasa a
-  /// `agent.run_conversation(conversation_history=...)`). Un campo `messages`
-  /// NO se lee aquí (eso es del endpoint chat/completions): mandarlo como único
-  /// contexto = el agente responde sin memoria del turno anterior ("no sé").
-  /// Lo mandamos también como alias inofensivo por compatibilidad con gateways
-  /// antiguos (los campos desconocidos se ignoran sin error). (El único contexto
-  /// que sobrevive vía [sessionId] es lo que el agente haya guardado en su
-  /// memoria de largo plazo con la tool de memoria — no es continuidad
-  /// conversacional.)
-  ///
-  /// Alternativa nativa con contexto server-side automático: el endpoint
-  /// `POST /api/sessions/{id}/chat[/stream]` carga el transcript de la sesión
-  /// por sí mismo (sin reenviar `messages`), pero no expone el ciclo de run con
-  /// `approval.request` del que depende la tarjeta de aprobación del chat.
-  Future<String> startRun({
-    required String input,
-    String? sessionId,
-    String? model,
-    List<Map<String, dynamic>>? history,
-    String? profile,
-  }) async {
-    Map<String, dynamic> buildBody({required bool withHistory}) => {
-      'input': input,
-      if (sessionId != null && sessionId.isNotEmpty) 'session_id': sessionId,
-      if (model != null && model.isNotEmpty) 'model': model,
-      // `profile` se incluye SOLO si el llamador lo pasa explícitamente. Hoy el
-      // gateway HTTP no enruta por perfil (lo ignora), así que los caminos
-      // remotos actuales NO lo envían; queda como contrato preparado para cuando
-      // el upstream acepte perfil en /v1/runs (la app ya estaría lista).
-      if (profile != null && profile.isNotEmpty) 'profile': profile,
-      if (withHistory && history != null && history.isNotEmpty) ...{
-        // `conversation_history` es el campo que el gateway lee de verdad para
-        // reinyectar el hilo; `messages` se manda solo como alias compatible.
-        'conversation_history': history,
-        'messages': history,
-      },
-    };
-
-    final hasHistory = history != null && history.isNotEmpty;
-    Map<String, dynamic> data;
-    // 30 s es suficiente para que el gateway procese el POST inicial. Sin este
-    // timeout la petición puede colgar indefinidamente si el servidor está caído
-    // o sobrecargado (el SSE subsiguiente no llega a iniciarse y la UI no avanza).
-    const runStartTimeout = Duration(seconds: 30);
-    try {
-      data = await apiPost(
-        'v1/runs',
-        body: buildBody(withHistory: true),
-      ).timeout(runStartTimeout);
-    } catch (e) {
-      // Si un gateway estricto/antiguo rechaza el cuerpo con historial
-      // (400/422), NO reintentamos sin contexto (eso = el agente olvida el
-      // turno previo y "se vuelve tonto"). En su lugar inyectamos el historial
-      // como transcript dentro del propio `input`, que siempre se respeta —
-      // mismo principio que el bridge local con `hermes -z`.
-      final s = e.toString();
-      if (hasHistory && (s.contains('400') || s.contains('422'))) {
-        data = await apiPost(
-          'v1/runs',
-          body: _buildContextInjectedBody(input, history, sessionId, model),
-        ).timeout(runStartTimeout);
-      } else {
-        rethrow;
-      }
-    }
-    final runId = data['run_id'] as String?;
-    if (runId == null || runId.isEmpty) {
-      throw Exception('Gateway did not return run_id');
-    }
-    return runId;
-  }
-
-  /// Cuerpo de `/v1/runs` con el contexto inyectado dentro de `input` (fallback
-  /// cuando el gateway rechaza los campos de historial). El transcript previo va
-  /// envuelto para que el agente lo distinga del turno actual y responda solo al
-  /// último mensaje, sin perder el hilo.
-  static Map<String, dynamic> _buildContextInjectedBody(
-    String input,
-    List<Map<String, dynamic>> history,
-    String? sessionId,
-    String? model,
-  ) {
-    final transcript = history
-        .map((m) {
-          final who = (m['role'] == 'user') ? 'User' : 'Assistant';
-          return '$who: ${(m['content'] ?? '').toString()}';
-        })
-        .join('\n');
-    final contextualInput =
-        'Continue this conversation maintaining context. Reply only to the '
-        'LAST user message, without repeating the history.\n\n'
-        '<previous_conversation>\n$transcript\n</previous_conversation>\n\n'
-        'User: $input';
-    return {
-      'input': contextualInput,
-      if (sessionId != null && sessionId.isNotEmpty) 'session_id': sessionId,
-      if (model != null && model.isNotEmpty) 'model': model,
-    };
-  }
-
-  /// GET /v1/runs/{id} — estado pollable. Lanza con el código HTTP en el
-  /// mensaje (404 = el gateway ya no conserva esta ejecución).
-  Future<Map<String, dynamic>> getRun(String runId) => apiGet('v1/runs/$runId');
-
-  /// POST /v1/runs/{id}/approval — resuelve una aprobación pendiente.
-  /// [choice]: once | session | always | deny.
-  Future<Map<String, dynamic>> resolveRunApproval(
-    String runId,
-    String choice, {
-    bool resolveAll = false,
-    String? requestId,
-  }) => apiPost(
-    'v1/runs/$runId/approval',
-    body: {
-      'choice': choice,
-      if (resolveAll) 'resolve_all': true,
-      if (requestId != null && requestId.isNotEmpty) 'request_id': requestId,
-    },
-  );
-
-  /// POST /v1/runs/{id}/stop — interrumpe la ejecución.
-  Future<Map<String, dynamic>> stopRun(String runId) =>
-      apiPost('v1/runs/$runId/stop');
-
-  /// GET /v1/runs/{id}/events — SSE de eventos estructurados del run
-  /// (message.delta, tool.started/completed, approval.request,
-  /// run.completed/failed/cancelled). Devuelve cuando el stream cierra.
-  Future<void> streamRunEvents(
-    String runId, {
-    required void Function(Map<String, dynamic> event) onEvent,
-    required void Function() onDone,
-    required void Function(String error) onError,
-    Duration idleTimeout = const Duration(seconds: 90),
-  }) async {
-    try {
-      final request = http.Request(
-        'GET',
-        Uri.parse('$baseUrl/v1/runs/$runId/events'),
-      );
-      request.headers.addAll(_headers);
-      final response = await _http.send(request).timeout(_requestTimeout);
-      if (response.statusCode != 200) {
-        onError('HTTP ${response.statusCode}');
-        return;
-      }
-      String buffer = '';
-      // A-010 (spec 028): timeout de inactividad también a MITAD de stream,
-      // igual que la ruta rápida. Si la conexión muere en silencio (cambio
-      // wifi→datos, NAT/Tailscale) el turno no queda en "respondiendo…" para
-      // siempre: el error cierra el run con la burbuja de reintento. Los
-      // keepalives del gateway (frames no-JSON) también cuentan como actividad.
-      await response.stream
-          .transform(utf8.decoder)
-          .timeout(
-            idleTimeout,
-            onTimeout: (sink) {
-              sink.addError(
-                TimeoutException(
-                  'SSE run events idle timeout (${idleTimeout.inSeconds}s)',
-                ),
-              );
-              sink.close();
-            },
-          )
-          .forEach((chunk) {
-            buffer += chunk;
-            while (buffer.contains('\n\n')) {
-              final end = buffer.indexOf('\n\n');
-              final frame = buffer.substring(0, end);
-              buffer = buffer.substring(end + 2);
-              for (final line in frame.split('\n')) {
-                if (!line.startsWith('data:')) continue;
-                final data = line.substring(5).trim();
-                if (data.isEmpty) continue;
-                try {
-                  final parsed = jsonDecode(data);
-                  if (parsed is Map<String, dynamic>) onEvent(parsed);
-                } catch (_) {
-                  // Frame no-JSON (keepalive/comentario): ignorar.
-                }
-              }
-            }
-          });
-      onDone();
-    } catch (e) {
-      onError(e.toString());
-    }
-  }
-
-  /// GET /v1/skills — catálogo de skills vía Gateway (Bearer). Fallback
-  /// cuando el Dashboard (9119) no está accesible; devuelve name,
-  /// description y category.
-  Future<List<Map<String, dynamic>>> getGatewaySkills() async {
-    final data = await apiGet('v1/skills');
-    final list = data['data'] as List? ?? [];
-    return list.whereType<Map<String, dynamic>>().toList();
-  }
-
-  // ── Dashboard-compatible helpers (port 9119 endpoints, may not work on API server) ──
-
-  Future<Map<String, dynamic>> getModelInfo() => apiGet('api/model/info');
-  Future<Map<String, dynamic>> getModelOptions() => apiGet('api/model/options');
-  Future<List<Map<String, dynamic>>> getSkills() async {
-    final data = await apiGetList('api/skills');
-    return data.whereType<Map<String, dynamic>>().toList();
-  }
-
-  Future<Map<String, dynamic>> setModel(
-    String scope,
-    String provider,
-    String model,
-  ) => apiPost(
-    'api/model/set',
-    body: {'scope': scope, 'provider': provider, 'model': model},
-  );
-
-  void close() => _http.close();
-}
-
-typedef ToolProgressCallback = void Function(Map<String, dynamic> progress);
-
-/// SSE streaming chat client for the Gateway API Server.
-class GatewayChatClient {
-  final ApiClient _api;
-  final String _baseUrl;
-
-  GatewayChatClient(this._api) : _baseUrl = _api.baseUrl;
-
-  /// Generate a client-side session ID: `mob-<timestamp>-<uuid>`.
-  static String generateSessionId() {
-    return 'mob-${DateTime.now().millisecondsSinceEpoch}-${const Uuid().v4()}';
-  }
-
-  /// Build OpenAI chat-completions messages, preserving prior history and
-  /// ensuring the newly typed user message is present exactly once at the end.
-  static List<Map<String, dynamic>> buildChatCompletionMessages({
-    required String message,
-    List<Map<String, dynamic>>? history,
-  }) {
-    final messages = <Map<String, dynamic>>[];
-    if (history != null && history.isNotEmpty) {
-      for (final msg in history) {
-        final role = (msg['role'] == 'agent' || msg['role'] == 'assistant')
-            ? 'assistant'
-            : 'user';
-        final content = msg['content']?.toString() ?? '';
-        if (content.isEmpty) continue;
-        messages.add({'role': role, 'content': content});
-      }
-    }
-
-    final latest = message.trim();
-    final alreadyLast =
-        messages.isNotEmpty &&
-        messages.last['role'] == 'user' &&
-        messages.last['content'] == latest;
-    if (latest.isNotEmpty && !alreadyLast) {
-      messages.add({'role': 'user', 'content': latest});
-    }
-    return messages;
-  }
-
-  /// Parse one SSE frame. Returns streamed text token, or null for non-token
-  /// frames. Hermes tool progress frames are delivered via [onToolProgress].
-  static String? parseSseFrame(
-    String frame, {
-    ToolProgressCallback? onToolProgress,
-  }) {
-    String eventType = '';
-    final dataLines = <String>[];
-
-    for (final rawLine in frame.split('\n')) {
-      final line = rawLine.trimRight();
-      if (line.isEmpty || line.startsWith(':')) continue;
-      if (line.startsWith('event:')) {
-        eventType = line.substring(6).trim();
-      } else if (line.startsWith('data:')) {
-        dataLines.add(line.substring(5).trimLeft());
-      }
-    }
-
-    if (dataLines.isEmpty) return null;
-    final data = dataLines.join('\n').trim();
-    if (data.isEmpty || data == '[DONE]') return null;
-
-    try {
-      final parsed = jsonDecode(data);
-      if (eventType == 'hermes.tool.progress') {
-        if (parsed is Map<String, dynamic>) onToolProgress?.call(parsed);
-        return null;
-      }
-
-      if (parsed is Map<String, dynamic>) {
-        final choices = parsed['choices'] as List?;
-        if (choices != null && choices.isNotEmpty && choices.first is Map) {
-          final first = choices.first as Map;
-          final delta = first['delta'];
-          if (delta is Map) {
-            final content = delta['content'];
-            if (content != null && content.toString().isNotEmpty) {
-              return content.toString();
-            }
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('[connection] excepción silenciada (se devuelve null): $e');
-      return null;
-    }
-    return null;
-  }
-
-  /// Send a message and stream the assistant response token-by-token.
-  ///
-  /// [onConnected] fires once when the server returns HTTP 200 and the SSE
-  /// stream is open but no content has arrived yet (the "waiting" state).
-  Future<void> sendMessageStreaming({
-    required String message,
-    required String sessionId,
-    String? model,
-    List<Map<String, dynamic>>? history,
-    Map<String, String>? extraHeaders,
-    int? maxTokens,
-    required void Function(String token) onToken,
-    ToolProgressCallback? onToolProgress,
-    void Function()? onConnected,
-    required void Function() onDone,
-    required void Function(String error) onError,
-  }) async {
-    final messages = buildChatCompletionMessages(
-      message: message,
-      history: history,
-    );
-
-    final body = {
-      'model': model ?? 'hermes-agent',
-      'messages': messages,
-      'stream': true,
-      // Techo duro opcional de generación para consumidores del cliente HTTP.
-      'max_tokens': ?maxTokens,
-    };
-
-    final headers = {
-      ..._api._headers,
-      'X-Hermes-Session-Id': sessionId,
-      ...?extraHeaders,
-    };
-
-    try {
-      final request = http.Request(
-        'POST',
-        Uri.parse('$_baseUrl/v1/chat/completions'),
-      );
-      request.headers.addAll(headers);
-      request.body = jsonEncode(body);
-
-      final response = await _api._http.send(request);
-
-      if (response.statusCode != 200) {
-        final errorBody = await response.stream.bytesToString();
-        String errorMsg;
-        try {
-          final err = jsonDecode(errorBody);
-          errorMsg =
-              err['error']?['message'] ??
-              err['message'] ??
-              'HTTP ${response.statusCode}';
-        } catch (e) {
-          debugPrint(
-            '[connection] no se pudo parsear el error del servidor, se usa el código HTTP: $e',
-          );
-          errorMsg = 'HTTP ${response.statusCode}';
-        }
-        onError(errorMsg);
-        return;
-      }
-
-      // HTTP 200 — stream is open, server is processing (waiting state).
-      onConnected?.call();
-
-      String buffer = '';
-      await response.stream
-          .transform(utf8.decoder)
-          .timeout(
-            const Duration(seconds: 90),
-            onTimeout: (sink) {
-              sink.addError(TimeoutException('SSE stream idle timeout (90s)'));
-              sink.close();
-            },
-          )
-          .forEach((chunk) {
-            buffer += chunk;
-            while (buffer.contains('\n\n')) {
-              final eventEnd = buffer.indexOf('\n\n');
-              final frame = buffer.substring(0, eventEnd);
-              buffer = buffer.substring(eventEnd + 2);
-
-              final token = parseSseFrame(
-                frame,
-                onToolProgress: onToolProgress,
-              );
-              if (token != null && token.isNotEmpty) onToken(token);
-            }
-          });
-
-      onDone();
-    } catch (e) {
-      onError(e.toString());
-    }
-  }
-
-  void abort() {
-    _api.close();
+  void close() {
+    _http.close();
+    _profileDashboard?.close();
   }
 }
 
@@ -1781,8 +1945,41 @@ enum DashboardAuthFailureCode {
 class DashboardAuthException implements Exception {
   final DashboardAuthFailureCode code;
   final int? statusCode;
+  final Duration? retryAfter;
 
-  const DashboardAuthException(this.code, {this.statusCode});
+  const DashboardAuthException(this.code, {this.statusCode, this.retryAfter});
+
+  @override
+  String toString() => statusCode == null
+      ? code.stableCode
+      : '${code.stableCode} (HTTP $statusCode)';
+}
+
+enum DashboardWebSocketAuthFailureCode {
+  unavailable('dashboard_ws_ticket_unavailable');
+
+  const DashboardWebSocketAuthFailureCode(this.stableCode);
+
+  final String stableCode;
+}
+
+/// Body-free producer classification for status-less ticket failures.
+enum DashboardWebSocketAuthFailureCause { unknown, transport, malformed }
+
+/// Fallo seguro y clasificable al obtener la credencial efímera del socket.
+///
+/// Nunca conserva el body ni la excepción de transporte: esos valores pueden
+/// contener detalles privados del proxy o del Dashboard.
+class DashboardWebSocketAuthException implements Exception {
+  final DashboardWebSocketAuthFailureCode code;
+  final int? statusCode;
+  final DashboardWebSocketAuthFailureCause cause;
+
+  const DashboardWebSocketAuthException(
+    this.code, {
+    this.statusCode,
+    this.cause = DashboardWebSocketAuthFailureCause.unknown,
+  });
 
   @override
   String toString() => statusCode == null
@@ -1805,6 +2002,31 @@ class DashboardHttpException implements Exception {
   String toString() => 'HTTP $statusCode';
 }
 
+/// A 2xx answer to a file download that is an HTML page rather than the file
+/// (the Dashboard's SPA catch-all answers unknown non-`/api` paths with
+/// `index.html`). It is reported as a 404 so callers treat the file as
+/// missing; nothing is written to disk.
+class DashboardNotAFileException extends DashboardHttpException {
+  const DashboardNotAFileException() : super(404, body: 'not a file');
+}
+
+/// A guarded Dashboard write whose authority (connection, write access or
+/// profile owner) was retired before the request could be (re)sent. Nothing
+/// was written by the attempt that raised it.
+class DashboardWriteRevoked implements Exception {
+  const DashboardWriteRevoked();
+
+  @override
+  String toString() => 'write_revoked';
+}
+
+class DashboardDownloadCancelled implements Exception {
+  const DashboardDownloadCancelled();
+
+  @override
+  String toString() => 'download_cancelled';
+}
+
 /// El servidor entendió el DELETE pero conservó deliberadamente el cron
 /// (`200 {"deleted":false}`). Es un rechazo de negocio, no un fallo de red.
 class CronDeleteRejectedException implements Exception {
@@ -1812,6 +2034,16 @@ class CronDeleteRejectedException implements Exception {
 
   @override
   String toString() => 'cron_delete_rejected';
+}
+
+/// The Dashboard answered 404 for a cron job in [profile]: nothing was
+/// changed there. Never a success.
+class CronJobNotFoundException implements Exception {
+  final String profile;
+  const CronJobNotFoundException(this.profile);
+
+  @override
+  String toString() => 'cron_job_not_found';
 }
 
 /// Client for the Hermes Dashboard REST API (port 9119).
@@ -1825,10 +2057,41 @@ class CronDeleteRejectedException implements Exception {
 class DashboardUpdateApplyResult {
   final bool responseConfirmed;
 
-  const DashboardUpdateApplyResult.confirmed() : responseConfirmed = true;
+  /// Identificador que Hermes asigna a esta ejecución de `hermes update`.
+  /// Permite seguirla por `/api/actions/hermes-update/status` y reconocer su
+  /// marcador de fin aunque el Dashboard se reinicie. Null en servidores que
+  /// no lo devuelven o si la respuesta no llegó.
+  final String? actionId;
+
+  /// El servidor ya tenía una actualización en curso y devolvió esa.
+  final bool alreadyRunning;
+
+  /// Server clock when it answered (`Date` header), so the run's receipt is
+  /// matched against the server's own time rather than the phone's.
+  final DateTime? serverDate;
+
+  const DashboardUpdateApplyResult.confirmed({
+    this.actionId,
+    this.alreadyRunning = false,
+    this.serverDate,
+  }) : responseConfirmed = true;
 
   const DashboardUpdateApplyResult.transportUncertain()
-    : responseConfirmed = false;
+    : responseConfirmed = false,
+      actionId = null,
+      alreadyRunning = false,
+      serverDate = null;
+}
+
+/// Hermes rechazó la actualización (instalación gestionada externamente,
+/// build de commit, Docker/Nix/apt...). Lleva el mensaje del servidor.
+class DashboardUpdateRefused implements Exception {
+  final String message;
+
+  const DashboardUpdateRefused(this.message);
+
+  @override
+  String toString() => message;
 }
 
 class DashboardBinaryResponse {
@@ -1840,19 +2103,67 @@ class DashboardBinaryResponse {
   String? get contentType => headers['content-type'];
 }
 
-class DashboardClient {
-  /// Coordina únicamente logins simultáneos entre instancias de cliente. Cada
-  /// pantalla conserva su propio `http.Client`, pero una ráfaga de aperturas no
-  /// dispara varios POST con la misma contraseña ni activa el rate-limit.
-  static final Map<(String, String, String), Future<Map<String, String>>>
-  _sharedPasswordLoginFlights = {};
+class _DashboardSharedPasswordSession {
+  final Map<String, String> cookies = {};
+  Future<Map<String, String>>? loginFlight;
+  DateTime? retryNotBefore;
+  DashboardAuthFailureCode? cooldownCode;
+  int? cooldownStatusCode;
+  int loginFailures = 0;
+}
 
-  final http.Client _http;
+class DashboardClient {
+  static final _writeGuardKey = Object();
+
+  /// Runs [write] so that every Dashboard write it issues re-checks
+  /// [authorized] right before each send, including the automatic resend
+  /// after a 401 re-authentication. A revoked guard raises
+  /// [DashboardWriteRevoked] instead of sending.
+  static Future<T> guardedWrite<T>(
+    bool Function() authorized,
+    Future<T> Function() write,
+  ) => runZoned(write, zoneValues: {_writeGuardKey: authorized});
+
+  static void _requireWriteAuthority() {
+    final guard = Zone.current[_writeGuardKey];
+    if (guard is bool Function() && !guard()) {
+      throw const DashboardWriteRevoked();
+    }
+  }
+
+  String _nativeOwner = '';
+
+  /// True when the Dashboard slot holds a native envelope. Only a probe: the
+  /// envelope in memory is never used for authority, the store is (S1).
+  bool get _hasNativeEnvelope =>
+      _manualToken?.startsWith(MobileOAuthSession.prefix) == true;
+  static final Map<String, _DashboardSharedPasswordSession>
+  _sharedPasswordSessions = {};
+
+  /// Page tokens scraped from `GET /`, shared by every client of the same
+  /// Dashboard and Basic credentials. Without it each short-lived client
+  /// downloaded the whole SPA index before its first API call.
+  static final Map<String, String> _sharedPageTokens = {};
+
+  @visibleForTesting
+  static void resetSharedPasswordSessionsForTesting() {
+    _sharedPasswordSessions.clear();
+    _sharedPageTokens.clear();
+  }
+
+  final OriginBoundHttpClient _http;
   final String _baseUrl;
+  final DateTime Function() _now;
   String? _manualToken;
   String? _basicUser;
   String? _basicPass;
   String? _token;
+
+  /// True when [_token] was adopted from [_sharedPageTokens] rather than
+  /// scraped by this client. A legacy `?token=` WebSocket upgrade has no 401
+  /// retry path, so it never trusts a token it did not scrape itself.
+  bool _tokenFromSharedCache = false;
+  bool _closed = false;
 
   /// Cookies de sesión de un Dashboard con login propio (`hermes_session_at`,
   /// `hermes_session_rt` y `hermes_session_provider`). Se establecen con un POST
@@ -1904,13 +2215,21 @@ class DashboardClient {
     String? basicUser,
     String? basicPass,
     http.Client? httpClientOverride,
+    @visibleForTesting DateTime Function()? nowOverride,
+    @visibleForTesting bool? simpleConnectOverride,
   }) : _baseUrl = TransportPrivacy.requireAllowed(
          '${useHttps ? 'https' : 'http'}://$host:$port',
        ),
        _manualToken = manualToken,
        _basicUser = basicUser,
        _basicPass = basicPass,
-       _http = httpClientOverride ?? http.Client();
+       _http = OriginBoundHttpClient(httpClientOverride, _kTimeout),
+       _now = nowOverride ?? DateTime.now,
+       simpleConnect = simpleConnectOverride ?? kSimpleConnectEnabled;
+
+  /// S2 behaviour (retry after a 401, socket latch, sign-in banner) is behind
+  /// the simple-connect flag; only the expired-session mapping is not.
+  final bool simpleConnect;
 
   /// Cliente que respeta el modo de auth de la instancia, leyendo los
   /// secretos del Keystore en el primer uso. Para pantallas que solo tienen
@@ -1925,6 +2244,7 @@ class DashboardClient {
       useHttps: conn.dashboardUseHttps,
       httpClientOverride: httpClientOverride,
     );
+    client._nativeOwner = conn.id;
     if (conn.dashboardAuthMode == AuthMode.sessionToken ||
         conn.dashboardAuthMode == AuthMode.basicAuth ||
         conn.dashboardAuthMode == AuthMode.cookieSession) {
@@ -1972,8 +2292,9 @@ class DashboardClient {
     SavedConnection conn, {
     DashboardSecrets? secrets,
     http.Client? httpClientOverride,
+    @visibleForTesting bool? simpleConnectOverride,
   }) {
-    return DashboardClient(
+    final client = DashboardClient(
       host: conn.dashboardHost,
       port: conn.dashboardPort,
       useHttps: conn.dashboardUseHttps,
@@ -1987,7 +2308,22 @@ class DashboardClient {
           ? secrets?.password
           : null,
       httpClientOverride: httpClientOverride,
-    );
+      simpleConnectOverride: simpleConnectOverride,
+    ).._nativeOwner = conn.id;
+    client._draftNative = client._draftOf(client._manualToken);
+    return client;
+  }
+
+  /// The sign-in the editor just obtained for a connection that is not saved
+  /// yet: it exists only in the form, so the store has nothing under its id.
+  /// Null when it is not an envelope of THIS connection and server.
+  MobileOAuthSession? _draftNative;
+  MobileOAuthSession? _draftOf(String? raw) {
+    try {
+      return MobileOAuthSession.decode(raw, _nativeOwner, _baseUrl);
+    } on MobileOAuthException {
+      return null;
+    }
   }
 
   String? get _basicAuthHeader {
@@ -1999,8 +2335,12 @@ class DashboardClient {
   /// Actualiza únicamente la sesión en memoria tras una reparación automática
   /// vía Mobile Bridge. Los secretos se persisten por separado en Keystore.
   void usePasswordCredentials(String username, String password) {
+    if (_hasPasswordCreds) {
+      _sharedPasswordSessions.remove(_passwordSessionKey);
+    }
     _basicUser = username;
     _basicPass = password;
+    _sharedPasswordSessions.remove(_passwordSessionKey);
     _token = null;
     _cookies.clear();
     _secretsLoaded = true;
@@ -2008,26 +2348,37 @@ class DashboardClient {
     _passwordLoginFuture = null;
   }
 
-  Future<String> _getToken() async {
+  Future<String> _getToken({bool allowShared = true}) async {
     await _ensureSecrets();
     final manual = _manualToken;
+    if (manual?.startsWith(MobileOAuthSession.prefix) == true) {
+      throw const MobileOAuthException(); // never use native envelope as page authority
+    }
     if (manual != null && manual.isNotEmpty) return manual;
-    if (_token != null) return _token!;
+    if (_token != null && (allowShared || !_tokenFromSharedCache)) {
+      return _token!;
+    }
+    final tokenKey = _pageTokenKey;
+    final shared = allowShared ? _sharedPageTokens[tokenKey] : null;
+    if (shared != null) {
+      _tokenFromSharedCache = true;
+      return _token = shared;
+    }
     final basic = _basicAuthHeader;
-    final res = await _http
-        .get(
-          Uri.parse('$_baseUrl/'),
-          headers: basic != null ? {'Authorization': basic} : null,
-        )
-        .timeout(
-          _kTimeout,
-          onTimeout: () {
-            throw Exception(
-              'Dashboard timeout — $_baseUrl is not responding. Check that the '
-              'Dashboard/Admin URL points to port 9119.',
-            );
-          },
-        );
+    final http.Response res;
+    try {
+      res = await _http
+          .within(_kTimeout)
+          .get(
+            Uri.parse('$_baseUrl/'),
+            headers: basic != null ? {'Authorization': basic} : null,
+          );
+    } on TimeoutException {
+      throw Exception(
+        'Dashboard timeout — $_baseUrl is not responding. Check that the '
+        'Dashboard/Admin URL points to port 9119.',
+      );
+    }
     if (res.statusCode == 401 || res.statusCode == 403) {
       if (basic == null) {
         throw DashboardAuthException(
@@ -2037,6 +2388,14 @@ class DashboardClient {
       }
       throw DashboardAuthException(
         DashboardAuthFailureCode.invalidCredentials,
+        statusCode: res.statusCode,
+      );
+    }
+    // A Dashboard with auth answers `GET /` with 302 -> /login. The redirect is
+    // not followed (origin-bound), but it does say a login is in front.
+    if (res.statusCode >= 300 && res.statusCode < 400) {
+      throw DashboardAuthException(
+        DashboardAuthFailureCode.loginRequired,
         statusCode: res.statusCode,
       );
     }
@@ -2066,38 +2425,107 @@ class DashboardClient {
       );
     }
     _token = match.group(1)!;
+    _tokenFromSharedCache = false;
+    _sharedPageTokens[tokenKey] = _token!;
     return _token!;
   }
+
+  String get _pageTokenKey => sha256
+      .convert(utf8.encode('$_baseUrl\u0000${_basicAuthHeader ?? ''}'))
+      .toString();
 
   /// ¿Tenemos usuario+contraseña para el login por formulario del Dashboard?
   bool get _hasPasswordCreds =>
       (_basicUser?.isNotEmpty ?? false) && (_basicPass?.isNotEmpty ?? false);
 
-  /// Lee las cookies de sesión de un `Set-Cookie` y las guarda. El paquete
-  /// `http` une varias cabeceras Set-Cookie con coma, por eso extraemos por
-  /// NOMBRE (los valores de token no llevan `;`, `,` ni espacios). Tolera el
-  /// prefijo `__Host-`/`__Secure-` por si el Dashboard va por HTTPS, y respeta
-  /// los borrados (`Max-Age=0` con valor vacío o `deleted`).
-  void _ingestSetCookie(http.Response res) {
+  String get _passwordSessionKey => sha256
+      .convert(
+        utf8.encode(
+          '$_baseUrl\u0000${_basicUser ?? ''}\u0000${_basicPass ?? ''}',
+        ),
+      )
+      .toString();
+
+  _DashboardSharedPasswordSession get _sharedPasswordSession =>
+      _sharedPasswordSessions.putIfAbsent(
+        _passwordSessionKey,
+        _DashboardSharedPasswordSession.new,
+      );
+
+  static String? _cookieHeaderFor(Map<String, String> cookies) =>
+      cookies.isEmpty
+      ? null
+      : cookies.entries
+            .map((entry) => '${entry.key}=${entry.value}')
+            .join('; ');
+
+  static bool _hasSessionCredential(Map<String, String> cookies) =>
+      cookies.keys.any(
+        (name) =>
+            name.endsWith('hermes_session_at') ||
+            name.endsWith('hermes_session_rt'),
+      );
+
+  /// Lee cookies rotadas sin dejar que una respuesta tardía de una sesión vieja
+  /// pise la sesión nueva que otro cliente ya obtuvo.
+  void _ingestSetCookie(http.Response res, {String? sentCookie}) {
     final raw = res.headers['set-cookie'];
     if (raw == null || raw.isEmpty) return;
+    final updated = Map<String, String>.from(_cookies);
     final re = RegExp(
       r'((?:__Host-|__Secure-)?hermes_session_(?:at|rt|pkce|provider))=([^;,\s]*)',
     );
-    for (final m in re.allMatches(raw)) {
-      final name = m.group(1)!;
-      final val = m.group(2)!;
-      if (val.isEmpty || val == 'deleted') {
-        _cookies.remove(name);
+    var changed = false;
+    for (final match in re.allMatches(raw)) {
+      changed = true;
+      final name = match.group(1)!;
+      final value = match.group(2)!;
+      if (value.isEmpty || value == 'deleted') {
+        updated.remove(name);
       } else {
-        _cookies[name] = val;
+        updated[name] = value;
       }
+    }
+    if (!changed) return;
+    if (!_hasPasswordCreds) {
+      _cookies
+        ..clear()
+        ..addAll(updated);
+      return;
+    }
+
+    final shared = _sharedPasswordSession;
+    final mayApply = sentCookie == null
+        ? !_hasSessionCredential(shared.cookies)
+        : _cookieHeaderFor(shared.cookies) == sentCookie;
+    if (mayApply) {
+      shared.cookies
+        ..clear()
+        ..addAll(updated);
+    }
+    _cookies
+      ..clear()
+      ..addAll(shared.cookies);
+  }
+
+  String? get _cookieHeader => _cookieHeaderFor(_cookies);
+
+  Duration? _parseRetryAfter(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    final seconds = int.tryParse(raw.trim());
+    if (seconds != null) return Duration(seconds: seconds.clamp(0, 3600));
+    try {
+      final delay = HttpDate.parse(raw).difference(_now());
+      return delay.isNegative ? Duration.zero : delay;
+    } on FormatException {
+      return null;
     }
   }
 
-  String? get _cookieHeader => _cookies.isEmpty
-      ? null
-      : _cookies.entries.map((e) => '${e.key}=${e.value}').join('; ');
+  Duration _loginBackoff(int failureCount) {
+    final exponent = (failureCount - 1).clamp(0, 4);
+    return Duration(seconds: 5 * (1 << exponent));
+  }
 
   /// Establece una sesión vía `POST /auth/password-login` (cuerpo JSON
   /// `{provider, username, password}`) y guarda las cookies devueltas. El
@@ -2109,6 +2537,7 @@ class DashboardClient {
   /// el endpoint) para que el llamante caiga al camino heredado.
   Future<void> _passwordLogin() async {
     final res = await _http
+        .within(_kTimeout)
         .post(
           Uri.parse('$_baseUrl/auth/password-login'),
           headers: {'Content-Type': 'application/json'},
@@ -2117,8 +2546,7 @@ class DashboardClient {
             'username': _basicUser,
             'password': _basicPass,
           }),
-        )
-        .timeout(_kTimeout);
+        );
     if (res.statusCode == 404) {
       _passwordLoginUnsupported = true;
       throw Exception('password-login unsupported');
@@ -2127,6 +2555,7 @@ class DashboardClient {
       throw DashboardAuthException(
         DashboardAuthFailureCode.rateLimited,
         statusCode: res.statusCode,
+        retryAfter: _parseRetryAfter(res.headers['retry-after']),
       );
     }
     if (res.statusCode == 401 || res.statusCode == 403) {
@@ -2150,21 +2579,29 @@ class DashboardClient {
     }
   }
 
-  /// Comparte un solo login entre todas las pantallas que arrancan a la vez.
-  /// El Future se elimina al terminar para permitir un nuevo intento tras un
-  /// 401 o un fallo de red, pero mientras está activo ningún consumidor puede
-  /// pisar las cookies emitidas para otro.
+  /// Comparte tanto el login como las cookies resultantes entre clientes de la
+  /// misma conexión y credenciales.
   Future<void> _ensurePasswordLogin() async {
-    if (_cookies.isNotEmpty) return;
-    final inFlight = _passwordLoginFuture;
-    if (inFlight != null) return inFlight;
-    // Incluye la credencial exacta: dos perfiles contra la misma URL/usuario
-    // no deben prestarse una sesión si uno conserva una contraseña antigua.
-    // La clave solo vive durante el POST y se elimina en el `finally` inferior.
-    final sharedKey = (_baseUrl, _basicUser ?? '', _basicPass ?? '');
-    final shared = _sharedPasswordLoginFlights[sharedKey];
-    if (shared != null) {
-      final future = shared.then((cookies) {
+    final shared = _sharedPasswordSession;
+    _cookies
+      ..clear()
+      ..addAll(shared.cookies);
+    if (_hasSessionCredential(_cookies)) return;
+
+    final retryNotBefore = shared.retryNotBefore;
+    if (retryNotBefore != null && _now().isBefore(retryNotBefore)) {
+      throw DashboardAuthException(
+        shared.cooldownCode ?? DashboardAuthFailureCode.loginFailed,
+        statusCode: shared.cooldownStatusCode,
+        retryAfter: retryNotBefore.difference(_now()),
+      );
+    }
+
+    final instanceFlight = _passwordLoginFuture;
+    if (instanceFlight != null) return instanceFlight;
+    final existingFlight = shared.loginFlight;
+    if (existingFlight != null) {
+      final future = existingFlight.then((cookies) {
         _cookies
           ..clear()
           ..addAll(cookies);
@@ -2179,18 +2616,43 @@ class DashboardClient {
       }
       return;
     }
+
     final loginFuture = () async {
-      await _passwordLogin();
-      return Map<String, String>.from(_cookies);
+      try {
+        await _passwordLogin();
+        shared
+          ..loginFailures = 0
+          ..retryNotBefore = null
+          ..cooldownCode = null
+          ..cooldownStatusCode = null;
+        return Map<String, String>.from(shared.cookies);
+      } catch (error) {
+        shared.loginFailures++;
+        final authError = error is DashboardAuthException ? error : null;
+        if (!_passwordLoginUnsupported) {
+          final delay =
+              authError?.retryAfter ?? _loginBackoff(shared.loginFailures);
+          shared
+            ..retryNotBefore = _now().add(delay)
+            ..cooldownCode =
+                authError?.code ?? DashboardAuthFailureCode.loginFailed
+            ..cooldownStatusCode = authError?.statusCode;
+        }
+        rethrow;
+      }
     }();
-    _sharedPasswordLoginFlights[sharedKey] = loginFuture;
-    final future = loginFuture.then<void>((_) {});
+    shared.loginFlight = loginFuture;
+    final future = loginFuture.then<void>((cookies) {
+      _cookies
+        ..clear()
+        ..addAll(cookies);
+    });
     _passwordLoginFuture = future;
     try {
       await future;
     } finally {
-      if (identical(_sharedPasswordLoginFlights[sharedKey], loginFuture)) {
-        _sharedPasswordLoginFlights.remove(sharedKey);
+      if (identical(shared.loginFlight, loginFuture)) {
+        shared.loginFlight = null;
       }
       if (identical(_passwordLoginFuture, future)) {
         _passwordLoginFuture = null;
@@ -2199,13 +2661,26 @@ class DashboardClient {
   }
 
   Future<Map<String, String>> _authHeaders() async {
+    _requireOpen();
     await _ensureSecrets();
+    _requireOpen();
+    if (_hasNativeEnvelope) {
+      // One renewal at a time for the whole process; the store, not this
+      // client's memory, decides what is current.
+      final native = await _nativeAccess();
+      _requireOpen();
+      return {
+        'Authorization': 'Bearer ${native.accessToken}',
+        'Content-Type': 'application/json',
+      };
+    }
     // Dashboard con login propio: autenticamos por COOKIE de sesión (POST
     // /auth/password-login con usuario+contraseña). Es lo que desbloquea la
     // lista completa de modelos/proveedores y el resto de la API nativa.
     if (_hasPasswordCreds && !_passwordLoginUnsupported) {
       try {
         await _ensurePasswordLogin();
+        _requireOpen();
         return <String, String>{
           'Cookie': ?_cookieHeader,
           'Content-Type': 'application/json',
@@ -2216,8 +2691,10 @@ class DashboardClient {
         if (!_passwordLoginUnsupported) rethrow;
       }
     }
+    final token = await _getToken();
+    _requireOpen();
     final headers = <String, String>{
-      'X-Hermes-Session-Token': await _getToken(),
+      'X-Hermes-Session-Token': token,
       'Content-Type': 'application/json',
     };
     final basic = _basicAuthHeader;
@@ -2225,12 +2702,136 @@ class DashboardClient {
     return headers;
   }
 
-  /// Olvida la sesión por cookie para forzar un nuevo login en la próxima
-  /// petición (tras un 401: el `at` caducó y el `rt` no pudo rotarlo).
-  void _resetSession() {
+  /// Invalida solo la sesión que produjo el 401. Una respuesta tardía no puede
+  /// borrar cookies que otro request ya renovó o volvió a autenticar.
+  void _resetSession({String? sentCookie}) {
+    final rejectedToken = _token;
     _token = null;
-    _cookies.clear();
+    // Evict the shared token only if it is the one that was just rejected; a
+    // newer token another client already scraped stays usable.
+    if (rejectedToken != null &&
+        _sharedPageTokens[_pageTokenKey] == rejectedToken) {
+      _sharedPageTokens.remove(_pageTokenKey);
+    }
+    if (!_hasPasswordCreds) {
+      _cookies.clear();
+      _passwordLoginFuture = null;
+      return;
+    }
+    final shared = _sharedPasswordSession;
+    if (_cookieHeaderFor(shared.cookies) == sentCookie) {
+      shared.cookies.clear();
+    }
+    _cookies
+      ..clear()
+      ..addAll(shared.cookies);
     _passwordLoginFuture = null;
+  }
+
+  /// Access tokens the server refused, so the next request renews instead of
+  /// resending them (one renewal for however many requests were rejected).
+  final Set<String> _rejectedNativeAccess = <String>{};
+
+  /// Refused even after a renewal: the session is over until a new login.
+  final Set<String> _deadNativeAccess = <String>{};
+
+  /// Increments on every login/logout of this connection: a socket that
+  /// stopped on "sign in again" resumes only when it changes.
+  int get credentialEpoch =>
+      NativeSessionCoordinator.instance.epochOf(_nativeOwner);
+
+  /// An explicit Retry asks the server again instead of trusting what it
+  /// refused a moment ago.
+  void forgetRejectedAccess() {
+    _rejectedNativeAccess.clear();
+    _deadNativeAccess.clear();
+  }
+
+  Future<NativeAccess> _nativeAccess() async {
+    final coordinator = NativeSessionCoordinator.instance;
+    try {
+      var access = await coordinator.ensureAccess(_nativeOwner, _baseUrl);
+      if (_deadNativeAccess.contains(access.accessToken)) {
+        throw const DashboardAuthException(
+          DashboardAuthFailureCode.loginRequired,
+        );
+      }
+      if (_rejectedNativeAccess.contains(access.accessToken)) {
+        access = await coordinator.ensureAccess(
+          _nativeOwner,
+          _baseUrl,
+          forceRefresh: true,
+          rejectedAccess: access.accessToken,
+        );
+      }
+      return access;
+    } on NativeSessionExpired {
+      // Only when the store has no usable session: a draft sign-in that has
+      // not expired (never refreshed, never written) stands in for the probe.
+      final draft = _draftNative;
+      if (draft != null &&
+          !_deadNativeAccess.contains(draft.accessToken) &&
+          !_rejectedNativeAccess.contains(draft.accessToken) &&
+          _now().millisecondsSinceEpoch ~/ 1000 < draft.expiresAt) {
+        return NativeAccess(draft.accessToken, draft.expiresAt, draft.rev);
+      }
+      // Same signal as a rejected login: the user has to sign in again.
+      throw const DashboardAuthException(
+        DashboardAuthFailureCode.loginRequired,
+      );
+    }
+  }
+
+  bool? _unauthorizedRetry({
+    required String? sentCookie,
+    required bool retried,
+    String? sentAuthorization,
+  }) {
+    if (simpleConnect && _hasNativeEnvelope) {
+      // Desktop's single retry after a 401 (portal-session, main.ts:8189).
+      final sent = sentAuthorization?.startsWith('Bearer ') == true
+          ? sentAuthorization!.substring(7)
+          : null;
+      if (retried) {
+        if (sent != null) _deadNativeAccess.add(sent);
+        throw const DashboardAuthException(
+          DashboardAuthFailureCode.loginRequired,
+        );
+      }
+      if (sent != null) _rejectedNativeAccess.add(sent);
+      return true;
+    }
+    if (retried) return null;
+    if (_hasPasswordCreds) {
+      final shared = _sharedPasswordSession;
+      final currentCookie = _cookieHeaderFor(shared.cookies);
+      if (_hasSessionCredential(shared.cookies) &&
+          currentCookie != sentCookie) {
+        _cookies
+          ..clear()
+          ..addAll(shared.cookies);
+        return true;
+      }
+    }
+    _resetSession(sentCookie: sentCookie);
+    return true;
+  }
+
+  /// Explicit login never turns an absent password route into token scraping.
+  /// [fresh] verifies the supplied password even when a shared session still
+  /// works: a valid cookie is not proof that the current password is correct.
+  Future<void> authenticateExistingPassword({bool fresh = false}) async {
+    _requireOpen();
+    await _ensureSecrets();
+    _requireOpen();
+    if (fresh) {
+      if (!_hasPasswordCreds) {
+        throw DashboardAuthException(DashboardAuthFailureCode.loginRequired);
+      }
+      await _passwordLogin();
+    } else {
+      await _ensurePasswordLogin();
+    }
   }
 
   /// Resuelve los headers de auth sin hacer ninguna llamada de datos.
@@ -2240,15 +2841,63 @@ class DashboardClient {
   /// Mintea un ticket de un solo uso (30s) para autenticar un WebSocket.
   /// Los sockets no pueden mandar la cookie/Authorization en el upgrade, así
   /// que en dashboards con login por cookie hay que pasar `?ticket=`. Devuelve
-  /// null si el endpoint no existe (modo token/loopback → se usa `?token=`).
+  /// null solo si el endpoint no existe (modo token/loopback → `?token=`).
+  /// Cualquier otro fallo se propaga con una clasificación sin body remoto.
   Future<String?> mintWsTicket() async {
     try {
       final res = await apiPost('auth/ws-ticket');
-      final t = res['ticket'];
-      return (t is String && t.isNotEmpty) ? t : null;
-    } catch (e) {
-      debugPrint('[connection] excepción silenciada (se devuelve null): $e');
-      return null;
+      final ticket = res['ticket'];
+      if (ticket is String && ticket.trim().isNotEmpty) return ticket;
+      throw const DashboardWebSocketAuthException(
+        DashboardWebSocketAuthFailureCode.unavailable,
+        cause: DashboardWebSocketAuthFailureCause.malformed,
+      );
+    } on DashboardHttpException catch (error) {
+      if (error.statusCode == 404 || error.statusCode == 405) return null;
+      throw DashboardWebSocketAuthException(
+        DashboardWebSocketAuthFailureCode.unavailable,
+        statusCode: error.statusCode,
+      );
+    } on DashboardAuthException {
+      // This error already carries the stable, body-free Dashboard auth code
+      // that reconnect/UI recovery needs (for example loginRequired).
+      rethrow;
+    } on TimeoutException {
+      throw const DashboardWebSocketAuthException(
+        DashboardWebSocketAuthFailureCode.unavailable,
+        cause: DashboardWebSocketAuthFailureCause.transport,
+      );
+    } on SocketException {
+      throw const DashboardWebSocketAuthException(
+        DashboardWebSocketAuthFailureCode.unavailable,
+        cause: DashboardWebSocketAuthFailureCause.transport,
+      );
+    } on HttpException {
+      throw const DashboardWebSocketAuthException(
+        DashboardWebSocketAuthFailureCode.unavailable,
+        cause: DashboardWebSocketAuthFailureCause.transport,
+      );
+    } on HandshakeException {
+      throw const DashboardWebSocketAuthException(
+        DashboardWebSocketAuthFailureCode.unavailable,
+        cause: DashboardWebSocketAuthFailureCause.transport,
+      );
+    } on http.ClientException {
+      throw const DashboardWebSocketAuthException(
+        DashboardWebSocketAuthFailureCode.unavailable,
+        cause: DashboardWebSocketAuthFailureCause.transport,
+      );
+    } on FormatException {
+      throw const DashboardWebSocketAuthException(
+        DashboardWebSocketAuthFailureCode.unavailable,
+        cause: DashboardWebSocketAuthFailureCause.malformed,
+      );
+    } on DashboardWebSocketAuthException {
+      rethrow;
+    } on Exception {
+      throw const DashboardWebSocketAuthException(
+        DashboardWebSocketAuthFailureCode.unavailable,
+      );
     }
   }
 
@@ -2256,28 +2905,44 @@ class DashboardClient {
   /// por Hermes Desktop. Prefiere tickets de 30 s en Dashboards con login y
   /// degrada al token de sesión únicamente para instalaciones heredadas.
   Future<DashboardWebSocketAuth> webSocketAuth() async {
-    final ticket = await mintWsTicket();
-    final basic = _basicAuthHeader;
-    final headers = <String, dynamic>{};
-    if (basic != null) headers['Authorization'] = basic;
-    if (ticket != null && ticket.isNotEmpty) {
+    try {
+      final ticket = await mintWsTicket();
+      final basic = _basicAuthHeader;
+      final headers = <String, dynamic>{};
+      if (basic != null) headers['Authorization'] = basic;
+      if (ticket != null && ticket.isNotEmpty) {
+        return DashboardWebSocketAuth(
+          queryName: 'ticket',
+          credential: ticket,
+          headers: headers,
+        );
+      }
+      if (_hasNativeEnvelope) {
+        throw const DashboardWebSocketAuthException(
+          DashboardWebSocketAuthFailureCode.unavailable,
+        );
+      }
       return DashboardWebSocketAuth(
-        queryName: 'ticket',
-        credential: ticket,
+        queryName: 'token',
+        credential: await _getToken(allowShared: false),
         headers: headers,
       );
+    } on DashboardWebSocketAuthException {
+      rethrow;
+    } on DashboardAuthException {
+      rethrow;
+    } on Exception {
+      throw const DashboardWebSocketAuthException(
+        DashboardWebSocketAuthFailureCode.unavailable,
+      );
     }
-    return DashboardWebSocketAuth(
-      queryName: 'token',
-      credential: await _getToken(),
-      headers: headers,
-    );
   }
 
-  Map<String, dynamic> _decodeMapResponse(http.Response res) {
+  Future<Map<String, dynamic>> _decodeMapResponse(http.Response res) async {
     final trimmed = res.body.trim();
     if (trimmed.isEmpty) return <String, dynamic>{};
-    final decoded = jsonDecode(trimmed);
+    // N10g: a large transcript page must not block the main isolate.
+    final decoded = await decodeJsonOffMain(trimmed);
     if (decoded is Map<String, dynamic>) return decoded;
     return {'data': decoded};
   }
@@ -2287,18 +2952,25 @@ class DashboardClient {
     bool retried = false,
   }) async {
     final headers = await _authHeaders();
+    _requireOpen();
     final res = await _http
-        .get(Uri.parse('$_baseUrl/api/$endpoint'), headers: headers)
-        .timeout(_kTimeout);
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return apiGet(endpoint, retried: true);
+        .within(_kTimeout)
+        .get(Uri.parse('$_baseUrl/api/$endpoint'), headers: headers);
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return apiGet(endpoint, retried: nextRetried);
+      }
     }
     if (res.statusCode != 200) {
       throw DashboardHttpException(res.statusCode, body: res.body);
     }
-    return _decodeMapResponse(res);
+    return await _decodeMapResponse(res);
   }
 
   Future<List<dynamic>> apiGetList(
@@ -2307,12 +2979,18 @@ class DashboardClient {
   }) async {
     final headers = await _authHeaders();
     final res = await _http
-        .get(Uri.parse('$_baseUrl/api/$endpoint'), headers: headers)
-        .timeout(_kTimeout);
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return apiGetList(endpoint, retried: true);
+        .within(_kTimeout)
+        .get(Uri.parse('$_baseUrl/api/$endpoint'), headers: headers);
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return apiGetList(endpoint, retried: nextRetried);
+      }
     }
     if (res.statusCode != 200) {
       throw DashboardHttpException(res.statusCode, body: res.body);
@@ -2332,22 +3010,34 @@ class DashboardClient {
     Duration timeout = _kTimeout,
   }) async {
     final headers = await _authHeaders();
+    _requireWriteAuthority();
     final res = await _http
+        .within(timeout)
         .post(
           Uri.parse('$_baseUrl/api/$endpoint'),
           headers: headers,
           body: body != null ? jsonEncode(body) : null,
-        )
-        .timeout(timeout);
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return apiPost(endpoint, body: body, retried: true, timeout: timeout);
+        );
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return apiPost(
+          endpoint,
+          body: body,
+          retried: nextRetried,
+          timeout: timeout,
+        );
+      }
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw DashboardHttpException(res.statusCode, body: res.body);
     }
-    return _decodeMapResponse(res);
+    return await _decodeMapResponse(res);
   }
 
   /// Envía un único fichero mediante multipart conservando exactamente la
@@ -2385,19 +3075,25 @@ class DashboardClient {
       streamed.statusCode,
       headers: streamed.headers,
     );
-    _ingestSetCookie(responseMetadata);
-    if (streamed.statusCode == 401 && !retried) {
-      await _cancelResponseStream(streamed.stream);
-      _resetSession();
-      return apiPostMultipartFile(
-        endpoint,
-        fieldName: fieldName,
-        filePath: filePath,
-        filename: filename,
-        fields: fields,
-        retried: true,
-        timeout: timeout,
+    _ingestSetCookie(responseMetadata, sentCookie: request.headers['Cookie']);
+    if (streamed.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: request.headers['Cookie'],
+        sentAuthorization: request.headers['Authorization'],
+        retried: retried,
       );
+      if (nextRetried != null) {
+        await _cancelResponseStream(streamed.stream);
+        return apiPostMultipartFile(
+          endpoint,
+          fieldName: fieldName,
+          filePath: filePath,
+          filename: filename,
+          fields: fields,
+          retried: nextRetried,
+          timeout: timeout,
+        );
+      }
     }
     if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
       final errorBytes = await _readResponseStream(
@@ -2422,7 +3118,7 @@ class DashboardClient {
       streamed.statusCode,
       headers: streamed.headers,
     );
-    return _decodeMapResponse(res);
+    return await _decodeMapResponse(res);
   }
 
   /// Descarga autenticada y acotada. Se valida Content-Length cuando existe y
@@ -2438,6 +3134,7 @@ class DashboardClient {
       throw RangeError.range(maxBytes, 1, null, 'maxBytes');
     }
     final request = http.Request('GET', Uri.parse('$_baseUrl/api/$endpoint'));
+    request.followRedirects = false;
     request.headers.addAll(await _authHeaders());
     final streamed = await _http.send(request).timeout(timeout);
     final responseMetadata = http.Response(
@@ -2445,16 +3142,22 @@ class DashboardClient {
       streamed.statusCode,
       headers: streamed.headers,
     );
-    _ingestSetCookie(responseMetadata);
-    if (streamed.statusCode == 401 && !retried) {
-      await _cancelResponseStream(streamed.stream);
-      _resetSession();
-      return apiDownload(
-        endpoint,
-        maxBytes: maxBytes,
-        retried: true,
-        timeout: timeout,
+    _ingestSetCookie(responseMetadata, sentCookie: request.headers['Cookie']);
+    if (streamed.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: request.headers['Cookie'],
+        sentAuthorization: request.headers['Authorization'],
+        retried: retried,
       );
+      if (nextRetried != null) {
+        await _cancelResponseStream(streamed.stream);
+        return apiDownload(
+          endpoint,
+          maxBytes: maxBytes,
+          retried: nextRetried,
+          timeout: timeout,
+        );
+      }
     }
     if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
       final errorBytes = await _readResponseStream(
@@ -2480,6 +3183,154 @@ class DashboardClient {
       bytes: bytes,
       headers: Map<String, String>.unmodifiable(streamed.headers),
     );
+  }
+
+  static bool _isInlineHtml(Map<String, String> headers) {
+    String? header(String name) {
+      for (final e in headers.entries) {
+        if (e.key.toLowerCase() == name) return e.value;
+      }
+      return null;
+    }
+
+    final type = (header('content-type') ?? '').toLowerCase();
+    if (!type.startsWith('text/html') &&
+        !type.startsWith('application/xhtml')) {
+      return false;
+    }
+    return !(header('content-disposition') ?? '').toLowerCase().contains(
+      'attachment',
+    );
+  }
+
+  /// Streams an authenticated download directly to [target]. Unlike
+  /// [apiDownload], this keeps memory bounded for generated videos while
+  /// preserving the same auth retry and response-size limits.
+  Future<Map<String, String>> apiDownloadToFile(
+    String endpoint,
+    File target, {
+    required int maxBytes,
+    String? profile,
+    bool retried = false,
+    Duration timeout = const Duration(minutes: 3),
+    void Function(int received, int? total)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    if (maxBytes < 1) {
+      throw RangeError.range(maxBytes, 1, null, 'maxBytes');
+    }
+    if (isCancelled?.call() ?? false) {
+      throw const DashboardDownloadCancelled();
+    }
+    // The Dashboard has no `/p/<profile>/` prefix (Gateway only): the named
+    // profile travels as `profile=`, which routes that accept it honour.
+    final owner = validateCronProfile(profile);
+    var uri = Uri.parse('$_baseUrl/api/$endpoint');
+    if (owner != null) {
+      uri = uri.replace(
+        queryParameters: {...uri.queryParameters, 'profile': owner},
+      );
+    }
+    final request = http.Request('GET', uri);
+    request.followRedirects = false;
+    request.headers.addAll(await _authHeaders());
+    final streamed = await _http.send(request).timeout(timeout);
+    final responseMetadata = http.Response(
+      '',
+      streamed.statusCode,
+      headers: streamed.headers,
+    );
+    _ingestSetCookie(responseMetadata, sentCookie: request.headers['Cookie']);
+    if (streamed.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: request.headers['Cookie'],
+        sentAuthorization: request.headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        await _cancelResponseStream(streamed.stream);
+        return apiDownloadToFile(
+          endpoint,
+          target,
+          maxBytes: maxBytes,
+          profile: profile,
+          retried: nextRetried,
+          timeout: timeout,
+          onProgress: onProgress,
+          isCancelled: isCancelled,
+        );
+      }
+    }
+    if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+      final errorBytes = await _readResponseStream(
+        streamed.stream,
+        maxBytes: 2048,
+        truncate: true,
+      );
+      throw DashboardHttpException(
+        streamed.statusCode,
+        body: utf8.decode(errorBytes, allowMalformed: true),
+      );
+    }
+    final declaredLength = streamed.contentLength;
+    if (declaredLength != null && declaredLength > maxBytes) {
+      await _cancelResponseStream(streamed.stream);
+      throw StateError('Dashboard download exceeds $maxBytes bytes');
+    }
+    // A file route answers with the file as an attachment. An HTML page
+    // without that disposition is the SPA catch-all (it can carry the session
+    // token): never write it as the requested file.
+    if (_isInlineHtml(streamed.headers)) {
+      await _cancelResponseStream(streamed.stream);
+      throw const DashboardNotAFileException();
+    }
+
+    final iterator = StreamIterator<List<int>>(streamed.stream);
+    IOSink? sink;
+    var completed = false;
+    var received = 0;
+    try {
+      sink = target.openWrite(mode: FileMode.writeOnly);
+      while (await iterator.moveNext()) {
+        if (isCancelled?.call() ?? false) {
+          throw const DashboardDownloadCancelled();
+        }
+        final chunk = iterator.current;
+        received += chunk.length;
+        if (received > maxBytes) {
+          throw StateError('Dashboard download exceeds $maxBytes bytes');
+        }
+        sink.add(chunk);
+        onProgress?.call(received, declaredLength);
+        if (isCancelled?.call() ?? false) {
+          throw const DashboardDownloadCancelled();
+        }
+      }
+      if (declaredLength != null && received != declaredLength) {
+        throw StateError('Dashboard download ended before Content-Length');
+      }
+      await sink.flush();
+      await sink.close();
+      sink = null;
+      completed = true;
+      return Map<String, String>.unmodifiable(streamed.headers);
+    } finally {
+      await iterator.cancel();
+      if (sink != null) {
+        try {
+          await sink.close();
+        } catch (_) {
+          // Preserve the original transport/write failure.
+        }
+      }
+      if (!completed) {
+        try {
+          if (await target.exists()) await target.delete();
+        } catch (_) {
+          // Best effort: caller also owns cleanup of its temporary destination.
+        }
+      }
+    }
   }
 
   Future<void> _cancelResponseStream(Stream<List<int>> stream) async {
@@ -2521,22 +3372,77 @@ class DashboardClient {
     bool retried = false,
   }) async {
     final headers = await _authHeaders();
+    _requireWriteAuthority();
     final res = await _http
+        .within(_kTimeout)
         .delete(
           Uri.parse('$_baseUrl/api/$endpoint'),
           headers: body != null
               ? {...headers, 'Content-Type': 'application/json'}
               : headers,
           body: body != null ? jsonEncode(body) : null,
-        )
-        .timeout(_kTimeout);
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return apiDelete(endpoint, body: body, retried: true);
+        );
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return apiDelete(endpoint, body: body, retried: nextRetried);
+      }
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw DashboardHttpException(res.statusCode, body: res.body);
+    }
+  }
+
+  /// DELETE /api/sessions/{id}[?profile=]: unlike [apiDelete] it returns the
+  /// JSON body (`{ok: true[, already_absent: true]}`). A body that is not a
+  /// JSON object comes back empty, which callers read as "not deleted".
+  Future<Map<String, dynamic>> deleteSession(
+    String sessionId, {
+    String? profile,
+    Map<String, Object>? identity,
+    bool retried = false,
+  }) async {
+    final headers = await _authHeaders();
+    _requireWriteAuthority();
+    final res = await _http
+        .within(_kTimeout)
+        .delete(
+          Uri.parse(
+            '$_baseUrl/api/sessions/${Uri.encodeComponent(sessionId)}'
+            '${_profileQuery(profile)}'
+            '${_identityQuery(identity, first: _profileQuery(profile).isEmpty)}',
+          ),
+          headers: headers,
+        );
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return deleteSession(
+          sessionId,
+          profile: profile,
+          identity: identity,
+          retried: nextRetried,
+        );
+      }
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw DashboardHttpException(res.statusCode, body: res.body);
+    }
+    try {
+      final data = jsonDecode(res.body);
+      return data is Map<String, dynamic> ? data : const {};
+    } on FormatException {
+      return const {};
     }
   }
 
@@ -2546,22 +3452,29 @@ class DashboardClient {
     bool retried = false,
   }) async {
     final headers = await _authHeaders();
+    _requireWriteAuthority();
     final res = await _http
+        .within(_kTimeout)
         .put(
           Uri.parse('$_baseUrl/api/$endpoint'),
           headers: headers,
           body: body != null ? jsonEncode(body) : null,
-        )
-        .timeout(_kTimeout);
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return apiPut(endpoint, body: body, retried: true);
+        );
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return apiPut(endpoint, body: body, retried: nextRetried);
+      }
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw DashboardHttpException(res.statusCode, body: res.body);
     }
-    return _decodeMapResponse(res);
+    return await _decodeMapResponse(res);
   }
 
   Future<Map<String, dynamic>> apiPatch(
@@ -2570,22 +3483,29 @@ class DashboardClient {
     bool retried = false,
   }) async {
     final headers = await _authHeaders();
+    _requireWriteAuthority();
     final res = await _http
+        .within(_kTimeout)
         .patch(
           Uri.parse('$_baseUrl/api/$endpoint'),
           headers: headers,
           body: body != null ? jsonEncode(body) : null,
-        )
-        .timeout(_kTimeout);
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return apiPatch(endpoint, body: body, retried: true);
+        );
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return apiPatch(endpoint, body: body, retried: nextRetried);
+      }
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw DashboardHttpException(res.statusCode, body: res.body);
     }
-    return _decodeMapResponse(res);
+    return await _decodeMapResponse(res);
   }
 
   Future<MemoryInfo> getMemoryInfo({
@@ -2594,20 +3514,39 @@ class DashboardClient {
   }) async {
     final headers = await _authHeaders();
     final res = await _http
+        .within(_kTimeout)
         .get(
           Uri.parse('$_baseUrl/api/memory${_profileQuery(profile)}'),
           headers: headers,
-        )
-        .timeout(_kTimeout);
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return getMemoryInfo(profile: profile, retried: true);
+        );
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return getMemoryInfo(profile: profile, retried: nextRetried);
+      }
     }
     if (res.statusCode != 200) {
       throw DashboardHttpException(res.statusCode, body: res.body);
     }
     return MemoryInfo.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  /// The fence of a session DELETE rides in the query (Desktop sessions.ts).
+  static String _identityQuery(
+    Map<String, Object>? identity, {
+    required bool first,
+  }) {
+    if (identity == null || identity.isEmpty) return '';
+    final pairs = [
+      for (final e in identity.entries)
+        '${e.key}=${Uri.encodeQueryComponent('${e.value}')}',
+    ].join('&');
+    return '${first ? '?' : '&'}$pairs';
   }
 
   /// Sufijo `?profile=<name>` para escalar una llamada a un perfil concreto.
@@ -2624,16 +3563,23 @@ class DashboardClient {
     String? profile,
     bool retried = false,
   }) async {
+    final headers = await _authHeaders();
     final res = await _http
+        .within(_kTimeout)
         .get(
           Uri.parse('$_baseUrl/api/model/info${_profileQuery(profile)}'),
-          headers: await _authHeaders(),
-        )
-        .timeout(_kTimeout);
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return getModelInfo(profile: profile, retried: true);
+          headers: headers,
+        );
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return getModelInfo(profile: profile, retried: nextRetried);
+      }
     }
     if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
     return ModelActiveInfo.fromJson(
@@ -2645,14 +3591,24 @@ class DashboardClient {
   Future<List<ModelProvider>> getModelOptions({
     String? profile,
     bool explicitOnly = false,
+    bool refresh = false,
   }) async {
     final params = <String>[
       if (explicitOnly) 'explicit_only=1',
+      // Busts the server's per-provider model cache, like Desktop's
+      // "Refresh Models" (`/api/model/options?refresh=1`).
+      if (refresh) 'refresh=1',
       if (profile != null && profile.isNotEmpty && profile != 'default')
         'profile=${Uri.encodeQueryComponent(profile)}',
     ];
     final suffix = params.isEmpty ? '' : '?${params.join('&')}';
-    final data = await apiGet('model/options$suffix');
+    final Map<String, dynamic> data;
+    try {
+      data = await apiGet('model/options$suffix');
+    } on DashboardHttpException catch (error) {
+      _noteRestartRequired(error);
+      rethrow;
+    }
     final rawProviders = data['providers'];
     final providers = rawProviders is Map
         ? rawProviders.entries.map((entry) {
@@ -2668,12 +3624,54 @@ class DashboardClient {
         : (rawProviders as List? ?? const []).whereType<Map>().map(
             (provider) => provider.cast<String, dynamic>(),
           );
-    return providers.map(ModelProvider.fromJson).toList();
+    final result = providers.map(ModelProvider.fromJson).toList();
+    // Only a catalog the server actually sent counts as it being well again:
+    // a map, or a list in which every entry is a provider. An absent member,
+    // another type or a list with a bad entry is not a validated catalog.
+    final wellFormed =
+        rawProviders is Map ||
+        (rawProviders is List && rawProviders.every((entry) => entry is Map));
+    if (wellFormed) _noteRestartRecovered();
+    return result;
   }
 
   /// GET /api/model/auxiliary — asignaciones por función + principal.
   Future<Map<String, dynamic>> getAuxiliaryModels({String? profile}) =>
       apiGet('model/auxiliary${_profileQuery(profile)}');
+
+  /// POST /api/model/set with the server's whole answer. Besides `ok` it may
+  /// carry `confirm_required` + `confirm_message` (a model that needs an
+  /// explicit acknowledgement: resend with [confirmExpensiveModel]) and, for
+  /// the main slot, the `provider`/`model` it actually stored.
+  Future<Map<String, dynamic>> assignModel({
+    required String providerSlug,
+    required String modelId,
+    String scope = 'main',
+    String task = '',
+    String baseUrl = '',
+    String? profile,
+    bool confirmExpensiveModel = false,
+  }) async {
+    final Map<String, dynamic> res;
+    try {
+      res = await apiPost(
+        'model/set${_profileQuery(profile)}',
+        body: {
+          'provider': providerSlug,
+          'model': modelId,
+          'scope': scope,
+          if (task.isNotEmpty) 'task': task,
+          if (baseUrl.isNotEmpty) 'base_url': baseUrl,
+          if (confirmExpensiveModel) 'confirm_expensive_model': true,
+        },
+      );
+    } on DashboardHttpException catch (error) {
+      _noteRestartRequired(error);
+      rethrow;
+    }
+    if (res['ok'] == true) _noteRestartRecovered();
+    return res;
+  }
 
   /// POST /api/model/set — requiere auth Dashboard. Escalable por perfil.
   Future<bool> setActiveModel({
@@ -2684,20 +3682,44 @@ class DashboardClient {
     String baseUrl = '',
     String apiKey = '',
     String? profile,
+    bool updateReasoningEffort = false,
+    String? reasoningEffort,
   }) async {
-    final res = await apiPost(
-      'model/set${_profileQuery(profile)}',
-      body: {
-        'provider': providerSlug,
-        'model': modelId,
-        'scope': scope,
-        if (task.isNotEmpty) 'task': task,
-        if (baseUrl.isNotEmpty) 'base_url': baseUrl,
-        if (apiKey.isNotEmpty) 'api_key': apiKey,
-      },
-    );
-    return (res['ok'] as bool?) ?? false;
+    final Map<String, dynamic> res;
+    try {
+      res = await apiPost(
+        'model/set${_profileQuery(profile)}',
+        body: {
+          'provider': providerSlug,
+          'model': modelId,
+          'scope': scope,
+          if (task.isNotEmpty) 'task': task,
+          if (baseUrl.isNotEmpty) 'base_url': baseUrl,
+          if (apiKey.isNotEmpty) 'api_key': apiKey,
+          if (updateReasoningEffort) 'reasoning_effort': reasoningEffort,
+        },
+      );
+    } on DashboardHttpException catch (error) {
+      _noteRestartRequired(error);
+      rethrow;
+    }
+    final accepted = (res['ok'] as bool?) ?? false;
+    if (accepted) _noteRestartRecovered();
+    return accepted;
   }
+
+  /// Passive: a good model call clears the note a 503 left (no request).
+  void _noteRestartRecovered() =>
+      ServerRestartSignals.noteHealthy(Uri.parse(_baseUrl).host);
+
+  /// Passive: remembers a 503 `Restart required:` the model calls report so
+  /// Diagnostics can say it. Never makes a request of its own.
+  void _noteRestartRequired(DashboardHttpException error) =>
+      ServerRestartSignals.noteHttp(
+        Uri.parse(_baseUrl).host,
+        error.statusCode,
+        error.body,
+      );
 
   /// Prueba un endpoint OpenAI-compatible desde el servidor Hermes.
   ///
@@ -2710,6 +3732,19 @@ class DashboardClient {
   }) => apiPost(
     'providers/validate',
     body: {'key': 'OPENAI_BASE_URL', 'value': baseUrl, 'api_key': apiKey},
+  );
+
+  /// POST /api/providers/validate — the server's own check of a provider key
+  /// before it is stored. `{ok, reachable, message}`: `ok` false with
+  /// `reachable` true is a key the provider rejected; `reachable` false means
+  /// no verdict (no check for that provider, or the provider did not answer).
+  Future<Map<String, dynamic>> validateProviderKey(
+    String key,
+    String value, {
+    String? profile,
+  }) => apiPost(
+    'providers/validate${_profileQuery(profile?.trim())}',
+    body: {'key': key, 'value': value},
   );
 
   /// Intenta eliminar un custom_provider del servidor vía DELETE /api/model/provider.
@@ -2736,7 +3771,7 @@ class DashboardClient {
   }
 
   // ── OAuth nativo del dashboard (device_code) ─────────────────────────────
-  // Más limpio que `hermes auth add` por Termux: JSON directo con url+código.
+  // Más limpio que `hermes auth add` por terminal: JSON directo con url+código.
   // `provider` debe ser el id del CLI (p.ej. nous, openai-codex, xai-oauth).
 
   /// `GET /api/providers/oauth` → lista de providers OAuth con su `flow`
@@ -2832,11 +3867,12 @@ class DashboardClient {
   Future<Map<String, dynamic>> checkUpdate({bool force = false}) =>
       apiGet(force ? 'hermes/update/check?force=true' : 'hermes/update/check');
 
-  /// POST /api/hermes/update — aplica la actualización (reinicia Dashboard y
-  /// Gateway). El comando es síncrono y puede tardar bastante más que el timeout
-  /// HTTP; además, el propio reinicio puede cerrar el socket antes de responder.
-  /// En ambos casos el POST ya pudo quedar aceptado y el llamador debe confirmar
-  /// el resultado sondeando `/api/status`, no anunciar un fallo inmediato.
+  /// POST /api/hermes/update — LANZA `hermes update` en segundo plano y
+  /// responde enseguida con `{ok, pid, action_id}` (o `already_running`). La
+  /// actualización real tarda minutos y termina reiniciando gateway y
+  /// Dashboard, así que una respuesta 2xx NO significa "actualizado": el
+  /// llamador debe seguir la acción con [getUpdateActionStatus]. Si el socket
+  /// se corta o vence el timeout, el POST pudo quedar aceptado igualmente.
   Future<DashboardUpdateApplyResult> applyUpdate({
     Duration timeout = _kTimeout,
     bool retried = false,
@@ -2845,8 +3881,8 @@ class DashboardClient {
     late final http.Response res;
     try {
       res = await _http
-          .post(Uri.parse('$_baseUrl/api/hermes/update'), headers: headers)
-          .timeout(timeout);
+          .within(timeout)
+          .post(Uri.parse('$_baseUrl/api/hermes/update'), headers: headers);
     } on TimeoutException {
       return const DashboardUpdateApplyResult.transportUncertain();
     } on SocketException {
@@ -2854,16 +3890,54 @@ class DashboardClient {
     } on http.ClientException {
       return const DashboardUpdateApplyResult.transportUncertain();
     }
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return applyUpdate(timeout: timeout, retried: true);
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return applyUpdate(timeout: timeout, retried: nextRetried);
+      }
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('HTTP ${res.statusCode}: ${res.body}');
     }
-    return const DashboardUpdateApplyResult.confirmed();
+    Map<String, dynamic> body = const {};
+    try {
+      body = await _decodeMapResponse(res);
+    } on FormatException {
+      body = const {};
+    }
+    if (body['ok'] == false) {
+      final message = (body['message'] ?? body['error'] ?? '').toString();
+      throw DashboardUpdateRefused(
+        message.trim().isEmpty ? 'Hermes rejected the update' : message,
+      );
+    }
+    final rawId = (body['action_id'] ?? '').toString().trim();
+    DateTime? serverDate;
+    try {
+      final date = res.headers['date'];
+      if (date != null) serverDate = HttpDate.parse(date);
+    } on FormatException {
+      serverDate = null;
+    } on HttpException {
+      serverDate = null;
+    }
+    return DashboardUpdateApplyResult.confirmed(
+      actionId: RegExp(r'^[0-9a-f]{32}$').hasMatch(rawId) ? rawId : null,
+      alreadyRunning: body['already_running'] == true,
+      serverDate: serverDate,
+    );
   }
+
+  /// GET /api/actions/hermes-update/status → `{running, exit_code, pid,
+  /// lines, action_id?, receipt?}`. Estado del proceso `hermes update` y cola
+  /// de su log. 404 en servidores antiguos sin este endpoint.
+  Future<Map<String, dynamic>> getUpdateActionStatus({int lines = 400}) =>
+      apiGet('actions/hermes-update/status?lines=$lines');
 
   /// POST /api/ops/config-migrate — migra el esquema de config.yaml al último
   /// (lanza `hermes config migrate` en segundo plano). Migración ADITIVA: añade
@@ -2896,6 +3970,24 @@ class DashboardClient {
     return _strictTranscriptMessages(raw);
   }
 
+  /// GET /api/sessions/{id}?profile= — the persisted session row of any
+  /// profile, read the way Hermes Desktop does. The API server's
+  /// `/p/<profile>/` route would demand that profile's own key.
+  Future<Session> getSessionDetail(
+    String sessionId, {
+    String profile = '',
+  }) async {
+    final normalizedProfile = profile.trim();
+    final query = normalizedProfile.isEmpty
+        ? ''
+        : '?${Uri(queryParameters: {'profile': normalizedProfile}).query}';
+    final data = await apiGet(
+      'sessions/${Uri.encodeComponent(sessionId)}$query',
+    );
+    final row = data['session'];
+    return Session.fromJson(row is Map<String, dynamic> ? row : data);
+  }
+
   /// Variante paginada (`order=latest`, offset hacia atrás desde el mensaje
   /// más reciente) del transcript Dashboard, igual que
   /// [ApiClient.getMessagesPage]. Dashboards antiguos responden sin metadata
@@ -2907,22 +3999,34 @@ class DashboardClient {
     int offset = 0,
   }) async {
     final normalizedProfile = profile.trim();
+    final boundedLimit = limit.clamp(1, 500);
     final query = Uri(
       queryParameters: {
-        'limit': '$limit',
+        'limit': '$boundedLimit',
         'order': 'latest',
         'offset': '$offset',
+        'include_compacted': 'true',
         if (normalizedProfile.isNotEmpty) 'profile': normalizedProfile,
       },
     ).query;
     final data = await apiGet(
       'sessions/${Uri.encodeComponent(sessionId)}/messages?$query',
     );
-    final raw = data['messages'] ?? data['data'];
+    final raw = data.containsKey('messages') ? data['messages'] : data['data'];
+    final resolved = data['session_id'];
     return SessionMessagesPage.fromRaw(
       rawMessages: raw,
       pagination: data['pagination'],
       paginationProvided: data.containsKey('pagination'),
+      requestedLimit: boundedLimit,
+      requestedOffset: offset,
+      resolvedTipId: resolved is String && resolved.trim().isNotEmpty
+          ? resolved.trim()
+          : null,
+      coverage: const {
+        CoreReadCoverage.tipOnly,
+        CoreReadCoverage.metadataPartial,
+      },
     );
   }
 
@@ -2968,22 +4072,30 @@ class DashboardClient {
     bool retried = false,
   }) async {
     final headers = await _authHeaders();
+    _requireOpen();
+    _requireWriteAuthority();
     final res = await _http
+        .within(_kTimeout)
         .put(
           Uri.parse('$_baseUrl/api/config${_profileQuery(profile)}'),
           headers: headers,
           body: jsonEncode({'config': config}),
-        )
-        .timeout(_kTimeout);
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return _putServerConfig(config, profile: profile, retried: true);
+        );
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return _putServerConfig(config, profile: profile, retried: nextRetried);
+      }
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw DashboardHttpException(res.statusCode);
+      throw DashboardHttpException(res.statusCode, body: res.body);
     }
-    return _decodeMapResponse(res);
+    return await _decodeMapResponse(res);
   }
 
   /// POST /api/audio/speak — sintetiza mediante el proveedor TTS ya configurado
@@ -3012,6 +4124,22 @@ class DashboardClient {
     body: {'data_url': dataUrl, 'mime_type': mimeType},
     timeout: timeout ?? audioTranscribeRequestTimeout(dataUrl),
   );
+
+  /// POST /api/audio/tts-lease — señal de precalentamiento/liberación del
+  /// motor TTS, igual que los interruptores de voz de Desktop. Hermes informa
+  /// de un fallo de precarga en el cuerpo, nunca como error HTTP.
+  Future<Map<String, dynamic>> setTtsLease(
+    String lease, {
+    required bool active,
+    String? profile,
+  }) => apiPost(
+    'audio/tts-lease${_profileQuery(profile)}',
+    body: {'lease': lease, 'active': active},
+    timeout: audioTtsLeaseRequestTimeout,
+  );
+
+  /// Adquirir puede cargar un modelo local en el servidor; Desktop usa 180 s.
+  static const Duration audioTtsLeaseRequestTimeout = Duration(seconds: 180);
 
   /// Sonda sin efectos de una ruta de audio (spec 048/US5), por el MISMO
   /// camino autenticado que el resto del Dashboard. Es un `POST` con cuerpo
@@ -3122,28 +4250,85 @@ class DashboardClient {
   Future<Map<String, dynamic>> getActionStatus(String name) =>
       apiGet('actions/${Uri.encodeComponent(name)}/status');
 
+  /// GET /api/env — credenciales conocidas del perfil, configuradas o no
+  /// (Desktop `getEnvVars(profile)`). Solo se usan metadatos y `is_set`; los
+  /// valores redactados nunca se guardan ni se registran.
+  Future<Map<String, dynamic>> getEnvVars({String? profile}) =>
+      apiGet('env${_profileQuery(profile?.trim())}');
+
   /// PUT /api/env — fija una variable de entorno (p.ej. la API key de un
   /// proveedor). El servidor rechaza nombres peligrosos (denylist).
-  Future<bool> setEnvVar(String key, String value) async {
-    final res = await apiPut('env', body: {'key': key, 'value': value});
+  Future<bool> setEnvVar(String key, String value, {String? profile}) async {
+    final target = profile?.trim() ?? '';
+    final res = await apiPut(
+      'env',
+      body: {
+        'key': key,
+        'value': value,
+        if (target.isNotEmpty && target != 'default') 'profile': target,
+      },
+    );
     return (res['ok'] as bool?) ?? false;
   }
 
   /// DELETE /api/env — borra una variable de entorno (p.ej. la API key de un
-  /// proveedor) para desconfigurarlo.
-  Future<void> deleteEnvVar(String key) => apiDelete('env', body: {'key': key});
+  /// proveedor) para desconfigurarlo. Sin [profile] el servidor actúa sobre el
+  /// perfil por defecto, así que la pantalla debe pasar siempre el suyo
+  /// (Desktop `deleteEnvVar(key, profile)`).
+  Future<void> deleteEnvVar(String key, {String? profile}) {
+    final target = profile?.trim() ?? '';
+    return apiDelete(
+      'env${_profileQuery(target)}',
+      body: {
+        'key': key,
+        if (target.isNotEmpty && target != 'default') 'profile': target,
+      },
+    );
+  }
 
-  /// DELETE /api/providers/oauth/{id} — desconecta un proveedor OAuth.
-  Future<void> disconnectOAuth(String providerId) =>
-      apiDelete('providers/oauth/$providerId');
+  /// DELETE /api/providers/oauth/{id} — desconecta un proveedor OAuth del
+  /// perfil indicado (Desktop `disconnectOAuthProvider(id, profile)`).
+  Future<void> disconnectOAuth(String providerId, {String? profile}) =>
+      apiDelete(
+        'providers/oauth/${Uri.encodeComponent(providerId)}'
+        '${_profileQuery(profile?.trim())}',
+      );
 
   /// POST /api/providers/oauth/{id}/start — inicia el login OAuth (device_code).
-  Future<Map<String, dynamic>> startOAuth(String providerId) =>
-      apiPost('providers/oauth/$providerId/start');
+  /// [profile] renueva la credencial de ese perfil del gateway, no la del
+  /// perfil principal (Desktop `startManualProviderOAuth(provider, profile)`).
+  Future<Map<String, dynamic>> startOAuth(
+    String providerId, {
+    String? profile,
+  }) => apiPost(
+    'providers/oauth/${Uri.encodeComponent(providerId)}/start'
+    '${_profileQuery(profile)}',
+  );
 
   /// GET /api/providers/oauth/{id}/poll/{session} — estado del login OAuth.
-  Future<Map<String, dynamic>> pollOAuth(String providerId, String sessionId) =>
-      apiGet('providers/oauth/$providerId/poll/$sessionId');
+  Future<Map<String, dynamic>> pollOAuth(
+    String providerId,
+    String sessionId, {
+    String? profile,
+  }) => apiGet(
+    'providers/oauth/${Uri.encodeComponent(providerId)}/poll/'
+    '${Uri.encodeComponent(sessionId)}${_profileQuery(profile)}',
+  );
+
+  /// GET /api/providers/oauth — the Accounts catalog of [profile]: one row per
+  /// provider with `id`, `name`, `flow` (device_code / external),
+  /// `cli_command` and `status.logged_in`.
+  Future<List<Map<String, dynamic>>> getOAuthProviders({
+    String? profile,
+  }) async {
+    final res = await apiGet('providers/oauth${_profileQuery(profile)}');
+    final list = res['providers'];
+    if (list is! List) return const [];
+    return [
+      for (final row in list)
+        if (row is Map) Map<String, dynamic>.from(row),
+    ];
+  }
 
   Future<List<Map<String, dynamic>>> getSkills({String? profile}) async {
     final data = await apiGetList('skills${_profileQuery(profile)}');
@@ -3174,22 +4359,17 @@ class DashboardClient {
 
   // ── Cron job management ──────────────────────────────────────────────
 
-  /// Elimina un cron de forma idempotente. Si hay perfil activo, probamos ese
-  /// ámbito y SIEMPRE confirmamos también en el ámbito global: Hermes responde
-  /// éxito cuando el job ya estaba ausente del perfil, así que un 2xx scoped no
-  /// demuestra que el schedule global haya desaparecido.
+  /// Elimina un cron de forma idempotente dentro de un único ámbito. Un perfil
+  /// nombrado nunca puede provocar además un DELETE global/default; sin perfil
+  /// se conserva la ruta histórica sin query.
   Future<void> deleteCronJob(String jobId, {String? profile}) async {
     final id = validateCronJobId(jobId);
     final scopedProfile = validateCronProfile(profile);
     final endpoint = 'cron/jobs/${Uri.encodeComponent(id)}';
-    final scopedQuery = _profileQuery(scopedProfile);
-    if (scopedQuery.isNotEmpty) {
-      final deleted = await _deleteCronEndpoint('$endpoint$scopedQuery');
-      if (!deleted) {
-        throw const CronDeleteRejectedException();
-      }
-    }
-    final deleted = await _deleteCronEndpoint(endpoint);
+    final deleted = await _deleteCronEndpoint(
+      '$endpoint${_profileQuery(scopedProfile)}',
+      profile: scopedProfile ?? 'default',
+    );
     if (!deleted) {
       throw const CronDeleteRejectedException();
     }
@@ -3197,18 +4377,31 @@ class DashboardClient {
 
   Future<bool> _deleteCronEndpoint(
     String endpoint, {
+    required String profile,
     bool retried = false,
   }) async {
     final headers = await _authHeaders();
     final res = await _http
-        .delete(Uri.parse('$_baseUrl/api/$endpoint'), headers: headers)
-        .timeout(_kTimeout);
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return _deleteCronEndpoint(endpoint, retried: true);
+        .within(_kTimeout)
+        .delete(Uri.parse('$_baseUrl/api/$endpoint'), headers: headers);
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return _deleteCronEndpoint(
+          endpoint,
+          profile: profile,
+          retried: nextRetried,
+        );
+      }
     }
-    if (res.statusCode == 404) return true;
+    // 404: the job is not in that profile, so nothing was removed. Reporting
+    // it as deleted hid a delete sent to the wrong profile.
+    if (res.statusCode == 404) throw CronJobNotFoundException(profile);
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('HTTP ${res.statusCode}');
     }
@@ -3252,16 +4445,27 @@ class DashboardClient {
   }) async {
     final headers = await _authHeaders();
     final res = await _http
+        .within(_kTimeout)
         .put(
           Uri.parse('$_baseUrl/api/cron/jobs/$jobId${_profileQuery(profile)}'),
           headers: headers,
           body: jsonEncode(buildCronUpdateBody(updates)),
-        )
-        .timeout(_kTimeout);
-    _ingestSetCookie(res);
-    if (res.statusCode == 401 && !retried) {
-      _resetSession();
-      return updateJob(jobId, updates, profile: profile, retried: true);
+        );
+    _ingestSetCookie(res, sentCookie: headers['Cookie']);
+    if (res.statusCode == 401) {
+      final nextRetried = _unauthorizedRetry(
+        sentCookie: headers['Cookie'],
+        sentAuthorization: headers['Authorization'],
+        retried: retried,
+      );
+      if (nextRetried != null) {
+        return updateJob(
+          jobId,
+          updates,
+          profile: profile,
+          retried: nextRetried,
+        );
+      }
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('HTTP ${res.statusCode}');
@@ -3269,5 +4473,23 @@ class DashboardClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
-  void close() => _http.close();
+  void _requireOpen() {
+    if (_closed) throw http.ClientException('Dashboard client is closed');
+  }
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    _http.close();
+  }
+}
+
+/// `timeout | transport | auth | http(code) | other`; never a URL or a body.
+String classifyRestFailure(Object error) {
+  if (error is DashboardAuthException) return 'auth';
+  if (error is DashboardHttpException) {
+    final code = error.statusCode;
+    return code == 401 || code == 403 ? 'auth' : 'http($code)';
+  }
+  return classifyTransportFailure(error);
 }

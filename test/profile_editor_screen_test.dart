@@ -16,6 +16,7 @@ import 'package:hermes_android/core/services/profile_pet_service.dart';
 import 'package:hermes_android/core/services/profile_pet_visual_adapter.dart';
 import 'package:hermes_android/core/services/tui_gateway_client.dart';
 import 'package:hermes_android/core/widgets/hermes_bot_face.dart';
+import 'package:hermes_android/l10n/app_localizations.dart';
 import 'package:image_picker/image_picker.dart';
 
 const _imageDataUri =
@@ -247,6 +248,7 @@ Future<void> _pumpEditor(
   Size size = const Size(1000, 2600),
   double textScale = 1,
   double keyboardInset = 0,
+  bool openIdentity = true,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -259,6 +261,8 @@ Future<void> _pumpEditor(
   await tester.pumpWidget(
     MaterialApp(
       locale: const Locale('es'),
+      localizationsDelegates: Strings.localizationsDelegates,
+      supportedLocales: Strings.supportedLocales,
       home: Scaffold(
         body: Builder(
           builder: (context) => TextButton(
@@ -288,6 +292,10 @@ Future<void> _pumpEditor(
   // La preview Blobatar tiene motion continuo opt-in; avanzar la transición
   // de ruta de forma acotada evita esperar a que un ticker infinito termine.
   await _pumpUi(tester);
+  if (openIdentity) {
+    await _tapVisible(tester, const ValueKey('profile-editor-identity-row'));
+    await _pumpUi(tester);
+  }
 }
 
 Future<void> _pumpUi(WidgetTester tester) async {
@@ -309,7 +317,46 @@ Future<void> _save(WidgetTester tester) async {
   await _pumpUi(tester);
 }
 
+class _RecordingGenerationGateway extends _FakeAssetsGateway {
+  final generationCalls = <String>[];
+
+  Future<bool> canGenerateBotAvatar() async {
+    generationCalls.add('image.generate:probe');
+    return true;
+  }
+
+  Future<AgentProfileAvatar> generateBotAvatar(String prompt) async {
+    generationCalls.add('image.generate');
+    return AgentProfileAvatar.fromDataUri(_imageDataUri);
+  }
+}
+
 void main() {
+  testWidgets('editing a profile never probes or offers AI avatars', (
+    tester,
+  ) async {
+    final generation = _RecordingGenerationGateway();
+    await _pumpEditor(
+      tester,
+      assets: generation,
+      imagePicker: () async => null,
+    );
+    expect(generation.generationCalls, isEmpty);
+    await _tapVisible(tester, const ValueKey('profile-editor-mode-image'));
+    await _pumpUi(tester);
+    expect(generation.generationCalls, isEmpty);
+    final strings = Strings.of(
+      tester.element(find.byType(ProfileEditorScreen)),
+    );
+    expect(find.text(strings.botGenerateAvatar), findsNothing);
+    await _tapVisible(tester, const ValueKey('profile-editor-pick-image'));
+    await _tapVisible(tester, const ValueKey('profile-editor-mode-face'));
+    await _tapVisible(tester, const ValueKey('profile-editor-mode-image'));
+    await _pumpUi(tester);
+    expect(generation.generationCalls, isEmpty);
+    expect(find.text(strings.botGenerateAvatar), findsNothing);
+  });
+
   testWidgets(
     'Blobatar guardado manda sobre una mascota activa hasta elegirla',
     (tester) async {
@@ -503,7 +550,7 @@ void main() {
   });
 
   testWidgets(
-    'cara legacy abre como Blobatar sin RPC y migra al guardado explícito',
+    'cara geométrica conserva su identidad al cambiar solo el título',
     (tester) async {
       final log = <String>[];
       final assets = _FakeAssetsGateway(log: log);
@@ -530,7 +577,7 @@ void main() {
       expect(
         tester
             .widgetList<HermesBotFace>(find.byType(HermesBotFace))
-            .every((face) => face.visual is HermesBlobatarFaceVisual),
+            .any((face) => face.visual is HermesClassicFaceVisual),
         isTrue,
       );
       expect(
@@ -539,7 +586,7 @@ void main() {
       );
       expect(find.text('Clásica'), findsNothing);
 
-      await tester.enterText(find.byType(TextField).first, 'Legacy migrated');
+      await tester.enterText(find.byType(TextField).first, 'Legacy preserved');
       await tester.pump();
       expect(
         find.byKey(const ValueKey('profile-editor-dirty')),
@@ -547,13 +594,10 @@ void main() {
       );
       await _save(tester);
 
-      expect(log, ['disable-pet', 'save']);
+      expect(log, ['save']);
       final identity = assets.savedMeta.single['identity'];
-      expect(identity, isA<ProceduralFaceIdentity>());
-      final procedural = identity! as ProceduralFaceIdentity;
-      expect(procedural.shapeWire, 'blobatar');
-      expect(procedural.dormantColorHex, '#38bdf8');
-      expect(assets.savedMeta.single['title'], 'Legacy migrated');
+      expect(identity, isNull);
+      expect(assets.savedMeta.single['title'], 'Legacy preserved');
     },
   );
 
@@ -711,7 +755,7 @@ void main() {
     await tester.tap(find.byType(BackButton));
     await _pumpUi(tester);
 
-    expect(find.text('Discard changes?'), findsOneWidget);
+    expect(find.text('¿Descartar cambios?'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('profile-editor-keep-editing')));
     await _pumpUi(tester);
     expect(find.byType(ProfileEditorScreen), findsOneWidget);
@@ -738,7 +782,7 @@ void main() {
     );
     await tester.pump();
     expect(assets.savedMeta, hasLength(1));
-    expect(find.text('Saving…'), findsOneWidget);
+    expect(find.text('Guardando…'), findsOneWidget);
 
     gate.complete();
     await tester.pumpAndSettle();
@@ -843,6 +887,7 @@ void main() {
       size: const Size(320, 720),
       textScale: 2,
       keyboardInset: 220,
+      openIdentity: false,
     );
     await tester.enterText(find.byType(TextField).first, 'Infra Lead');
     await tester.pump();

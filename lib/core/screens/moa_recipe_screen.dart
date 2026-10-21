@@ -7,11 +7,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../l10n/app_localizations.dart';
 import '../models/moa_config.dart';
 import '../services/connection_manager.dart';
+import '../design/modal.dart' show HermesModelGroup, showHermesModelPicker;
 import '../theme/app_theme.dart';
 import '../widgets/hermes_app_bar.dart';
-import '../widgets/hermes_premium_ui.dart';
+import '../widgets/hermes_notice.dart';
 import '../widgets/hermes_ui.dart';
+import '../widgets/profile_scope.dart';
 import '../widgets/read_only.dart';
+import '../widgets/console_loader.dart';
+import '../feedback/feedback_policy.dart';
 
 /// Editor de la receta del Mixture of Agents (spec 029).
 ///
@@ -21,7 +25,20 @@ import '../widgets/read_only.dart';
 /// reenvía todos los presets). Sin dashboard accesible → solo-lectura.
 class MoaRecipeScreen extends StatefulWidget {
   final SavedConnection connection;
-  const MoaRecipeScreen({required this.connection, super.key});
+
+  /// Profile whose recipe is read and written (empty = default). Every call
+  /// of this screen carries it, like the Models screen it is opened from.
+  final String profile;
+
+  @visibleForTesting
+  final DashboardClient? dashboardClientForTesting;
+
+  const MoaRecipeScreen({
+    required this.connection,
+    this.profile = '',
+    this.dashboardClientForTesting,
+    super.key,
+  });
 
   @override
   State<MoaRecipeScreen> createState() => _MoaRecipeScreenState();
@@ -40,20 +57,32 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
 
   static const int _maxReferences = 5;
 
-  /// Clave de la última receta cacheada para esta instancia (modo solo-lectura
-  /// cuando el Dashboard no responde).
-  String get _cacheKey => 'moa_cache_${widget.connection.id}';
+  String get _profile => widget.profile.trim();
+  bool get _defaultProfile => _profile.isEmpty || _profile == 'default';
+
+  /// Clave de la última receta cacheada para esta instancia y perfil (modo
+  /// solo-lectura cuando el Dashboard no responde).
+  String get _cacheKey => _defaultProfile
+      ? 'moa_cache_${widget.connection.id}'
+      : 'moa_cache_${widget.connection.id}|$_profile';
+
+  /// `model/moa` of this screen's profile.
+  String get _moaPath => _defaultProfile
+      ? 'model/moa'
+      : 'model/moa?profile=${Uri.encodeQueryComponent(_profile)}';
 
   @override
   void initState() {
     super.initState();
-    _client = DashboardClient.lazy(widget.connection);
+    _client =
+        widget.dashboardClientForTesting ??
+        DashboardClient.lazy(widget.connection);
     _load();
   }
 
   @override
   void dispose() {
-    _client.close();
+    if (widget.dashboardClientForTesting == null) _client.close();
     super.dispose();
   }
 
@@ -64,11 +93,11 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
     try {
       // Se lee el crudo para poder cachearlo íntegro (incluye fanout y
       // reference_max_tokens, que el toJson del PUT omite).
-      final raw = await _client.apiGet('model/moa');
+      final raw = await _client.apiGet(_moaPath);
       final cfg = MoaConfig.fromJson(raw);
       List<ModelProvider> providers = const [];
       try {
-        providers = await _client.getModelOptions();
+        providers = await _client.getModelOptions(profile: _profile);
       } catch (_) {
         // El catálogo es best-effort: sin él, el picker y el aviso de
         // credencial quedan limitados, pero la receta se puede ver/editar.
@@ -147,7 +176,7 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
     setState(() => _saving = true);
     final s = Strings.of(context);
     try {
-      await _client.setMoa(cfg);
+      await _client.setMoa(cfg, profile: _profile);
       if (!mounted) return;
       // Guardar la receta no la pone como modelo activo del gateway. Si el MoA
       // NO es ya el modelo activo, el aviso ofrece activarlo de un toque (así no
@@ -155,20 +184,22 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
       // disponible desde la lista de Modelos (el radio junto al preset).
       final alreadyActive = await _moaIsActive();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(s.moaSaved),
-          action: alreadyActive
-              ? null
-              : SnackBarAction(label: s.moaActivate, onPressed: _activate),
-        ),
+      // Saved is routine; the one-tap "Activate" offer is the only reason to
+      // draw it, so it only appears while the preset is not active yet.
+      AppFeedback.notify(
+        context,
+        alreadyActive ? FeedbackKind.routine : FeedbackKind.undo,
+        s.moaSaved,
+        action: alreadyActive
+            ? null
+            : HermesNoticeAction(label: s.moaActivate, onPressed: _activate),
       );
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
+      AppFeedback.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(s.moaSaveError(e.toString()))));
+      ).notify(FeedbackKind.error, s.moaSaveError(e.toString()));
       // Revierte a lo persistido: sin estado fantasma.
       await _load();
     } finally {
@@ -180,7 +211,7 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
   /// ya lo está). Best-effort: ante cualquier fallo asume que no lo es.
   Future<bool> _moaIsActive() async {
     try {
-      final info = await _client.getModelInfo();
+      final info = await _client.getModelInfo(profile: _profile);
       final provider = info.provider.toLowerCase();
       return provider == 'moa' || provider.startsWith('moa');
     } catch (_) {
@@ -199,64 +230,37 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
         providerSlug: 'moa',
         modelId: _presetName,
         scope: 'main',
+        profile: _profile,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(s.moaActivated)));
+      AppFeedback.of(context).notify(FeedbackKind.routine, s.moaActivated);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
+      AppFeedback.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(s.moaSaveError(e.toString()))));
+      ).notify(FeedbackKind.error, s.moaSaveError(e.toString()));
     }
   }
 
-  /// Picker de proveedor+modelo del catálogo (excluye "moa": no anidar).
-  Future<MoaSlot?> _pickSlot() {
-    final colors = Theme.of(context).hermes;
-    return showHermesFloatingSurface<MoaSlot>(
+  /// Shared floating model picker (excludes "moa": no nesting).
+  Future<MoaSlot?> _pickSlot() async {
+    final picked = await showHermesModelPicker(
       context: context,
       surfaceKey: const ValueKey('moa-model-picker-surface'),
-      maxWidth: 560,
-      maxHeightFactor: 0.88,
-      builder: (ctx) => ListView(
-        shrinkWrap: true,
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        children: [
-          Text(
-            Strings.of(ctx).moaPickModel,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-              color: colors.textPrimary,
+      keyPrefix: 'moa-model',
+      title: Strings.of(context).moaPickModel,
+      groups: [
+        for (final p in _providers.where((p) => p.slug != 'moa'))
+          if (p.models.isNotEmpty)
+            HermesModelGroup(
+              slug: p.slug,
+              name: p.name.isNotEmpty ? p.name : p.slug,
+              models: p.models,
             ),
-          ),
-          const SizedBox(height: 12),
-          for (final p in _providers.where((p) => p.slug != 'moa'))
-            ...p.models.map(
-              (m) => ListTile(
-                dense: true,
-                leading: Icon(
-                  p.authenticated ? Icons.memory_rounded : Icons.lock_outline,
-                  size: 18,
-                  color: p.authenticated ? colors.accent : colors.textDisabled,
-                ),
-                title: Text(
-                  m,
-                  style: TextStyle(fontSize: 14, color: colors.textPrimary),
-                ),
-                subtitle: Text(
-                  p.name.isNotEmpty ? p.name : p.slug,
-                  style: TextStyle(fontSize: 11, color: colors.textSecondary),
-                ),
-                onTap: () =>
-                    Navigator.pop(ctx, MoaSlot(provider: p.slug, model: m)),
-              ),
-            ),
-        ],
-      ),
+      ],
     );
+    if (picked == null || picked.isDefault) return null;
+    return MoaSlot(provider: picked.provider, model: picked.model);
   }
 
   @override
@@ -264,9 +268,16 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
     final s = Strings.of(context);
     final colors = Theme.of(context).hermes;
     return Scaffold(
-      appBar: HermesAppBar(title: Text(s.moaTitle)),
+      appBar: HermesAppBar(
+        // States which profile this recipe belongs to.
+        title: Text(s.moaTitle),
+        titleBadge: ProfileScopeLabel.badgeFor(
+          profile: _profile,
+          connectionId: widget.connection.id,
+        ),
+      ),
       body: switch (_mode) {
-        _Mode.loading => const Center(child: CircularProgressIndicator()),
+        _Mode.loading => const Center(child: ConsoleLoader.large()),
         _Mode.error => _errorState(s, colors),
         _Mode.editable || _Mode.readOnly => _recipe(s, colors),
       },
@@ -274,6 +285,7 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
   }
 
   Widget _errorState(Strings s, HermesThemeColors colors) => ListView(
+    clipBehavior: hermesUnderHeader,
     padding: const EdgeInsets.all(16),
     children: [
       Icon(Icons.cloud_off, size: 40, color: colors.textSecondary),
@@ -288,7 +300,7 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
         Text(
           _errorDetail!,
           textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 11, color: colors.textDisabled),
+          style: TextStyle(fontSize: 11, color: colors.textTertiary),
         ),
       ],
       const SizedBox(height: 16),
@@ -309,6 +321,7 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
     // receta cacheada porque el Dashboard no respondió (_Mode.readOnly).
     final readOnly = widget.connection.readOnly || _mode == _Mode.readOnly;
     return ListView(
+      clipBehavior: hermesUnderHeader,
       padding: const EdgeInsets.all(16),
       children: [
         if (_mode == _Mode.readOnly)
@@ -560,6 +573,7 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
               if (onRemove != null)
                 IconButton(
                   icon: Icon(Icons.close, size: 18, color: colors.textDisabled),
+                  tooltip: Strings.of(context).commonDelete,
                   onPressed: onRemove,
                 ),
               if (onEdit != null)
@@ -663,6 +677,7 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
           ),
           IconButton(
             visualDensity: VisualDensity.compact,
+            tooltip: Strings.of(context).a11yDecreaseValue(label),
             icon: Icon(
               Icons.remove_circle_outline,
               size: 22,
@@ -684,6 +699,7 @@ class _MoaRecipeScreenState extends State<MoaRecipeScreen> {
           ),
           IconButton(
             visualDensity: VisualDensity.compact,
+            tooltip: Strings.of(context).a11yIncreaseValue(label),
             icon: Icon(
               Icons.add_circle_outline,
               size: 22,

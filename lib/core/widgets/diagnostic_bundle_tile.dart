@@ -7,10 +7,13 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../config/flavor.dart';
+import '../services/app_error_log.dart';
 import '../services/connection_manager.dart';
 import '../services/diagnostic_bundle_service.dart';
 import '../services/turn_outbox_store.dart';
 import '../theme/app_theme.dart';
+import '../feedback/feedback_policy.dart';
+import '../design/modal.dart' show showHermesDialogRoute;
 
 class DiagnosticRuntimeInfo {
   final String version;
@@ -102,6 +105,11 @@ class DiagnosticBundleController {
         ],
         turns: turns,
         caches: caches,
+        // Local only: it leaves the device solely through this export.
+        recentErrors: [
+          for (final record in AppErrorLog.recent)
+            DiagnosticErrorEvent.fromAppError(record),
+        ],
       ),
     );
   }
@@ -182,7 +190,7 @@ class _DiagnosticBundleTileState extends State<DiagnosticBundleTile> {
           : DiagnosticFormFactor.phone;
       final bundle = await widget.controller.prepare(formFactor);
       if (!mounted) return;
-      final share = await showDialog<bool>(
+      final share = await showHermesDialogRoute<bool>(
         context: context,
         builder: (context) {
           final s = Strings.of(context);
@@ -198,12 +206,14 @@ class _DiagnosticBundleTileState extends State<DiagnosticBundleTile> {
                   const SizedBox(height: 12),
                   Flexible(
                     child: SingleChildScrollView(
-                      child: SelectableText(
-                        bundle.preview,
-                        key: const ValueKey('diagnostic-bundle-preview'),
-                        style: const TextStyle(
-                          fontFamily: 'JetBrainsMono',
-                          fontSize: 11,
+                      child: SelectionArea(
+                        child: Text(
+                          bundle.preview,
+                          key: const ValueKey('diagnostic-bundle-preview'),
+                          style: const TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 11,
+                          ),
                         ),
                       ),
                     ),
@@ -228,9 +238,9 @@ class _DiagnosticBundleTileState extends State<DiagnosticBundleTile> {
       if (share == true) await widget.controller.share(bundle);
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(Strings.of(context).diagBundleError)),
-        );
+        AppFeedback.of(
+          context,
+        ).notify(FeedbackKind.error, Strings.of(context).diagBundleError);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -241,21 +251,27 @@ class _DiagnosticBundleTileState extends State<DiagnosticBundleTile> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).hermes;
     final s = Strings.of(context);
-    return ListTile(
-      leading: Icon(Icons.bug_report_outlined, color: colors.textSecondary),
-      title: Text(s.diagBundleTitle),
-      subtitle: Text(
-        s.diagBundleSubtitle,
-        style: TextStyle(fontSize: 12, color: colors.textSecondary),
+    // Settings paints this row inside a tinted group. A ListTile draws its
+    // ink on the nearest Material, which that tint would cover, so the row
+    // brings its own transparent one.
+    return Material(
+      type: MaterialType.transparency,
+      child: ListTile(
+        leading: Icon(Icons.bug_report_outlined, color: colors.textSecondary),
+        title: Text(s.diagBundleTitle),
+        subtitle: Text(
+          s.diagBundleSubtitle,
+          style: TextStyle(fontSize: 12, color: colors.textSecondary),
+        ),
+        trailing: _busy
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(Icons.chevron_right, color: colors.textDisabled),
+        onTap: _busy ? null : _generate,
       ),
-      trailing: _busy
-          ? const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          : Icon(Icons.chevron_right, color: colors.textDisabled),
-      onTap: _busy ? null : _generate,
     );
   }
 }

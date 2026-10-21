@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:io';
 // Ajustes de notificaciones locales. Privacidad: todo on-device, sin FCM ni
 // Google; las dispara la propia app. El usuario elige qué eventos avisan.
 import 'package:flutter/material.dart';
@@ -8,9 +10,12 @@ import '../../l10n/app_localizations.dart';
 import '../../main.dart';
 import '../services/notifications/background_listener.dart';
 import '../services/notifications/notification_service.dart';
+import '../services/notifications/rich_notifications.dart';
 import '../theme/app_theme.dart';
 import '../widgets/hermes_app_bar.dart';
 import '../widgets/hermes_ui.dart';
+import '../feedback/feedback_policy.dart';
+import '../design/modal.dart' show showHermesDialogRoute;
 
 class NotificationSettingsScreen extends StatefulWidget {
   const NotificationSettingsScreen({super.key});
@@ -105,8 +110,9 @@ class _NotificationSettingsScreenState
     if (v && !ok) {
       // Mensaje propio del arranque del servicio, no el de la notificación
       // de prueba (spec 028 A-021).
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(Strings.of(context).notifListenerStartFailed)),
+      AppFeedback.of(context).notify(
+        FeedbackKind.error,
+        Strings.of(context).notifListenerStartFailed,
       );
     }
   }
@@ -143,8 +149,9 @@ class _NotificationSettingsScreenState
       _bgBusy = false;
     });
     if (value && !enabled) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(Strings.of(context).notifListenerStartFailed)),
+      AppFeedback.of(context).notify(
+        FeedbackKind.error,
+        Strings.of(context).notifListenerStartFailed,
       );
     }
   }
@@ -186,8 +193,9 @@ class _NotificationSettingsScreenState
       _bgBusy = false;
     });
     if (value && !enabled) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(Strings.of(context).notifListenerStartFailed)),
+      AppFeedback.of(context).notify(
+        FeedbackKind.error,
+        Strings.of(context).notifListenerStartFailed,
       );
     }
   }
@@ -204,7 +212,7 @@ class _NotificationSettingsScreenState
     if (!mounted) return ok;
     setState(() => _granted = ok);
     if (!ok) {
-      await showDialog<void>(
+      await showHermesDialogRoute<void>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: Text(s.notifPermCardTitle),
@@ -232,6 +240,7 @@ class _NotificationSettingsScreenState
       body: notif == null
           ? Center(child: Text(s.commonNotAvailable))
           : ListView(
+              clipBehavior: hermesUnderHeader,
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
               children: [
                 if (!_loading &&
@@ -423,6 +432,7 @@ class _NotificationSettingsScreenState
           await BackgroundListener.stopAutomation();
           await notif.setNotifyCronResults(false);
           await notif.setNotifyKanbanResults(false);
+          await notif.setNotifyLocalAgentResults(false);
           if (mounted) {
             setState(() {
               _bgRunning = false;
@@ -473,6 +483,30 @@ class _NotificationSettingsScreenState
         subtitle: s.notifKanbanResultsSub,
         value: notif.notifyKanbanResults,
         onChanged: (v) => _toggleKanbanResults(notif, v),
+      ),
+      _eventSwitch(
+        colors,
+        enabled: on && notif.notifyKanbanResults,
+        icon: Icons.task_alt_rounded,
+        title: s.notifKanbanDoneTitle,
+        subtitle: s.notifKanbanDoneSub,
+        value: notif.muteStore.kanbanDoneDefault,
+        onChanged: (v) async {
+          await notif.muteStore.setKanbanDoneDefault(v);
+          if (mounted) setState(() {});
+        },
+      ),
+      _eventSwitch(
+        colors,
+        enabled: on,
+        icon: Icons.flag_outlined,
+        title: s.notifLocalAgentResultsTitle,
+        subtitle: s.notifLocalAgentResultsSub,
+        value: notif.notifyLocalAgentResults,
+        onChanged: (v) async {
+          await notif.setNotifyLocalAgentResults(v);
+          if (mounted) setState(() {});
+        },
       ),
       _eventSwitch(
         colors,
@@ -564,6 +598,19 @@ class _NotificationSettingsScreenState
             value: _bgRunning && on,
             onChanged: (on && !_bgBusy) ? _toggleBackground : null,
           ),
+          // Cron and Kanban are only discovered by the background listener:
+          // without this opt-in none of their notices arrive.
+          Padding(
+            key: const ValueKey('notif-bg-automation-needs-listener'),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Text(
+                s.au1215BgNeededForAutomation,
+                style: TextStyle(fontSize: 11.5, color: colors.textSecondary),
+              ),
+            ),
+          ),
           HermesBackgroundNotificationStatus(
             state: _bgBusy
                 ? BackgroundNotificationUiState.activating
@@ -600,6 +647,44 @@ class _NotificationSettingsScreenState
                 style: TextStyle(fontSize: 11, color: colors.textSecondary),
               ),
             ),
+          // T606: Bot/room notifications and widgets depend on the listener.
+          Padding(
+            key: const ValueKey('notif-bot-mode-listener-note'),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Text(
+              _bgRunning && on
+                  ? s.notifBotModeListenerOn
+                  : s.notifBotModeListenerOff,
+              style: TextStyle(fontSize: 11, color: colors.textSecondary),
+            ),
+          ),
+          if (Platform.isAndroid)
+            ListTile(
+              key: const ValueKey('notif-live-updates-settings'),
+              dense: true,
+              title: Text(s.notifLiveUpdatesTitle),
+              subtitle: Text(s.notifLiveUpdatesSub),
+              trailing: const Icon(Icons.open_in_new_rounded, size: 18),
+              onTap: () => unawaited(
+                PlatformRichNotifications().openPromotionSettings(),
+              ),
+            ),
+          // The fixed "Conectado a Hermes" card is Android's condition for
+          // staying connected; its own category screen is where it can be
+          // minimised. Only there is a card while the listener runs.
+          if (Platform.isAndroid && _bgRunning && on)
+            ListTile(
+              key: const ValueKey('notif-fixed-card-settings'),
+              dense: true,
+              title: Text(s.notifFixedCardTitle),
+              subtitle: Text(s.notifFixedCardSub),
+              trailing: const Icon(Icons.open_in_new_rounded, size: 18),
+              onTap: () => unawaited(
+                PlatformRichNotifications().openChannelSettings(
+                  BackgroundListener.serviceChannelId,
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -617,8 +702,10 @@ class _NotificationSettingsScreenState
         final sent = await notif.sendTest();
         await _refresh();
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(sent ? s.notifTestSent : s.notifTestFailed)),
+        AppFeedback.notify(
+          context,
+          sent ? FeedbackKind.routine : FeedbackKind.error,
+          sent ? s.notifTestSent : s.notifTestFailed,
         );
       },
       icon: const Icon(Icons.send_rounded, size: 16),

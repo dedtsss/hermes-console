@@ -16,6 +16,50 @@ String _cleanText(Object? raw, {int max = _maxPreviewText}) {
   return value.length <= max ? value : value.substring(0, max);
 }
 
+String _safeProcessCommand(Object? raw) {
+  final command = _cleanText(raw, max: 240);
+  if (command.isEmpty) return '';
+  final parts = command.split(RegExp(r'\s+'));
+  String safePart(String value) {
+    if (value.isEmpty || value.startsWith('-') || value.contains('=')) return '';
+    return value.split(RegExp(r'[/\\]')).last;
+  }
+
+  final executable = safePart(parts.first);
+  if (executable.isEmpty) return '';
+  final lower = executable.toLowerCase();
+  final display = <String>[executable];
+  if (lower == 'dart' && parts.length > 1 && parts[1] == 'run') {
+    display.add('run');
+    if (parts.length > 2) {
+      final script = safePart(parts[2]);
+      if (script.isNotEmpty) display.add(script);
+    }
+  } else if (const {'python', 'python3', 'node', 'bash', 'sh'}.contains(lower) &&
+      parts.length > 1) {
+    final script = safePart(parts[1]);
+    if (script.isNotEmpty) display.add(script);
+  } else if (const {
+    'npm',
+    'pnpm',
+    'yarn',
+    'flutter',
+    'cargo',
+    'gradle',
+  }.contains(lower)) {
+    for (final part in parts.skip(1).take(2)) {
+      final projection = safePart(part);
+      if (projection.isNotEmpty) display.add(projection);
+    }
+  }
+  return _cleanText(display.join(' '), max: 80);
+}
+
+/// Proyección de solo lectura de un comando para mostrarlo en pantalla: el
+/// ejecutable (y, en las herramientas conocidas, el guion o subcomando), nunca
+/// flags, argumentos, variables ni rutas completas.
+String safeCommandProjection(Object? raw) => _safeProcessCommand(raw);
+
 int _safeInt(Object? raw, {int fallback = 0}) {
   if (raw is int) return raw;
   if (raw is num) return raw.toInt();
@@ -437,19 +481,44 @@ final class DesktopMcpProbeResult {
   }
 }
 
+enum AgentCenterStatus {
+  requested,
+  running,
+  thinking,
+  tool,
+  completed,
+  failed,
+  cancelled,
+  stopped,
+  unknown,
+}
+
+AgentCenterStatus _parseAgentCenterStatus(Object? raw) {
+  final value = _cleanText(raw, max: 80).toLowerCase();
+  return switch (value) {
+    'requested' || 'pending' => AgentCenterStatus.requested,
+    'running' || 'active' => AgentCenterStatus.running,
+    'thinking' => AgentCenterStatus.thinking,
+    'tool' || 'using_tool' || 'using tool' => AgentCenterStatus.tool,
+    // `process.list` del gateway conserva ~30 min las entradas terminadas con
+    // `status: "exited"`; Desktop las trata como terminadas (done/failed).
+    'completed' || 'finished' || 'exited' => AgentCenterStatus.completed,
+    'failed' || 'error' => AgentCenterStatus.failed,
+    'cancelled' || 'canceled' => AgentCenterStatus.cancelled,
+    'stopped' => AgentCenterStatus.stopped,
+    _ => AgentCenterStatus.unknown,
+  };
+}
+
 final class SpawnTreeEntry {
   /// Opaque backend identity used only for `spawn_tree.load`.
   final String opaquePath;
-  final String sessionId;
-  final String label;
   final int count;
   final double startedAt;
   final double finishedAt;
 
   const SpawnTreeEntry({
     required this.opaquePath,
-    required this.sessionId,
-    required this.label,
     required this.count,
     required this.startedAt,
     required this.finishedAt,
@@ -460,8 +529,6 @@ final class SpawnTreeEntry {
     if (path.isEmpty) return null;
     return SpawnTreeEntry(
       opaquePath: path,
-      sessionId: _cleanText(json['session_id'], max: 512),
-      label: _cleanText(json['label']),
       count: _safeInt(json['count']).clamp(0, 10000),
       startedAt: _safeDouble(json['started_at']),
       finishedAt: _safeDouble(json['finished_at']),
@@ -470,18 +537,25 @@ final class SpawnTreeEntry {
 }
 
 final class BackgroundProcessEntry {
-  final String id;
-  final String commandPreview;
-  final String status;
+  /// Opaque backend identity used only for the exact `process.kill` call.
+  final String opaqueId;
+  final AgentCenterStatus status;
   final int uptimeSeconds;
-  final String outputTail;
+  final String command;
+  final bool notifyOnComplete;
+  final List<String> watchPatterns;
+  final bool watchHit;
+  final DateTime? startedAt;
 
   const BackgroundProcessEntry({
-    required this.id,
-    required this.commandPreview,
+    required this.opaqueId,
     required this.status,
     required this.uptimeSeconds,
-    required this.outputTail,
+    this.command = '',
+    this.notifyOnComplete = false,
+    this.watchPatterns = const [],
+    this.watchHit = false,
+    this.startedAt,
   });
 
   static BackgroundProcessEntry? tryParse(Map<String, dynamic> json) {
@@ -490,14 +564,29 @@ final class BackgroundProcessEntry {
       max: 512,
     );
     if (id.isEmpty) return null;
+    final startedAtSeconds = _safeDouble(json['started_at']);
     return BackgroundProcessEntry(
-      id: id,
-      commandPreview: _cleanText(json['command'], max: 240),
-      status: _cleanText(json['status'], max: 80),
+      opaqueId: id,
+      status: _parseAgentCenterStatus(json['status'] ?? json['phase']),
       uptimeSeconds: _safeInt(
         json['uptime_seconds'] ?? json['uptime'],
       ).clamp(0, 315360000),
-      outputTail: _cleanText(json['output_tail'], max: 4000),
+      command: _safeProcessCommand(json['command']),
+      notifyOnComplete: json['notify_on_complete'] == true,
+      watchPatterns: json['watch_patterns'] is List
+          ? (json['watch_patterns'] as List)
+                .map((value) => _cleanText(value, max: 120))
+                .where((value) => value.isNotEmpty)
+                .take(8)
+                .toList(growable: false)
+          : const [],
+      watchHit: json['watch_hit'] == true,
+      startedAt: startedAtSeconds > 0
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (startedAtSeconds * 1000).round(),
+              isUtc: true,
+            )
+          : null,
     );
   }
 }
@@ -505,34 +594,52 @@ final class BackgroundProcessEntry {
 final class AgentCenterSnapshot {
   final List<SpawnTreeEntry> snapshots;
   final List<BackgroundProcessEntry> processes;
+  final bool processesFullyParsed;
 
-  const AgentCenterSnapshot({required this.snapshots, required this.processes});
+  const AgentCenterSnapshot({
+    required this.snapshots,
+    required this.processes,
+    this.processesFullyParsed = true,
+  });
 
   factory AgentCenterSnapshot.fromJson({
     required Map<String, dynamic> snapshots,
     Map<String, dynamic>? processes,
-  }) => AgentCenterSnapshot(
-    snapshots: _objectRows(snapshots['entries'])
-        .map(SpawnTreeEntry.tryParse)
-        .whereType<SpawnTreeEntry>()
-        .toList(growable: false),
-    processes: _objectRows(processes?['processes'])
+  }) {
+    final rawProcesses = processes?['processes'];
+    final parsedProcesses = _objectRows(rawProcesses)
         .map(BackgroundProcessEntry.tryParse)
         .whereType<BackgroundProcessEntry>()
-        .toList(growable: false),
-  );
+        .toList(growable: false);
+    return AgentCenterSnapshot(
+      snapshots: _objectRows(snapshots['entries'])
+          .map(SpawnTreeEntry.tryParse)
+          .whereType<SpawnTreeEntry>()
+          .toList(growable: false),
+      processes: parsedProcesses,
+      processesFullyParsed:
+          rawProcesses is List && parsedProcesses.length == rawProcesses.length,
+    );
+  }
+}
+
+final class SpawnTreeSubagentEntry {
+  final AgentCenterStatus status;
+
+  const SpawnTreeSubagentEntry({required this.status});
+
+  factory SpawnTreeSubagentEntry.fromJson(Map<String, dynamic> json) =>
+      SpawnTreeSubagentEntry(
+        status: _parseAgentCenterStatus(json['status'] ?? json['phase']),
+      );
 }
 
 final class SpawnTreeDetail {
-  final String sessionId;
-  final String label;
   final double startedAt;
   final double finishedAt;
-  final List<Map<String, dynamic>> subagents;
+  final List<SpawnTreeSubagentEntry> subagents;
 
   const SpawnTreeDetail({
-    required this.sessionId,
-    required this.label,
     required this.startedAt,
     required this.finishedAt,
     required this.subagents,
@@ -540,31 +647,11 @@ final class SpawnTreeDetail {
 
   factory SpawnTreeDetail.fromJson(Map<String, dynamic> json) =>
       SpawnTreeDetail(
-        sessionId: _cleanText(json['session_id'], max: 512),
-        label: _cleanText(json['label']),
         startedAt: _safeDouble(json['started_at']),
         finishedAt: _safeDouble(json['finished_at']),
-        subagents: _objectRows(json['subagents'])
-            .map(
-              (entry) => <String, dynamic>{
-                'id': _cleanText(
-                  entry['id'] ?? entry['subagent_id'] ?? entry['task_id'],
-                  max: 512,
-                ),
-                'status': _cleanText(
-                  entry['status'] ?? entry['phase'],
-                  max: 80,
-                ),
-                'label': _cleanText(
-                  entry['label'] ?? entry['goal'] ?? entry['task'],
-                ),
-                'summary': _cleanText(
-                  entry['summary'] ?? entry['result'] ?? entry['output'],
-                  max: 1000,
-                ),
-              },
-            )
-            .toList(growable: false),
+        subagents: _objectRows(
+          json['subagents'],
+        ).map(SpawnTreeSubagentEntry.fromJson).toList(growable: false),
       );
 }
 
@@ -573,12 +660,18 @@ final class ProjectSessionPreview {
   final String title;
   final String preview;
   final double lastActive;
+  final int messageCount;
+
+  /// Profile the server stamped on the row (request scope); '' when absent.
+  final String profile;
 
   const ProjectSessionPreview({
     required this.id,
     required this.title,
     required this.preview,
     required this.lastActive,
+    this.messageCount = 0,
+    this.profile = '',
   });
 
   static ProjectSessionPreview? tryParse(Map<String, dynamic> json) {
@@ -589,6 +682,8 @@ final class ProjectSessionPreview {
       title: _cleanText(json['title']),
       preview: _cleanText(json['preview']),
       lastActive: _safeDouble(json['last_active'] ?? json['started_at']),
+      messageCount: _safeInt(json['message_count']).clamp(0, 1000000),
+      profile: _cleanText(json['profile'], max: 128),
     );
   }
 }
@@ -600,12 +695,20 @@ final class ProjectLane {
   final int totalCount;
   final List<ProjectSessionPreview> sessions;
 
+  /// Trunk lane: the repository's own checkout (not a linked worktree).
+  final bool isMain;
+
+  /// Kanban-managed worktree lane; Desktop hides its "+" too.
+  final bool isKanban;
+
   const ProjectLane({
     required this.id,
     required this.label,
     required this.path,
     required this.totalCount,
     required this.sessions,
+    this.isMain = false,
+    this.isKanban = false,
   });
 
   static ProjectLane? tryParse(Map<String, dynamic> json) {
@@ -624,6 +727,8 @@ final class ProjectLane {
         fallback: sessions.length,
       ).clamp(0, 100000),
       sessions: sessions,
+      isMain: json['isMain'] == true,
+      isKanban: json['isKanban'] == true,
     );
   }
 }
@@ -736,6 +841,66 @@ final class ProjectNode {
   );
 }
 
+/// A row of `GET /api/git/base-branches`.
+final class ProjectGitBaseBranch {
+  final String name;
+  final bool isRemote;
+  final bool isDefault;
+
+  const ProjectGitBaseBranch({
+    required this.name,
+    this.isRemote = false,
+    this.isDefault = false,
+  });
+
+  static ProjectGitBaseBranch? tryParse(Map<String, dynamic> json) {
+    final name = _cleanText(json['name'], max: 255);
+    if (name.isEmpty) return null;
+    return ProjectGitBaseBranch(
+      name: name,
+      isRemote: json['isRemote'] == true,
+      isDefault: json['isDefault'] == true,
+    );
+  }
+}
+
+/// A row of `GET /api/git/branches`.
+final class ProjectGitBranch {
+  final String name;
+  final bool checkedOut;
+  final bool isDefault;
+  final bool isRemote;
+  final String worktreePath;
+
+  const ProjectGitBranch({
+    required this.name,
+    this.checkedOut = false,
+    this.isDefault = false,
+    this.isRemote = false,
+    this.worktreePath = '',
+  });
+
+  static ProjectGitBranch? tryParse(Map<String, dynamic> json) {
+    final name = _cleanText(json['name'], max: 255);
+    if (name.isEmpty) return null;
+    return ProjectGitBranch(
+      name: name,
+      checkedOut: json['checkedOut'] == true,
+      isDefault: json['isDefault'] == true,
+      isRemote: json['isRemote'] == true,
+      worktreePath: _cleanText(json['worktreePath'], max: 4096),
+    );
+  }
+}
+
+/// Answer of `POST /api/git/worktree/add`.
+final class ProjectWorktreeResult {
+  final String path;
+  final String branch;
+
+  const ProjectWorktreeResult({required this.path, required this.branch});
+}
+
 final class ProjectTreeSnapshot {
   final List<ProjectNode> projects;
   final String? activeId;
@@ -753,4 +918,272 @@ final class ProjectTreeSnapshot {
           final value => value,
         },
       );
+}
+
+/// One quality gate attached to a standing goal (`/goal gate add ...`).
+final class SessionGoalGate {
+  final String command;
+  final int timeoutSeconds;
+  final int maxRetries;
+  final int attempts;
+  final int? lastExitCode;
+
+  const SessionGoalGate({
+    required this.command,
+    required this.timeoutSeconds,
+    required this.maxRetries,
+    required this.attempts,
+    this.lastExitCode,
+  });
+
+  static SessionGoalGate? tryParse(Map<String, dynamic> json) {
+    final command = _cleanText(json['command'], max: 400);
+    if (command.isEmpty) return null;
+    return SessionGoalGate(
+      command: command,
+      timeoutSeconds: _safeInt(json['timeout_seconds']),
+      maxRetries: _safeInt(json['max_retries']),
+      attempts: _safeInt(json['attempts']),
+      lastExitCode: json['last_exit_code'] == null
+          ? null
+          : _safeInt(json['last_exit_code']),
+    );
+  }
+}
+
+/// A goal parked waiting on a time, another session, or a process to exit.
+final class SessionGoalWaitBarrier {
+  final String type;
+  final String untilAt;
+  final String target;
+  final String reason;
+
+  const SessionGoalWaitBarrier({
+    required this.type,
+    required this.untilAt,
+    required this.target,
+    required this.reason,
+  });
+
+  static SessionGoalWaitBarrier? tryParse(Map<String, dynamic> json) {
+    final type = _cleanText(json['type'], max: 40);
+    if (type.isEmpty) return null;
+    return SessionGoalWaitBarrier(
+      type: type,
+      untilAt: _cleanText(json['until_at'], max: 80),
+      target: _cleanText(json['target'], max: 200),
+      reason: _cleanText(json['reason']),
+    );
+  }
+}
+
+DateTime? _epochDateTime(Object? raw) {
+  final seconds = _safeDouble(raw);
+  if (seconds <= 0) return null;
+  return DateTime.fromMillisecondsSinceEpoch(
+    (seconds * 1000).round(),
+    isUtc: true,
+  );
+}
+
+final class SessionLoopSnapshot {
+  const SessionLoopSnapshot({
+    required this.status,
+    required this.interval,
+    required this.lastRunAt,
+    required this.nextDueAt,
+    required this.ticksFired,
+    required this.awaitingResponse,
+    this.deferredByGoal = false,
+  });
+
+  final String status;
+  final Duration interval;
+  final DateTime? lastRunAt;
+  final DateTime? nextDueAt;
+  final int ticksFired;
+  final bool awaitingResponse;
+  final bool deferredByGoal;
+
+  static SessionLoopSnapshot? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final json = Map<String, dynamic>.from(raw);
+    final status = _cleanText(json['status'], max: 40);
+    if (status.isEmpty || status == 'cleared') return null;
+    return SessionLoopSnapshot(
+      status: status,
+      interval: Duration(
+        milliseconds: (_safeDouble(json['interval_seconds']) * 1000)
+            .round()
+            .clamp(0, 315360000000),
+      ),
+      lastRunAt: _epochDateTime(json['last_fired_at']),
+      nextDueAt: _epochDateTime(json['next_due_at']),
+      ticksFired: _safeInt(json['ticks_fired']).clamp(0, 1000000000),
+      awaitingResponse: json['awaiting_response'] == true,
+      deferredByGoal: json['deferred_by_goal'] == true,
+    );
+  }
+}
+
+final class SessionHeartbeatSnapshot {
+  const SessionHeartbeatSnapshot({
+    required this.status,
+    required this.interval,
+    required this.lastRunAt,
+    required this.nextDueAt,
+    required this.fireCount,
+  });
+
+  final String status;
+  final Duration interval;
+  final DateTime? lastRunAt;
+  final DateTime? nextDueAt;
+  final int fireCount;
+
+  static SessionHeartbeatSnapshot? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final json = Map<String, dynamic>.from(raw);
+    final status = _cleanText(json['status'], max: 40);
+    if (status.isEmpty || status == 'cleared') return null;
+    final interval = Duration(
+      seconds: _safeInt(json['interval_seconds']).clamp(0, 315360000),
+    );
+    final lastRunAt = _epochDateTime(json['last_fired_at']);
+    return SessionHeartbeatSnapshot(
+      status: status,
+      interval: interval,
+      lastRunAt: lastRunAt,
+      nextDueAt: status == 'active' && lastRunAt != null
+          ? lastRunAt.add(interval)
+          : null,
+      fireCount: _safeInt(json['fire_count']).clamp(0, 1000000000),
+    );
+  }
+}
+
+final class SessionControlSnapshot {
+  const SessionControlSnapshot({
+    required this.goal,
+    required this.loop,
+    required this.heartbeat,
+    required this.revision,
+    required this.updatedAt,
+  });
+
+  final SessionGoalSnapshot? goal;
+  final SessionLoopSnapshot? loop;
+  final SessionHeartbeatSnapshot? heartbeat;
+  final String revision;
+  final DateTime? updatedAt;
+
+  factory SessionControlSnapshot.fromJson(Object? raw) {
+    final json = raw is Map
+        ? Map<String, dynamic>.from(raw)
+        : const <String, dynamic>{};
+    return SessionControlSnapshot(
+      goal: SessionGoalSnapshot.tryParse(json['goal']),
+      loop: SessionLoopSnapshot.tryParse(json['loop']),
+      heartbeat: SessionHeartbeatSnapshot.tryParse(json['heartbeat']),
+      revision: _cleanText(json['revision'], max: 128),
+      updatedAt: _epochDateTime(json['updated_at']),
+    );
+  }
+}
+
+/// Live standing-goal state for one session, from `session.control.read` /
+/// `session.control.update` (`session.control.goal` in the gateway contract).
+/// A `null` snapshot (from a "cleared" status) means no active goal.
+final class SessionGoalSnapshot {
+  final String title;
+  final String status;
+  final int turnsUsed;
+  final int maxTurns;
+  final String outcome;
+  final String verification;
+  final String constraints;
+  final String boundaries;
+  final String stopWhen;
+  final List<String> subgoals;
+  final List<SessionGoalGate> gates;
+  final String pausedReason;
+  final String lastVerdict;
+  final String lastReason;
+  final SessionGoalWaitBarrier? waitBarrier;
+
+  const SessionGoalSnapshot({
+    required this.title,
+    required this.status,
+    required this.turnsUsed,
+    required this.maxTurns,
+    this.outcome = '',
+    this.verification = '',
+    this.constraints = '',
+    this.boundaries = '',
+    this.stopWhen = '',
+    this.subgoals = const [],
+    this.gates = const [],
+    this.pausedReason = '',
+    this.lastVerdict = '',
+    this.lastReason = '',
+    this.waitBarrier,
+  });
+
+  bool get isActive => status == 'active';
+  bool get isPaused => status == 'paused';
+  bool get isDone => status == 'done';
+  bool get isWaiting => status == 'waiting';
+  bool get isBlocked => lastVerdict == 'blocked';
+
+  /// wait_barrier.reason > paused_reason > last_reason, same priority Desktop
+  /// uses in `session-control-goal.tsx`.
+  String get displayReason {
+    final barrierReason = waitBarrier?.reason ?? '';
+    if (barrierReason.isNotEmpty) return barrierReason;
+    if (pausedReason.isNotEmpty) return pausedReason;
+    return lastReason;
+  }
+
+  /// Parses `control.goal` from `session.control.read` / `.update`. Returns
+  /// null both for a missing field and for an explicit `status: "cleared"`.
+  static SessionGoalSnapshot? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final json = Map<String, dynamic>.from(raw);
+    final status = _cleanText(json['status'], max: 40);
+    if (status.isEmpty || status == 'cleared') return null;
+    final contract = json['contract'];
+    final contractMap = contract is Map
+        ? Map<String, dynamic>.from(contract)
+        : const <String, dynamic>{};
+    final waitBarrierRaw = json['wait_barrier'];
+    return SessionGoalSnapshot(
+      title: _cleanText(json['title'], max: 200),
+      status: status,
+      turnsUsed: _safeInt(json['turns_used']),
+      maxTurns: _safeInt(json['max_turns']),
+      outcome: _cleanText(contractMap['outcome']),
+      verification: _cleanText(contractMap['verification']),
+      constraints: _cleanText(contractMap['constraints']),
+      boundaries: _cleanText(contractMap['boundaries']),
+      stopWhen: _cleanText(contractMap['stop_when']),
+      subgoals: (json['subgoals'] is List)
+          ? (json['subgoals'] as List)
+                .map((e) => _cleanText(e, max: 200))
+                .where((e) => e.isNotEmpty)
+                .toList(growable: false)
+          : const [],
+      gates: _objectRows(json['gates'])
+          .map(SessionGoalGate.tryParse)
+          .whereType<SessionGoalGate>()
+          .toList(growable: false),
+      pausedReason: _cleanText(json['paused_reason']),
+      lastVerdict: _cleanText(json['last_verdict'], max: 40),
+      lastReason: _cleanText(json['last_reason']),
+      waitBarrier: waitBarrierRaw is Map
+          ? SessionGoalWaitBarrier.tryParse(
+              Map<String, dynamic>.from(waitBarrierRaw),
+            )
+          : null,
+    );
+  }
 }

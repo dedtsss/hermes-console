@@ -158,7 +158,29 @@ class SherpaSttModelManager {
     _activeDownloads[m.id]?.close();
   }
 
-  Future<Directory> _baseDir() async {
+  // Asked of the platform once: checking a model and starting its worker
+  // read some ten paths under it, and each used to be a platform round trip
+  // of its own in front of the load.
+  Future<Directory>? _base;
+
+  Future<Directory> _baseDir() {
+    final known = _base;
+    if (known != null) return known;
+    final resolving = _resolveBaseDir();
+    _base = resolving;
+    // A failure is not remembered: the next caller asks again.
+    unawaited(
+      resolving.then<void>(
+        (_) {},
+        onError: (Object _) {
+          if (identical(_base, resolving)) _base = null;
+        },
+      ),
+    );
+    return resolving;
+  }
+
+  Future<Directory> _resolveBaseDir() async {
     final support = await getApplicationSupportDirectory();
     final dir = Directory('${support.path}/stt_sherpa_models');
     if (!dir.existsSync()) dir.createSync(recursive: true);
@@ -723,6 +745,10 @@ class _SherpaListenOperation {
   final List<String> committed = [];
   int pendingAudioBytes = 0;
   bool queueAudioUntilWorkerCommand = true;
+
+  /// The recogniser has answered for this capture: from here its updates
+  /// carry the level.
+  bool recognizerReady = false;
   bool acousticSpeechEvidence = false;
   double peakLevel = 0;
   bool cancelled = false;
@@ -786,12 +812,26 @@ Uint8List? _pcm16Mono16kFromWav(Uint8List wavBytes) {
   );
 }
 
+/// The level of a PCM16 chunk on the worker's scale (`RMS x 4`, at most 1).
+double _pcm16Level(Uint8List pcm16) {
+  final count = pcm16.lengthInBytes ~/ 2;
+  if (count == 0) return 0;
+  final data = ByteData.sublistView(pcm16);
+  var sum = 0.0;
+  for (var index = 0; index < count; index++) {
+    final sample = data.getInt16(index * 2, Endian.little) / 32768.0;
+    sum += sample * sample;
+  }
+  return (math.sqrt(sum / count) * 4).clamp(0.0, 1.0);
+}
+
 /// Motor de STT en vivo on-device. Abre el micro en streaming PCM, alimenta el
 /// VAD silero y, por cada frase que el VAD cierra (al hacer una pausa), la
 /// transcribe con el reconocedor offline y emite un parcial acumulado. Al
 /// detectar fin de habla sostenido (o al parar manualmente) vacía el VAD,
 /// transcribe lo que reste y emite el resultado final.
-class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
+class SherpaSttEngine
+    implements SttEngine, CapturedWavSttEngine, WarmSttEngine {
   final SherpaSttModel model;
   final SherpaSttModelManager manager;
 
@@ -847,6 +887,19 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
 
   /// Hilos para el reconocedor: núcleos disponibles, acotado a [2, 6].
   static int get _threads => Platform.numberOfProcessors.clamp(2, 6);
+
+  /// Which model, on how many threads of how many cores, and, when the caller
+  /// had to wait for the recogniser to load ([cold]), where that load went.
+  /// Identifiers and numbers only.
+  String _loadSummary({required bool cold}) {
+    final timing = switch (_worker) {
+      SherpaSttLoadTimed(:final loadTiming) when cold => loadTiming,
+      _ => null,
+    };
+    return 'model=${model.id} threads=$_threads '
+        'cores=${Platform.numberOfProcessors} '
+        'load=${cold ? 'cold' : 'warm'}${timing == null ? '' : ' $timing'}';
+  }
 
   late final SherpaSttRuntime _runtime;
   late final SherpaSttWorkerFactory? _workerFactory;
@@ -952,6 +1005,74 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
     return result;
   }
 
+  @override
+  Future<void> prewarm() {
+    // A capture that is starting or running loads the recogniser itself.
+    if (_disposed || _worker != null || _operation != null) {
+      return Future<void>.value();
+    }
+    return _prewarm ??= _loadAhead().whenComplete(() => _prewarm = null);
+  }
+
+  Future<void>? _prewarm;
+
+  Future<void> _loadAhead() async {
+    final perf = Stopwatch()..start();
+    try {
+      if (!await _runtime.modelReady()) return;
+      if (_disposed || _worker != null || _operation != null) return;
+      final worker = await _ensureWorker();
+      await worker.prepare();
+      debugPrint(
+        '[VOICE-PERF] sherpa.prewarm.ready_ms=${perf.elapsedMilliseconds} '
+        '${_loadSummary(cold: true)}',
+      );
+    } catch (error) {
+      // The next capture loads it, and reports the failure if it persists.
+      debugPrint(
+        '[VOICE-PERF] sherpa.prewarm.failed_ms=${perf.elapsedMilliseconds} '
+        'error=${error.runtimeType}',
+      );
+    }
+  }
+
+  @override
+  Future<void> park() {
+    final disposing = _disposeFuture;
+    if (disposing != null) return disposing;
+    _cancelIdleSilenceTimer();
+    final operation = _operation;
+    _operation = null;
+    _generation++;
+    _controller = null;
+    if (operation != null) {
+      operation.cancelled = true;
+      operation.pendingAudio.clear();
+      operation.pendingAudioBytes = 0;
+      if (!operation.controller.isClosed) {
+        unawaited(operation.controller.close());
+      }
+    }
+    final previousStop = _stopTail;
+    final result = () async {
+      await previousStop;
+      await _audioSub?.cancel();
+      _audioSub = null;
+      try {
+        await _runtime.stop();
+      } catch (error) {
+        debugPrint('[stt-sherpa] recorder stop failed (${error.runtimeType})');
+      }
+      onLevel?.call(0);
+      debugPrint(
+        '[VOICE-PERF] sherpa.parked warm=${_worker != null} '
+        'generation=${operation?.generation}',
+      );
+    }();
+    _stopTail = result.then<void>((_) {}, onError: (_) {});
+    return result;
+  }
+
   bool _isCurrent(_SherpaListenOperation operation) =>
       !_disposed &&
       !operation.cancelled &&
@@ -1049,12 +1170,12 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
       onError: (Object error, StackTrace stack) {
         final operation = _operation;
         if (operation != null && _isCurrent(operation)) {
-          operation.workerError = error.toString();
+          operation.workerError = 'Sherpa worker failed.';
           _autoStop();
           return;
         }
         for (final draining in _drainingOperations.values) {
-          draining.workerError = error.toString();
+          draining.workerError = 'Sherpa worker failed.';
         }
       },
     );
@@ -1073,7 +1194,7 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
     }
     final error = update.error;
     if (error != null) {
-      operation.workerError = error;
+      operation.workerError = 'Sherpa worker failed.';
       if (_isCurrent(operation)) _autoStop();
       return;
     }
@@ -1083,7 +1204,20 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
       speechDetected: update.speechDetected,
       acousticSpeechEvidence: update.acousticSpeechEvidence,
       segments: update.segments,
+      trigger: update.trigger,
     );
+    if (update.rejectedSegments > 0) {
+      // Métrica sin contenido: lo rechazado nunca se transcribe, así que solo
+      // hay números. Dicen cuánto le faltó para contar como voz.
+      debugPrint(
+        '[stt-sherpa] rejected_segments=${update.rejectedSegments} '
+        'longest_ms=${update.rejectedMs} '
+        'peak_level=${update.rejectedPeak.toStringAsFixed(3)} '
+        'trigger=${update.trigger.toStringAsFixed(3)} '
+        'noise_floor=${update.noiseFloor.toStringAsFixed(3)} '
+        'gate=noise_floor',
+      );
+    }
   }
 
   @override
@@ -1138,6 +1272,9 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
   ) async {
     final controller = operation.controller;
     final perf = Stopwatch()..start();
+    // Does this start wait for the recogniser to load, or find it loaded?
+    final cold = _worker == null || _prewarm != null;
+    var micMs = 0;
     try {
       if (!_isCurrent(operation)) {
         if (!controller.isClosed) await controller.close();
@@ -1169,20 +1306,19 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
         return;
       }
       operation.started = true;
-      onCaptureReady?.call();
       _startedAt = DateTime.now();
-      _armIdleSilenceTimer(operation);
+      micMs = perf.elapsedMilliseconds;
       debugPrint(
-        '[VOICE-PERF] sherpa.mic.ready_ms=${perf.elapsedMilliseconds} '
+        '[VOICE-PERF] sherpa.mic.ready_ms=$micMs '
         'generation=${operation.generation}',
       );
       _audioSub = stream.listen(
         (bytes) {
           if (_isCurrent(operation)) _onAudio(operation, bytes);
         },
-        onError: (Object e) {
+        onError: (Object _) {
           if (_isCurrent(operation) && !controller.isClosed) {
-            controller.addError(Exception('Microphone error: $e'));
+            controller.addError(Exception('Microphone capture failed.'));
           }
         },
       );
@@ -1190,12 +1326,21 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
       if (_prepareWorkerAfterRuntime) await _prepareWorker();
       debugPrint(
         '[VOICE-PERF] sherpa.worker.ready_ms=${perf.elapsedMilliseconds} '
-        'generation=${operation.generation}',
+        'generation=${operation.generation} '
+        '${_loadSummary(cold: cold)} mic_ms=$micMs',
       );
-    } catch (e) {
+      if (!_isCurrent(operation)) return;
+      // Only now is anybody listening. The microphone has been open since
+      // `mic.ready`: what was said while the recogniser loaded is in its
+      // queue, nothing is lost, but the caller must not say "listening"
+      // before this. The wait for a first word starts here too.
+      operation.recognizerReady = true;
+      onCaptureReady?.call();
+      _armIdleSilenceTimer(operation);
+    } catch (error) {
       debugPrint(
         '[VOICE-PERF] sherpa.listen.failed_ms=${perf.elapsedMilliseconds} '
-        'generation=${operation.generation} error=${e.runtimeType}',
+        'generation=${operation.generation} error=${error.runtimeType}',
       );
       if (_isCurrent(operation) && !controller.isClosed) {
         await _audioSub?.cancel();
@@ -1204,7 +1349,7 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
           await _runtime.stop();
         } catch (_) {}
         operation.started = false;
-        controller.addError(Exception('Could not start live STT: $e'));
+        controller.addError(Exception('Could not start live STT.'));
         await controller.close();
       }
     } finally {
@@ -1225,6 +1370,11 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
       _autoStop();
       return;
     }
+
+    // While the recogniser loads nobody reports a level, but the microphone
+    // is open and this audio is kept for it, here or in the worker's queue:
+    // the level already says it is heard.
+    if (!operation.recognizerReady) onLevel?.call(_pcm16Level(bytes));
 
     if (operation.queueAudioUntilWorkerCommand) {
       // El turno ya está acotado por [maxDuration] (60 s por defecto), así que
@@ -1249,6 +1399,7 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
     required bool speechDetected,
     required bool acousticSpeechEvidence,
     required List<String> segments,
+    double trigger = SherpaSpeechGate.minimumTrigger,
     DateTime? now,
   }) {
     final current = _isCurrent(operation);
@@ -1258,13 +1409,13 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
     }
 
     if (level > operation.peakLevel) operation.peakLevel = level;
-    final aboveDesktopThreshold =
-        speechDetected && level >= SherpaDesktopSpeechGate.levelThreshold;
-    if (acousticSpeechEvidence) {
+    final aboveTrigger = speechDetected && level >= trigger;
+    // The worker only transcribes segments that held speech, so text that
+    // gets here is speech too: the turn has been heard.
+    final accepted = _acceptedSegments(segments);
+    if (acousticSpeechEvidence || accepted.isNotEmpty) {
       operation.acousticSpeechEvidence = true;
     }
-
-    final accepted = _acceptedOperationSegments(operation, segments);
     if (accepted.isNotEmpty) {
       operation.committed.addAll(accepted);
       if (current && !_stopping) {
@@ -1284,10 +1435,14 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
       _cancelIdleSilenceTimer();
       _heardSpeech = true;
       _silenceSince = null;
-      if (aboveDesktopThreshold) {
+      if (aboveTrigger) {
         operation.latencyTurn?.observeSpeechAboveThreshold();
       }
-    } else if (!_continuous && _heardSpeech) {
+    } else if (!_continuous && (_heardSpeech || accepted.isNotEmpty)) {
+      if (!_heardSpeech) {
+        _cancelIdleSilenceTimer();
+        _heardSpeech = true;
+      }
       // Dictado continuo: las pausas NO cierran el turno (manda el usuario con
       // el botón parar, o el tope maxDuration). En modo voz sí auto-cerramos
       // por silencio para encadenar turnos rápido.
@@ -1320,23 +1475,6 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
       debugPrint('[stt-sherpa] filtered_noise_segments=$filtered');
     }
     return accepted;
-  }
-
-  List<String> _acceptedOperationSegments(
-    _SherpaListenOperation operation,
-    List<String> segments,
-  ) {
-    final accepted = _acceptedSegments(segments);
-    if (accepted.isEmpty || operation.acousticSpeechEvidence) return accepted;
-    // Métrica sin contenido: permite distinguir alucinación de Whisper y voz
-    // real sin persistir ni imprimir el transcript del usuario.
-    debugPrint(
-      '[stt-sherpa] filtered_low_energy_segments=${accepted.length} '
-      'peak_level=${operation.peakLevel.toStringAsFixed(3)} '
-      'threshold=${SherpaDesktopSpeechGate.levelThreshold.toStringAsFixed(3)} '
-      'gate=desktop_majority',
-    );
-    return const [];
   }
 
   void _autoStop({bool notifySpeechEnd = true}) {
@@ -1401,8 +1539,8 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
     _audioSub = null;
     try {
       await _runtime.stop();
-    } catch (e) {
-      debugPrint('[stt-sherpa] no se pudo detener el grabador: $e');
+    } catch (error) {
+      debugPrint('[stt-sherpa] recorder stop failed (${error.runtimeType})');
     }
     onLevel?.call(0);
     if (controller == null || controller.isClosed) {
@@ -1442,12 +1580,11 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
       }
       final worker = _worker;
       if (worker != null && operation != null) {
-        operation.committed.addAll(
-          _acceptedOperationSegments(
-            operation,
-            await worker.flush(generation: operation.generation),
-          ),
+        final flushed = _acceptedSegments(
+          await worker.flush(generation: operation.generation),
         );
+        if (flushed.isNotEmpty) operation.acousticSpeechEvidence = true;
+        operation.committed.addAll(flushed);
         final lateWorkerError = operation.workerError;
         if (lateWorkerError != null) {
           throw SherpaSttWorkerException(lateWorkerError);
@@ -1468,11 +1605,11 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
         SttResult(operation?.committed.join(' ').trim() ?? '', true),
       );
       await controller.close();
-    } catch (e) {
+    } catch (_) {
       operation?.pendingAudio.clear();
       operation?.pendingAudioBytes = 0;
       if (!controller.isClosed) {
-        controller.addError(Exception('Transcription failed: $e'));
+        controller.addError(Exception('Transcription failed.'));
         await controller.close();
       }
     }
@@ -1507,8 +1644,10 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
       }
       try {
         await _runtime.dispose();
-      } catch (e) {
-        debugPrint('[stt-sherpa] no se pudo liberar el grabador: $e');
+      } catch (error) {
+        debugPrint(
+          '[stt-sherpa] recorder dispose failed (${error.runtimeType})',
+        );
       }
       final workerUpdates = _workerUpdates;
       _workerUpdates = null;
@@ -1519,8 +1658,10 @@ class SherpaSttEngine implements SttEngine, CapturedWavSttEngine {
       if (worker != null) {
         try {
           await worker.dispose();
-        } catch (e) {
-          debugPrint('[stt-sherpa] no se pudo liberar el worker: $e');
+        } catch (error) {
+          debugPrint(
+            '[stt-sherpa] worker dispose failed (${error.runtimeType})',
+          );
         }
       }
     }();

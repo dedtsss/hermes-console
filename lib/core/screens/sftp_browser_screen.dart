@@ -13,9 +13,22 @@ import '../services/sftp_transfer_service.dart';
 import '../services/ssh_manager.dart';
 import '../screens/lock_screen.dart';
 import '../theme/app_theme.dart';
+import '../utils/ssh_error.dart';
 import '../widgets/hermes_app_bar.dart';
 import '../widgets/ssh_host_key_dialog.dart';
 import '../widgets/ssh_transfer_bar.dart';
+import '../widgets/console_loader.dart';
+import '../design/hermes_design.dart'
+    show
+        HermesChrome,
+        HermesAction,
+        HermesDialogAction,
+        HermesDialogActionStyle,
+        HermesMenuButton,
+        HermesFloatingSurface,
+        HermesStickyControls,
+        showHermesDialog;
+import '../feedback/feedback_policy.dart';
 
 class SftpBrowserScreen extends StatefulWidget {
   final SavedConnection connection;
@@ -90,7 +103,7 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = SshManager.describeError(e);
+          _error = localizedSshError(Strings.of(context), e);
           _loading = false;
         });
       }
@@ -124,7 +137,7 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
       setState(() {
         _error = Strings.of(
           context,
-        ).sftpListError(_path, SshManager.describeError(e));
+        ).sftpListError(_path, localizedSshError(Strings.of(context), e));
         _loading = false;
       });
     }
@@ -153,10 +166,8 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
     _list();
   }
 
-  void _snack(String m) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-    }
+  void _snack(String m, [FeedbackKind kind = FeedbackKind.error]) {
+    if (mounted) AppFeedback.notify(context, kind, m);
   }
 
   /// Descarga en segundo plano (sobrevive a salir de la pantalla/app). La hace
@@ -168,7 +179,10 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
       fileName: e.filename,
       totalBytes: e.attr.size ?? 0,
     );
-    _snack(Strings.of(context).sftpDownloading(e.filename));
+    _snack(
+      Strings.of(context).sftpDownloading(e.filename),
+      FeedbackKind.routine,
+    );
   }
 
   Future<void> _upload() async {
@@ -197,36 +211,31 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
     final s = Strings.of(context);
     final sftp = _sftp;
     if (sftp == null || _readOnly || e.attr.isDirectory) return;
-    final colors = Theme.of(context).hermes;
-    final ok = await showDialog<bool>(
+    final ok = await showHermesDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(Strings.of(context).sftpDeleteTitle),
-        content: Text(Strings.of(context).sftpDeleteBody(e.filename)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(Strings.of(context).commonCancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: colors.error),
-            child: Text(
-              Strings.of(context).commonDelete,
-              style: TextStyle(color: colors.onAccent),
-            ),
-          ),
-        ],
-      ),
+      title: Strings.of(context).sftpDeleteTitle,
+      message: Strings.of(context).sftpDeleteBody(e.filename),
+      actions: [
+        HermesDialogAction(
+          label: Strings.of(context).commonCancel,
+          value: false,
+          style: HermesDialogActionStyle.cancel,
+        ),
+        HermesDialogAction(
+          label: Strings.of(context).commonDelete,
+          value: true,
+          style: HermesDialogActionStyle.destructive,
+        ),
+      ],
     );
     if (ok != true) return;
     setState(() => _busy = true);
     try {
       await sftp.remove(_join(_path, e.filename));
-      _snack(s.sftpDeleted(e.filename));
+      _snack(s.sftpDeleted(e.filename), FeedbackKind.routine);
       await _list();
     } catch (err) {
-      _snack(s.sftpDeleteError(SshManager.describeError(err)));
+      _snack(s.sftpDeleteError(localizedSshError(s, err)));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -246,18 +255,16 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
       backgroundColor: colors.background,
       appBar: HermesAppBar(
         centerTitle: false,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(Strings.of(context).sftpTitle),
-            Text(
-              widget.connection.label,
-              style: TextStyle(fontSize: 10.5, color: colors.textSecondary),
-            ),
-          ],
-        ),
+        title: Text(Strings.of(context).sftpFilesTitle),
         actions: [
+          // Uploading starts from up here, not from a button over the list.
+          if (!_readOnly && _error == null)
+            IconButton(
+              key: const ValueKey('sftp-upload'),
+              tooltip: Strings.of(context).sftpUpload,
+              icon: const Icon(Icons.upload_file),
+              onPressed: _busy ? null : _upload,
+            ),
           IconButton(
             tooltip: Strings.of(context).commonReload,
             icon: const Icon(Icons.refresh),
@@ -265,29 +272,30 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
           ),
         ],
       ),
-      floatingActionButton: (_readOnly || _error != null)
-          ? null
-          : FloatingActionButton(
-              tooltip: Strings.of(context).sftpUpload,
-              onPressed: _busy ? null : _upload,
-              child: const Icon(Icons.upload_file),
-            ),
+      // The path floats in place and the files scroll under it and under the
+      // header. The column is laid out upwards so the list is painted first:
+      // the progress line and the transfer bar, when they show, stay on top
+      // of the rows that pass behind them.
       body: Column(
+        verticalDirection: VerticalDirection.up,
         children: [
-          _pathBar(colors),
-          if (_busy) const LinearProgressIndicator(minHeight: 2),
+          Expanded(
+            child: HermesStickyControls(
+              controls: _pathBar(colors),
+              child: _list_(colors),
+            ),
+          ),
           SshTransferBar(service: _transfers),
-          Expanded(child: _list_(colors)),
+          if (_busy) const LinearProgressIndicator(minHeight: 2),
         ],
       ),
     );
   }
 
   Widget _pathBar(HermesThemeColors colors) {
-    return Container(
-      width: double.infinity,
-      color: colors.surface,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    return HermesFloatingSurface(
+      key: const ValueKey('sftp-path'),
+      padding: const EdgeInsets.fromLTRB(4, 0, 16, 0),
       child: Row(
         children: [
           IconButton(
@@ -302,7 +310,7 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
               style: TextStyle(
                 fontSize: 12.5,
                 fontFamily: 'monospace',
-                color: colors.textSecondary,
+                color: HermesChrome.of(colors).mutedInk,
               ),
               overflow: TextOverflow.ellipsis,
             ),
@@ -319,7 +327,7 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
 
   Widget _list_(HermesThemeColors colors) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+      return const Center(child: ConsoleLoader.large());
     }
     if (_error != null) {
       return Center(
@@ -350,11 +358,13 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
       return Center(
         child: Text(
           Strings.of(context).sftpEmpty,
-          style: TextStyle(fontSize: 13, color: colors.textDisabled),
+          style: TextStyle(fontSize: 13, color: colors.textTertiary),
         ),
       );
     }
     return ListView.builder(
+      clipBehavior: hermesUnderHeader,
+      padding: const EdgeInsets.only(top: HermesStickyControls.extent),
       itemCount: _entries.length,
       itemBuilder: (_, i) {
         final e = _entries[i];
@@ -374,12 +384,12 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
               ? null
               : Text(
                   _fmtSize(e.attr.size),
-                  style: TextStyle(fontSize: 11.5, color: colors.textDisabled),
+                  style: TextStyle(fontSize: 11.5, color: colors.textTertiary),
                 ),
           onTap: isDir ? () => _enter(e) : null,
           trailing: isDir
               ? Icon(Icons.chevron_right, size: 18, color: colors.textDisabled)
-              : PopupMenuButton<String>(
+              : HermesMenuButton<String>(
                   icon: Icon(
                     Icons.more_vert,
                     size: 18,
@@ -389,15 +399,16 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                     if (v == 'download') _download(e);
                     if (v == 'delete') _delete(e);
                   },
-                  itemBuilder: (_) => [
-                    PopupMenuItem(
+                  actions: (context) => [
+                    HermesAction(
                       value: 'download',
-                      child: Text(Strings.of(context).commonDownload),
+                      label: Strings.of(context).commonDownload,
                     ),
                     if (!_readOnly)
-                      PopupMenuItem(
+                      HermesAction(
                         value: 'delete',
-                        child: Text(Strings.of(context).commonDelete),
+                        label: Strings.of(context).commonDelete,
+                        destructive: true,
                       ),
                   ],
                 ),

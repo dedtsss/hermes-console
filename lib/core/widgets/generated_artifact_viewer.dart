@@ -8,6 +8,7 @@ import '../theme/app_theme.dart';
 import '../utils/generated_artifact_detector.dart';
 import 'hermes_premium_ui.dart';
 import 'hermes_ui.dart';
+import '../feedback/feedback_policy.dart';
 
 const int generatedArtifactPreviewCharacterLimit = 120000;
 
@@ -359,13 +360,15 @@ class _GeneratedArtifactViewerState extends State<GeneratedArtifactViewer> {
         padding: const EdgeInsets.all(14),
         child: Semantics(
           label: strings.generatedArtifactSourceSemantics(record.title),
-          child: SelectableText(
-            visibleContent,
-            style: TextStyle(
-              color: colors.textPrimary,
-              fontFamily: 'monospace',
-              fontSize: compact ? 11.5 : 12.5,
-              height: 1.5,
+          child: SelectionArea(
+            child: Text(
+              visibleContent,
+              style: TextStyle(
+                color: colors.textPrimary,
+                fontFamily: 'monospace',
+                fontSize: compact ? 11.5 : 12.5,
+                height: 1.5,
+              ),
             ),
           ),
         ),
@@ -391,7 +394,9 @@ class _GeneratedArtifactViewerState extends State<GeneratedArtifactViewer> {
       switch (action) {
         case _ArtifactExportAction.copy:
           await widget.exporter.copyText(version.content);
-          if (mounted) _message(strings.generatedArtifactCopied);
+          if (mounted) {
+            _message(strings.generatedArtifactCopied, FeedbackKind.routine);
+          }
           break;
         case _ArtifactExportAction.share:
           await widget.exporter.shareText(
@@ -406,7 +411,10 @@ class _GeneratedArtifactViewerState extends State<GeneratedArtifactViewer> {
             content: version.content,
           );
           if (mounted && result == ArtifactSaveResult.saved) {
-            _message(strings.generatedArtifactSaved(fileName));
+            _message(
+              strings.generatedArtifactSaved(fileName),
+              FeedbackKind.critical,
+            );
           }
           break;
       }
@@ -425,10 +433,8 @@ class _GeneratedArtifactViewerState extends State<GeneratedArtifactViewer> {
     }
   }
 
-  void _message(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+  void _message(String message, [FeedbackKind kind = FeedbackKind.error]) {
+    AppFeedback.notify(context, kind, message);
   }
 }
 

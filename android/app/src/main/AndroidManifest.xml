@@ -1,18 +1,24 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Bloqueo local opcional (local_auth): pide la verificación al sistema,
          nunca accede a datos biométricos. Justificación: docs/SECURITY_POLICY.md -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
-    <!-- Permisos EXCLUSIVOS de la instancia local en Termux (RUN_COMMAND para
-         lanzar el agente; REQUEST_IGNORE_BATTERY_OPTIMIZATIONS para que Doze no
-         lo mate) viven en src/full/AndroidManifest.xml: así el flavor `play`
-         (Google Play, solo-remoto) NO los declara. Ver docs/PLAY_PERMISSIONS.md. -->
     <!-- Dictado y conversación iniciados por el usuario. La conversación puede
          usar el FGS Flutter compartido con microphone tras una elección separada.
          Ningún audio arranca desde boot ni desde un receiver; una conversación
          nunca se restaura tras process death. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- GPT-Live (opt-in voice over WebRTC): flutter_webrtc routes call audio
+         through the system audio mode and probes network changes while a
+         live session runs. Both are normal permissions without a dialog. The
+         app itself asks for no Bluetooth permission; the audio-routing library
+         under flutter_webrtc adds BLUETOOTH limited to Android 11 and older
+         (maxSdkVersion 30), see the uses-feature below and
+         docs/PLAY_PERMISSIONS.md. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <!-- Cámara: solo se abre por acción del usuario para escanear un QR de
          emparejado o capturar una foto adjunta al chat. Nunca captura en
          background. Justificación: docs/SECURITY_POLICY.md -->
@@ -24,10 +30,18 @@
         android:required="false" />
     <uses-feature android:name="android.hardware.microphone"
         android:required="false" />
+    <!-- The BLUETOOTH permission that the call-audio library adds would make
+         the Bluetooth radio a hard requirement on Google Play. Headset routing
+         is optional, so no device is filtered out for lacking it. -->
+    <uses-feature android:name="android.hardware.bluetooth"
+        android:required="false" />
     <!-- Notificaciones locales (Android 13+). Sin FCM/push: cubren respuestas,
          aprobaciones, ejecuciones y transiciones Cron/Kanban descubiertas por
          la escucha opt-in, además de los controles de Voz/Read Aloud. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16 Live Updates: a room/Bot at work may be promoted to the
+         status-bar chip and lock screen (ProgressStyle, spec 070). -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- dataSync mantiene SSH/SFTP y el fallback de escucha en API <=34.
          remoteMessaging mantiene la escucha persistente en API >=35. -->
@@ -60,6 +74,7 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         tools:node="remove" />
     <application
+        android:name=".HermesApplication"
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -95,6 +110,11 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="hermes" android:host="pair"/>
+                <!-- Catálogo: hermes://plugin/install?catalog=NAME y
+                     hermes://skill/install?identifier=ID abren una
+                     confirmación; nunca instalan solos. -->
+                <data android:scheme="hermes" android:host="plugin"/>
+                <data android:scheme="hermes" android:host="skill"/>
             </intent-filter>
             <!-- Share Sheet Android: el contenido se abre como borrador para
                  revisarlo antes de enviarlo. Los content:// se copian al caché
@@ -115,6 +135,15 @@
                 <data android:mimeType="image/*"/>
             </intent-filter>
         </activity>
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.generated_file_provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/generated_media_paths" />
+        </provider>
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
@@ -174,9 +203,20 @@
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"
             android:exported="false" />
+        <!-- Approve / Deny / Stop / Reply from rich notifications and Bot Mode
+             widgets. Not exported: only our own PendingIntents reach it. It
+             stores the tap and wakes Flutter, which performs the server call. -->
+        <receiver
+            android:name=".HermesNotificationActionReceiver"
+            android:exported="false" />
+        <!-- Launcher widgets. The three receivers shipped since 1.2.13 keep
+             their names, so a widget already placed on a home screen becomes
+             the new one in place: Panel is Ahora, Compacto and Controles are
+             Chat rápido (the wide one is hidden from the picker, which offers
+             Chat rápido once). -->
         <receiver
             android:name=".NewSessionWidgetProvider"
-            android:label="@string/hermes_widget_dashboard_name"
+            android:label="@string/lw_ahora_name"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -187,7 +227,7 @@
         </receiver>
         <receiver
             android:name=".HermesCompactWidgetProvider"
-            android:label="@string/hermes_widget_compact_name"
+            android:label="@string/lw_quick_name"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -198,7 +238,7 @@
         </receiver>
         <receiver
             android:name=".HermesControlWidgetProvider"
-            android:label="@string/hermes_widget_control_name"
+            android:label="@string/lw_quick_wide_name"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -206,6 +246,63 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/hermes_widget_control_info" />
+        </receiver>
+        <receiver
+            android:name=".HermesCronWidgetProvider"
+            android:label="@string/lw_cron_name"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/hermes_widget_cron_info" />
+        </receiver>
+        <!-- Bots and Salas read the snapshot the background listener
+             publishes (it redraws these two receivers itself). -->
+        <receiver
+            android:name=".HermesBotsWidgetProvider"
+            android:label="@string/lw_bots_name"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/hermes_widget_bots_info" />
+        </receiver>
+        <receiver
+            android:name=".HermesRoomWidgetProvider"
+            android:label="@string/lw_rooms_name"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/hermes_widget_rooms_info" />
+        </receiver>
+        <receiver
+            android:name=".HermesTasksWidgetProvider"
+            android:label="@string/lw_tasks_name"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/hermes_widget_tasks_info" />
+        </receiver>
+        <receiver
+            android:name=".HermesChatsWidgetProvider"
+            android:label="@string/lw_chats_name"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/hermes_widget_chats_info" />
         </receiver>
     </application>
     <queries>
@@ -231,7 +328,5 @@
         <intent>
             <data android:scheme="http" />
         </intent>
-        <!-- Las queries de Termux/F-Droid/market (exclusivas de la instancia
-             local) viven en src/full/AndroidManifest.xml → ausentes en `play`. -->
     </queries>
 </manifest>

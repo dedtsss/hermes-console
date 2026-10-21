@@ -1,6 +1,6 @@
-// Diagnóstico de conexión por instancia: pruebas reales contra el Gateway
-// (8642) y el Dashboard/Admin (9119), clasificación de errores con causa
-// concreta y construcción de la CapabilityMatrix.
+// Diagnóstico de conexión por instancia: pruebas reales contra el
+// Dashboard/Admin (9119), clasificación de errores con causa concreta y
+// construcción de la CapabilityMatrix.
 //
 // Contratos verificados contra hermes-agent 0.16.0 — ver docs/API_AUDIT.md.
 // Regla: nada de endpoints inventados; lo no comprobable queda `unknown`.
@@ -8,8 +8,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'origin_bound_http_client.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../utils/transport_privacy.dart';
@@ -101,13 +101,34 @@ class ProbeResult {
   final int? latencyMs;
   final String detail;
 
+  /// The server may simply not offer this through this surface (plugins on
+  /// the Gateway: Hermes serves them from the Dashboard).
+  final bool optional;
+
   const ProbeResult({
     required this.name,
     required this.status,
     this.httpCode,
     this.latencyMs,
     this.detail = '',
+    this.optional = false,
   });
+
+  /// An optional capability this surface does not offer: it says what the
+  /// server can do, never that the connection needs attention.
+  bool get absentOptional =>
+      optional &&
+      (status == ProbeStatus.notFound ||
+          status == ProbeStatus.methodNotAllowed);
+
+  ProbeResult asOptional() => ProbeResult(
+    name: name,
+    status: status,
+    httpCode: httpCode,
+    latencyMs: latencyMs,
+    detail: detail,
+    optional: true,
+  );
 
   String localizedName(Strings s) => switch (name) {
     'health' || 'status' => s.ieProbeOnline,
@@ -134,109 +155,19 @@ class ProbeResult {
   };
 }
 
-/// Payload parseado de GET /v1/capabilities (contrato hermes-agent:
-/// gateway/platforms/api_server.py — object hermes.api_server.capabilities).
-class ServerCapabilities {
-  final String? platform;
-  final String? model;
-  final Map<String, dynamic> features;
-  final Map<String, dynamic> endpoints;
-
-  const ServerCapabilities({
-    this.platform,
-    this.model,
-    this.features = const {},
-    this.endpoints = const {},
-  });
-
-  static ServerCapabilities? tryParse(String body) {
-    try {
-      final json = jsonDecode(body) as Map<String, dynamic>;
-      if (json['object'] != 'hermes.api_server.capabilities') {
-        return null;
-      }
-      return ServerCapabilities(
-        platform: json['platform'] as String?,
-        model: json['model'] as String?,
-        features: (json['features'] as Map?)?.cast<String, dynamic>() ?? {},
-        endpoints: (json['endpoints'] as Map?)?.cast<String, dynamic>() ?? {},
-      );
-    } catch (_) {
-      debugPrint('[diagnostics] respuesta de capacidades inválida');
-      return null;
-    }
-  }
-
-  bool? feature(String key) {
-    final v = features[key];
-    return v is bool ? v : null;
-  }
-
-  bool hasEndpoint(String key) => endpoints.containsKey(key);
-
-  /// Returns a server-declared read endpoint only when it remains on [base].
-  /// Invalid or mutating metadata is ignored rather than probed speculatively.
-  Uri? safeGetEndpoint(String key, Uri base) {
-    final value = endpoints[key];
-    if (value is! Map || value['method'] != 'GET' || value['path'] is! String) {
-      return null;
-    }
-    final candidate = Uri.tryParse(value['path'] as String);
-    if (candidate == null ||
-        candidate.hasScheme ||
-        candidate.hasAuthority ||
-        !candidate.path.startsWith('/') ||
-        candidate.hasFragment ||
-        candidate.hasQuery ||
-        candidate.pathSegments.lastOrNull != key) {
-      return null;
-    }
-    final resolved = base.resolveUri(candidate);
-    if (resolved.scheme != base.scheme ||
-        resolved.host != base.host ||
-        resolved.port != base.port) {
-      return null;
-    }
-    return resolved;
-  }
-
-  /// Resumen legible para el diagnóstico (sin volcar el JSON entero).
-  String get summary {
-    final on = features.entries
-        .where((e) => e.value == true)
-        .map((e) => e.key)
-        .toList();
-    final off = features.entries
-        .where((e) => e.value == false)
-        .map((e) => e.key)
-        .toList();
-    return [
-      if (platform != null) 'platform: $platform',
-      if (model != null) 'model: $model',
-      'endpoints: ${endpoints.length}',
-      if (on.isNotEmpty) 'on: ${on.join(', ')}',
-      if (off.isNotEmpty) 'off: ${off.join(', ')}',
-    ].join('\n');
-  }
-}
-
 /// Informe completo de un diagnóstico.
 class DiagnosticsReport {
   final List<ProbeResult> gateway;
   final List<ProbeResult> dashboard;
-  final List<ProbeResult> bridge;
   final CapabilityMatrix matrix;
   final List<String> suggestions;
-  final ServerCapabilities? serverCapabilities;
   final DateTime ranAt;
 
   const DiagnosticsReport({
     required this.gateway,
     required this.dashboard,
-    this.bridge = const [],
     required this.matrix,
     required this.suggestions,
-    this.serverCapabilities,
     required this.ranAt,
   });
 
@@ -262,20 +193,6 @@ class DiagnosticsReport {
         '${r.localizedDetail(s).isNotEmpty ? ' — ${r.localizedDetail(s)}' : ''}',
       );
     }
-    b.writeln('\n[bridge]');
-    for (final r in bridge) {
-      b.writeln(
-        '  ${r.localizedName(s)}: ${r.status.localizedLabel(s)}'
-        '${r.httpCode != null ? ' (HTTP ${r.httpCode})' : ''}'
-        '${r.latencyMs != null ? ' ${r.latencyMs}ms' : ''}'
-        '${r.localizedDetail(s).isNotEmpty ? ' — ${r.localizedDetail(s)}' : ''}',
-      );
-    }
-    final caps = serverCapabilities;
-    if (caps != null) {
-      b.writeln('\n[/v1/capabilities]');
-      b.writeln(caps.summary);
-    }
     if (suggestions.isNotEmpty) {
       b.writeln('\n[${s.diagCopySuggestions}]');
       for (final s in suggestions) {
@@ -286,12 +203,19 @@ class DiagnosticsReport {
   }
 }
 
+/// The two surfaces a full check visits, in order.
+enum DiagnosticsStage { gateway, dashboard }
+
+/// Called as each surface's probes finish, with exactly what they found.
+typedef DiagnosticsStageCallback =
+    void Function(DiagnosticsStage stage, List<ProbeResult> results);
+
 class ConnectionDiagnostics {
   final http.Client _http;
   static const _kTimeout = Duration(seconds: 8);
 
   ConnectionDiagnostics({http.Client? httpClient})
-    : _http = httpClient ?? http.Client();
+    : _http = OriginBoundHttpClient(httpClient);
 
   void close() => _http.close();
 
@@ -375,104 +299,6 @@ class ConnectionDiagnostics {
     }
   }
 
-  // ── Gateway (8642) ────────────────────────────────────────────────────
-
-  Future<(List<ProbeResult>, String?, ServerCapabilities?)> probeGateway(
-    SavedConnection conn,
-  ) async {
-    final base = TransportPrivacy.requireAllowed(conn.gatewayUrl);
-    final auth = {'Authorization': 'Bearer ${conn.apiKey}'};
-    final results = <ProbeResult>[];
-    String? version;
-    ServerCapabilities? serverCaps;
-
-    // 1. /health — público; da online + versión + latencia.
-    final health = await _probe('health', 'GET', Uri.parse('$base/health'));
-    if (health.isOnline && health.status == ProbeStatus.ok) {
-      try {
-        final res = await _http
-            .get(Uri.parse('$base/health'))
-            .timeout(_kTimeout);
-        final data = jsonDecode(res.body) as Map<String, dynamic>;
-        version = data['version'] as String?;
-      } catch (e) {
-        debugPrint(
-          '[diagnostics] excepción silenciada (se ignora sin más): $e',
-        );
-      }
-    }
-    results.add(health);
-    if (!health.isOnline) return (results, version, serverCaps);
-
-    // 2. /api/sessions con Bearer — valida auth + lectura de sesiones.
-    results.add(
-      await _probe(
-        'sessions',
-        'GET',
-        Uri.parse('$base/api/sessions'),
-        headers: conn.apiKey.isEmpty ? null : auth,
-      ),
-    );
-
-    // 3. /v1/models — lectura de modelos del Gateway.
-    results.add(
-      await _probe(
-        'models',
-        'GET',
-        Uri.parse('$base/v1/models'),
-        headers: auth,
-      ),
-    );
-
-    // 4. /v1/capabilities — fuente principal de la matriz cuando responde.
-    //    Contrato: object hermes.api_server.capabilities con features{} y
-    //    endpoints{} (api_server.py del upstream).
-    final capsUri = Uri.parse('$base/v1/capabilities');
-    final capsProbe = await _probe(
-      'capabilities',
-      'GET',
-      capsUri,
-      headers: auth,
-      inspectResponse: (res) {
-        if (res.statusCode == 200) {
-          serverCaps = ServerCapabilities.tryParse(res.body);
-        }
-      },
-    );
-    results.add(capsProbe);
-
-    // 5. /v1/skills y /v1/toolsets — lectura via Gateway.
-    results.add(
-      await _probe(
-        'skills (gateway)',
-        'GET',
-        Uri.parse('$base/v1/skills'),
-        headers: auth,
-      ),
-    );
-    results.add(
-      await _probe(
-        'toolsets',
-        'GET',
-        Uri.parse('$base/v1/toolsets'),
-        headers: auth,
-      ),
-    );
-
-    // 5b. Skills toggle is never probed: authenticated capabilities is
-    // authoritative and diagnostics must not issue mutating requests. Plugins
-    // may be verified with GET, honoring valid same-origin endpoint metadata.
-    final baseUri = Uri.parse(base);
-    final pluginsUri = serverCaps?.hasEndpoint('plugins') ?? false
-        ? serverCaps!.safeGetEndpoint('plugins', baseUri)
-        : baseUri.resolve('/v1/plugins');
-    if (pluginsUri != null) {
-      results.add(await _probe('plugins', 'GET', pluginsUri, headers: auth));
-    }
-
-    return (results, version, serverCaps);
-  }
-
   // ── Dashboard/Admin (9119) ────────────────────────────────────────────
 
   Future<List<ProbeResult>> probeDashboard(
@@ -482,10 +308,40 @@ class ConnectionDiagnostics {
     final base = TransportPrivacy.requireAllowed(conn.effectiveDashboardUrl);
     final results = <ProbeResult>[];
 
-    // 1. /api/status — público; online + estado del gateway según el server.
-    final status = await _probe('status', 'GET', Uri.parse('$base/api/status'));
+    // 1. Vida y versión como Desktop (electron/remote-liveness.ts:116-127):
+    //    el endpoint de salud y, si falta (404), el de estado.
+    String? version;
+    Future<ProbeResult> life(String path) => _probe(
+      'status',
+      'GET',
+      Uri.parse('$base$path'),
+      inspectResponse: (res) {
+        if (res.statusCode != 200) return;
+        try {
+          final v = (jsonDecode(res.body) as Map)['version'];
+          if (v is String && v.isNotEmpty) version = v;
+        } catch (_) {
+          // A body without a version leaves it unread.
+        }
+      },
+    );
+    var status = await life('/api/health');
+    if (!status.isOnline) {
+      results.add(status);
+      return results;
+    }
+    // The status endpoint only stands in when the health one is missing
+    // (404), as in backend-health.ts:182-185; any other answer is the answer.
+    if (status.status == ProbeStatus.notFound) {
+      status = await life('/api/status');
+    }
     results.add(status);
     if (!status.isOnline) return results;
+    if (version != null) {
+      results.add(
+        ProbeResult(name: 'version', status: ProbeStatus.ok, detail: version!),
+      );
+    }
 
     // 2. Resolver auth. Con Basic Auth, _authHeaders() hace login por formulario
     //    y devuelve una COOKIE de sesión (no un X-Hermes-Session-Token). Antes
@@ -525,7 +381,9 @@ class ConnectionDiagnostics {
 
     // 3. Endpoints de lectura confirmados en la auditoría.
     for (final (name, path) in const [
+      ('sessions', '/api/sessions?limit=1'),
       ('skills', '/api/skills'),
+      ('toolsets', '/api/tools/toolsets'),
       ('cron', '/api/cron/jobs'),
       ('memory', '/api/memory'),
       ('models/providers', '/api/model/options'),
@@ -546,78 +404,29 @@ class ConnectionDiagnostics {
     Strings s,
     SavedConnection conn,
     DashboardSecrets secrets, {
-    String? bridgeUrl,
-    String? bridgeToken,
+    DiagnosticsStageCallback? onStage,
   }) async {
-    final (gw, version, serverCaps) = await probeGateway(conn);
+    // Desktop talks to one origin, the Dashboard: no Gateway request here.
+    const gw = <ProbeResult>[];
     final dash = await probeDashboard(conn, secrets);
-    final bridge = await probeBridge(
-      conn,
-      bridgeUrl: bridgeUrl,
-      bridgeToken: bridgeToken,
-    );
-    final matrix = buildMatrix(gw, dash, version, serverCaps: serverCaps);
+    onStage?.call(DiagnosticsStage.dashboard, dash);
+    final version = dash.where((r) => r.name == 'version').firstOrNull?.detail;
     return DiagnosticsReport(
       gateway: gw,
       dashboard: dash,
-      bridge: bridge,
-      matrix: matrix,
+      matrix: buildMatrix(gw, dash, version),
       suggestions: buildSuggestions(s, conn, gw, dash),
-      serverCapabilities: serverCaps,
       ranAt: DateTime.now(),
     );
   }
 
-  // ── Mobile Bridge (9131) ──────────────────────────────────────────────
-
-  /// Sondea el Mobile Bridge derivado del host (:9131) sin mutar su estado.
-  /// /bridge/health es público; si ya existe un token del Bridge, comprueba
-  /// directamente sus capacidades. El aprovisionamiento pertenece al flujo de
-  /// edición, no al diagnóstico.
-  Future<List<ProbeResult>> probeBridge(
-    SavedConnection conn, {
-    String? bridgeUrl,
-    String? bridgeToken,
-  }) async {
-    final configuredUrl = bridgeUrl?.trim() ?? '';
-    final base = TransportPrivacy.requireAllowed(
-      configuredUrl.isEmpty ? conn.derivedBridgeUrl : configuredUrl,
-    );
-    final results = <ProbeResult>[];
-
-    final health = await _probe(
-      'health',
-      'GET',
-      Uri.parse('$base/bridge/health'),
-    );
-    results.add(health);
-    // Sin un 200 en /bridge/health el bridge no está ahí (puerto cerrado u
-    // otro servicio): no tiene sentido comprobar sus capacidades.
-    if (health.status != ProbeStatus.ok) return results;
-
-    final storedToken = bridgeToken?.trim() ?? '';
-    if (storedToken.isNotEmpty) {
-      results.add(
-        await _probe(
-          'auth',
-          'GET',
-          Uri.parse('$base/bridge/capabilities'),
-          headers: {'Authorization': 'Bearer $storedToken'},
-        ),
-      );
-    }
-    return results;
-  }
-
-  /// Deriva la matriz desde los resultados. /v1/capabilities tiene prioridad
-  /// cuando responde (lo declara el servidor); el resto se infiere con
-  /// probes y lo no comprobable queda unknown.
+  /// Deriva la matriz desde los resultados: se infiere con probes del
+  /// Dashboard y lo no comprobable queda unknown.
   CapabilityMatrix buildMatrix(
     List<ProbeResult> gw,
     List<ProbeResult> dash,
-    String? version, {
-    ServerCapabilities? serverCaps,
-  }) {
+    String? version,
+  ) {
     ProbeResult? find(List<ProbeResult> list, String name) {
       for (final r in list) {
         if (r.name == name) return r;
@@ -637,6 +446,7 @@ class ConnectionDiagnostics {
 
     final health = find(gw, 'health');
     final gwSessions = find(gw, 'sessions');
+    final dashSessions = find(dash, 'sessions');
     final dashStatus = find(dash, 'status');
     final dashAuth = find(dash, 'auth');
 
@@ -656,114 +466,46 @@ class ConnectionDiagnostics {
 
     // Compatibilidad 0.16.x: sesiones, cron y modelos conservan la inferencia
     // histórica. Versiones nuevas declaran skills/plugins en capabilities.
-    final sessionsRead = fromProbe(gwSessions);
+    final sessionsRead = fromProbe(dashSessions);
     final cronRead = fromProbe(find(dash, 'cron'));
     final modelsReadDash = fromProbe(find(dash, 'models/providers'));
 
-    // Valores declarados por /v1/capabilities (prioridad sobre probes).
-    final serverSourced = <String>[];
-    CapState srv(String matrixField, CapState probed, bool? declared) {
-      if (declared == null) return probed;
-      serverSourced.add(matrixField);
-      return declared ? CapState.yes : CapState.no;
-    }
-
-    CapState srvEndpoint(String matrixField, CapState probed, String? key) {
-      if (serverCaps == null || key == null) return probed;
-      serverSourced.add(matrixField);
-      return serverCaps.hasEndpoint(key) ? CapState.yes : CapState.no;
-    }
-
     return CapabilityMatrix(
       gatewayOnline: gatewayOnline,
+      // Desktop's liveness (remote-liveness.ts:116-127): alive only when the
+      // probe answered OK.
       dashboardOnline: dashStatus == null
           ? CapState.unknown
-          : (dashStatus.isOnline ? CapState.yes : CapState.no),
+          : (dashStatus.status == ProbeStatus.ok ? CapState.yes : CapState.no),
       gatewayAuthValid: gatewayAuthValid,
       dashboardAuthValid: dashboardAuthValid,
-      chatSupported: srv(
-        'chatSupported',
-        CapState.unknown,
-        serverCaps?.feature('chat_completions'),
-      ),
-      sessionsRead: srvEndpoint(
-        'sessionsRead',
-        sessionsRead,
-        serverCaps == null ? null : 'sessions',
-      ),
-      sessionsWrite: srvEndpoint(
-        'sessionsWrite',
-        sessionsRead,
-        serverCaps == null ? null : 'session_create',
-      ),
-      sessionsDelete: srvEndpoint(
-        'sessionsDelete',
-        sessionsRead,
-        serverCaps == null ? null : 'session_delete',
-      ),
-      // Sin declaración del servidor, el streaming real solo se confirma con
-      // el primer chat SSE exitoso (ChatScreen lo marca).
-      streamingSupported: srv(
-        'streamingSupported',
-        CapState.unknown,
-        serverCaps?.feature('chat_completions_streaming'),
-      ),
-      turnIdempotency: srv(
-        'turnIdempotency',
-        CapState.unknown,
-        serverCaps?.feature('turn_idempotency_v1'),
-      ),
-      kanbanTrackedCreate: srv(
-        'kanbanTrackedCreate',
-        CapState.unknown,
-        serverCaps?.feature('kanban_tracked_create'),
-      ),
-      skillsRead: srv(
-        'skillsRead',
-        _firstYes([
-          fromProbe(find(dash, 'skills')),
-          fromProbe(find(gw, 'skills (gateway)')),
-        ]),
-        serverCaps?.feature('skills_api'),
-      ),
-      skillsToggle: srv(
-        'skillsToggle',
-        CapState.unknown,
-        serverCaps?.feature('skills_toggle'),
-      ),
-      // Installation is a separate Mobile Bridge capability. The Gateway
-      // skills_toggle declaration says nothing about install support.
+      chatSupported: CapState.unknown,
+      sessionsRead: sessionsRead,
+      sessionsWrite: sessionsRead,
+      sessionsDelete: sessionsRead,
+      // El streaming real solo se confirma con el primer chat exitoso.
+      streamingSupported: CapState.unknown,
+      turnIdempotency: CapState.unknown,
+      kanbanTrackedCreate: CapState.unknown,
+      skillsRead: _firstYes([
+        fromProbe(find(dash, 'skills')),
+        fromProbe(find(gw, 'skills (gateway)')),
+      ]),
+      skillsToggle: CapState.unknown,
+      // No probe here proves install support.
       skillsInstall: CapState.unknown,
-      toolsetsRead: srvEndpoint(
-        'toolsetsRead',
-        fromProbe(find(gw, 'toolsets')),
-        serverCaps == null ? null : 'toolsets',
-      ),
+      toolsetsRead: fromProbe(find(dash, 'toolsets')),
       cronRead: cronRead,
       cronWrite: cronRead,
       memoryRead: fromProbe(find(dash, 'memory')),
-      memoryWrite: srv(
-        'memoryWrite',
-        CapState.no,
-        serverCaps?.feature('memory_write_api'),
-      ),
+      memoryWrite: CapState.no,
       modelsRead: _firstYes([modelsReadDash, fromProbe(find(gw, 'models'))]),
       modelsWrite: modelsReadDash,
       configRead: fromProbe(find(dash, 'config')),
-      configWrite: srv(
-        'configWrite',
-        CapState.no,
-        serverCaps?.feature('admin_config_rw'),
-      ),
+      configWrite: CapState.no,
       logsRead: fromProbe(find(dash, 'logs')),
-      pluginsSupported: srv(
-        'pluginsSupported',
-        fromProbe(find(gw, 'plugins')),
-        serverCaps?.feature('plugins_api'),
-      ),
+      pluginsSupported: fromProbe(find(gw, 'plugins')),
       gatewayVersion: version,
-      serverModel: serverCaps?.model,
-      serverSourced: serverSourced,
       checkedAtMs: DateTime.now().millisecondsSinceEpoch,
     );
   }
@@ -782,38 +524,11 @@ class ConnectionDiagnostics {
     List<ProbeResult> dash,
   ) {
     final out = <String>[];
-    final health = gw.isNotEmpty ? gw.first : null;
     final dashStatus = dash.isNotEmpty ? dash.first : null;
 
-    switch (health?.status) {
-      case ProbeStatus.refused:
-        out.add(s.diagGwRefused);
-      case ProbeStatus.timeout:
-        out.add(s.diagGwTimeout);
-      case ProbeStatus.dnsError:
-        out.add(s.diagGwDns);
-      case ProbeStatus.tlsError:
-        out.add(s.diagGwTls);
-      default:
-        break;
-    }
-
-    final gwCaps = gw.where((r) => r.name == 'capabilities').firstOrNull;
-    if (gwCaps?.status == ProbeStatus.authInvalid) {
-      out.add(s.diagCapsAuthInvalid);
-    } else if (gwCaps?.status == ProbeStatus.notFound) {
-      out.add(s.diagCapsNotFound);
-    }
-
-    final gwAuth = gw.where((r) => r.name == 'sessions').firstOrNull;
-    if (gwAuth?.status == ProbeStatus.authInvalid) {
-      out.add(conn.apiKey.isEmpty ? s.diagTokenMissing : s.diagTokenInvalid);
-    }
-
-    final gwOk = health?.status == ProbeStatus.ok;
     switch (dashStatus?.status) {
       case ProbeStatus.refused || ProbeStatus.timeout:
-        out.add(gwOk ? s.diagDashDownGwOk : s.diagDashDownBoth);
+        out.add(s.diagDashDownBoth);
       case ProbeStatus.notFound:
         out.add(s.diagDashNotFound);
       default:
@@ -827,7 +542,7 @@ class ConnectionDiagnostics {
       out.add(s.diagDashAuthInvalid);
     }
 
-    if (gwOk && (dashStatus?.status == ProbeStatus.ok)) {
+    if (dashStatus?.status == ProbeStatus.ok) {
       final any404 = dash.any((r) => r.status == ProbeStatus.notFound);
       if (any404) {
         out.add(s.diagSome404);

@@ -14,6 +14,9 @@ import 'package:hermes_android/core/services/profile_pet_service.dart';
 import 'package:hermes_android/core/services/profile_pet_visual_adapter.dart';
 import 'package:hermes_android/core/services/tui_gateway_client.dart';
 import 'package:hermes_android/core/widgets/hermes_bot_face.dart';
+import 'package:hermes_android/l10n/app_localizations.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:image_picker/image_picker.dart';
 
 const _imageDataUri =
@@ -82,6 +85,30 @@ class _FakeCreationGateway implements HermesDesktopBotCreationGateway {
     required String profile,
     required List<String> disabledSkills,
   }) async {}
+}
+
+/// A Gateway that predates `profiles.create`.
+class _LegacyCreationGateway extends _FakeCreationGateway {
+  _LegacyCreationGateway({required super.log});
+
+  @override
+  Future<void> createProfileNative({
+    required String name,
+    String? cloneFrom,
+    String description = '',
+    String soul = '',
+    String model = '',
+    String provider = '',
+    bool noSkills = false,
+    bool shareAuth = true,
+  }) async {
+    log.add('create-native-missing');
+    throw const TuiGatewayRpcError(
+      'profiles.create',
+      'Method not found',
+      code: -32601,
+    );
+  }
 }
 
 class _FakeAssetsGateway implements HermesDesktopProfileAssetsGateway {
@@ -268,6 +295,7 @@ Future<void> _pumpCreate(
   required _FakePetGateway pets,
   required _FakePetVisualMaterializer materializer,
   BotCreateImagePicker? imagePicker,
+  DashboardClient? dashboard,
   Size size = const Size(1000, 2600),
   double textScale = 1,
   double keyboardInset = 0,
@@ -283,6 +311,8 @@ Future<void> _pumpCreate(
   await tester.pumpWidget(
     MaterialApp(
       locale: const Locale('es'),
+      localizationsDelegates: Strings.localizationsDelegates,
+      supportedLocales: Strings.supportedLocales,
       home: Scaffold(
         body: Builder(
           builder: (context) => TextButton(
@@ -300,6 +330,7 @@ Future<void> _pumpCreate(
                   imagePicker: imagePicker,
                   imageNormalizer: (_) async =>
                       AgentProfileAvatar.fromDataUri(_imageDataUri),
+                  dashboardForTesting: dashboard,
                 ),
               ),
             ),
@@ -340,7 +371,50 @@ Future<void> _enterName(WidgetTester tester, String name) async {
   await tester.pump();
 }
 
+class _RecordingGenerationGateway extends _FakeCreationGateway {
+  _RecordingGenerationGateway({required super.log});
+  final generationCalls = <String>[];
+
+  Future<bool> canGenerateBotAvatar() async {
+    generationCalls.add('image.generate:probe');
+    return true;
+  }
+
+  Future<AgentProfileAvatar> generateBotAvatar(String prompt) async {
+    generationCalls.add('image.generate');
+    return AgentProfileAvatar.fromDataUri(_imageDataUri);
+  }
+}
+
 void main() {
+  testWidgets('creating a bot never probes or offers AI avatars', (
+    tester,
+  ) async {
+    final log = <String>[];
+    final generation = _RecordingGenerationGateway(log: log);
+    await _pumpCreate(
+      tester,
+      creation: generation,
+      assets: _FakeAssetsGateway(log: log),
+      pets: _FakePetGateway(log: log),
+      materializer: _FakePetVisualMaterializer(log: log),
+      imagePicker: () async => null,
+    );
+    expect(generation.generationCalls, isEmpty);
+    await _tapVisible(tester, const ValueKey('bot-create-identity-row'));
+    await _tapVisible(tester, const ValueKey('bot-create-mode-image'));
+    await _pumpUi(tester);
+    expect(generation.generationCalls, isEmpty);
+    final strings = Strings.of(tester.element(find.byType(BotCreateScreen)));
+    expect(find.text(strings.botGenerateAvatar), findsNothing);
+    await _tapVisible(tester, const ValueKey('bot-create-pick-image'));
+    await _tapVisible(tester, const ValueKey('bot-create-mode-face'));
+    await _tapVisible(tester, const ValueKey('bot-create-mode-image'));
+    await _pumpUi(tester);
+    expect(generation.generationCalls, isEmpty);
+    expect(find.text(strings.botGenerateAvatar), findsNothing);
+  });
+
   testWidgets('selector único, cara controlada y Crear fijo', (tester) async {
     final log = <String>[];
     await _pumpCreate(
@@ -350,6 +424,10 @@ void main() {
       pets: _FakePetGateway(log: log),
       materializer: _FakePetVisualMaterializer(log: log),
     );
+
+    // "Identidad visual" es una fila colapsable de "Personalizar" (mockup
+    // de crear/editar bot): hay que abrirla antes de tocar sus controles.
+    await _tapVisible(tester, const ValueKey('bot-create-identity-row'));
 
     expect(find.byKey(const ValueKey('bot-create-mode-pet')), findsOneWidget);
     expect(find.byKey(const ValueKey('bot-create-mode-image')), findsOneWidget);
@@ -401,7 +479,7 @@ void main() {
     expect(petsNeverSelected(log), isTrue);
   });
 
-  testWidgets('crea primero y aplica Blobatar tipado antes de auto-presentar', (
+  testWidgets('crea primero y aplica Blobatar tipado antes de cerrar', (
     tester,
   ) async {
     final log = <String>[];
@@ -416,6 +494,7 @@ void main() {
     );
 
     await _enterName(tester, 'Infra Lead');
+    await _tapVisible(tester, const ValueKey('bot-create-identity-row'));
     await _tapVisible(tester, const ValueKey('bot-create-blobatar-sun'));
     await tester.tap(find.byKey(const ValueKey('bot-create-submit')));
     await tester.pumpAndSettle();
@@ -443,6 +522,7 @@ void main() {
     );
 
     await _enterName(tester, 'vision');
+    await _tapVisible(tester, const ValueKey('bot-create-identity-row'));
     await _tapVisible(tester, const ValueKey('bot-create-mode-image'));
     await _tapVisible(tester, const ValueKey('bot-create-pick-image'));
     await tester.pumpAndSettle();
@@ -476,6 +556,7 @@ void main() {
     );
 
     await _enterName(tester, 'nimbus-bot');
+    await _tapVisible(tester, const ValueKey('bot-create-identity-row'));
     await _tapVisible(tester, const ValueKey('bot-create-mode-pet'));
     await tester.pumpAndSettle();
     await _tapVisible(tester, const ValueKey('bot-create-sprite-nimbus'));
@@ -513,6 +594,7 @@ void main() {
     );
 
     await _enterName(tester, 'vision');
+    await _tapVisible(tester, const ValueKey('bot-create-identity-row'));
     await _tapVisible(tester, const ValueKey('bot-create-mode-image'));
     await _tapVisible(tester, const ValueKey('bot-create-pick-image'));
     await tester.pumpAndSettle();
@@ -560,6 +642,39 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('bot-create-keep-editing')));
     await _pumpUi(tester);
     expect(find.byType(BotCreateScreen), findsOneWidget);
+  });
+
+  testWidgets('one create flow: a Gateway without profiles.create falls back '
+      'to the Dashboard like the former Profiles wizard', (tester) async {
+    final log = <String>[];
+    final requests = <String>[];
+    final dashboard = DashboardClient(
+      host: '127.0.0.1',
+      port: 9119,
+      manualToken: 'dashboard-token',
+      httpClientOverride: MockClient((request) async {
+        requests.add('${request.method} ${request.url.path}');
+        return http.Response('{"ok":true}', 200);
+      }),
+    );
+    await _pumpCreate(
+      tester,
+      creation: _LegacyCreationGateway(log: log),
+      assets: _FakeAssetsGateway(log: log),
+      pets: _FakePetGateway(log: log),
+      materializer: _FakePetVisualMaterializer(log: log),
+      dashboard: dashboard,
+    );
+    await _enterName(tester, 'Infra Lead');
+    await tester.tap(find.byKey(const ValueKey('bot-create-submit')));
+    await tester.pumpAndSettle();
+
+    expect(log, ['create-native-missing']);
+    expect(requests, [
+      'POST /api/profiles',
+      'PUT /api/profiles/infra-lead/soul',
+    ]);
+    expect(find.byType(BotCreateScreen), findsNothing);
   });
 }
 

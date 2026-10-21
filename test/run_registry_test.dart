@@ -110,6 +110,30 @@ void main() {
       expect(legacy.profile, 'default');
     });
 
+    test(
+      'registry makes its connection id authoritative on add and load',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await SharedPreferences.getInstance();
+        final registry = await RunRegistry.load(prefs, 'conn-a');
+
+        await registry.add(
+          const RunRecord(
+            runId: 'run-1',
+            prompt: 'owned',
+            createdAt: 1,
+            lastStatus: 'running',
+            connId: 'wrong-connection',
+            profile: 'room-alpha',
+          ),
+        );
+
+        expect(registry.records.single.connId, 'conn-a');
+        final reopened = await RunRegistry.load(prefs, 'conn-a');
+        expect(reopened.records.single.connId, 'conn-a');
+      },
+    );
+
     test('same run id is updated and removed by exact profile', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();

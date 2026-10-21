@@ -6,12 +6,12 @@
 // · Un agente local caído no debe sugerir revisar credenciales.
 // · Un 401 remoto sí debe clasificarse como error de modelo/API.
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_android/core/services/active_chat_service.dart';
 import 'package:hermes_android/core/utils/chat_error.dart';
 
 void main() {
-  group('classifyChatError — local bridge errors', () {
+  group('classifyChatError — local agent errors', () {
     test('timeout del agente local → localColdStart (no model)', () {
-      // Texto real generado por _humanizeBridgeError en active_chat_service.dart.
       const msg =
           'El agente local tardó demasiado en responder. El modelo puede '
           'estar cargándose; espera unos segundos y reintenta.';
@@ -26,18 +26,29 @@ void main() {
       expect(classifyChatError(msg), ChatErrorKind.local);
     });
 
-    test('bridge no disponible → local', () {
+    test('un texto antiguo sobre el agente local → local', () {
       const msg =
           'No se pudo conectar con el agente local (Mobile Bridge). '
           'Arranca el agente y reintenta.';
       expect(classifyChatError(msg), ChatErrorKind.local);
     });
 
+    test('the word «bridge» alone no longer means the local agent is down', () {
+      // Hermes has tools of its own called bridges; an error that names one
+      // is not about a local agent.
+      for (final msg in [
+        'tool_call bridge failed: connector unavailable',
+        'Mobile Bridge returned an unexpected answer',
+      ]) {
+        expect(classifyChatError(msg), isNot(ChatErrorKind.local));
+      }
+    });
+
     test('SocketException de conexión rechazada → connection', () {
       const msg = 'SocketException: Connection refused (host:127.0.0.1)';
       // 127.0.0.1 activaría "local", pero connection refused es más específico
       // y debe activar "connection" antes (o el orden garantiza local primero).
-      // El mensaje real de bridge refusal usa "agente local" que cae en local.
+      // El mensaje humanizado usa "agente local", que cae en local.
       // Este test cubre el caso donde solo llega la excepción sin humanizar.
       final kind = classifyChatError(msg);
       expect(
@@ -45,6 +56,39 @@ void main() {
         anyOf(ChatErrorKind.local, ChatErrorKind.connection),
         reason: 'La IP local puede detectarse antes que "connection refused"',
       );
+    });
+  });
+
+  group('classifyChatError — what the turn was missing', () {
+    test('the Dashboard refused this phone → a sign-in, not a retry', () {
+      expect(
+        classifyChatError(dashboardSignInRequiredError),
+        ChatErrorKind.dashboardSignInRequired,
+      );
+      expect(isChatErrorCode(dashboardSignInRequiredError), isTrue);
+    });
+
+    test('the live channel was not there → a connection error', () {
+      expect(
+        classifyChatError(officialChannelUnavailableError),
+        ChatErrorKind.connection,
+      );
+      expect(isChatErrorCode(officialChannelUnavailableError), isTrue);
+    });
+
+    test('the same failures as older builds stored them, in English', () {
+      for (final stored in [
+        'Hermes Desktop session lifecycle is required',
+        'Official Hermes gateway unavailable; reconnect and retry',
+      ]) {
+        expect(classifyChatError(stored), ChatErrorKind.connection);
+        expect(isChatErrorCode(stored), isFalse);
+      }
+    });
+
+    test('ordinary text is never taken for a code', () {
+      expect(isChatErrorCode('No se pudo enviar el mensaje.'), isFalse);
+      expect(isChatErrorCode('  $dashboardSignInRequiredError\n'), isTrue);
     });
   });
 
@@ -134,6 +178,27 @@ void main() {
     });
   });
 
+  group('classifyChatError — sessionTooLarge (context_overflow)', () {
+    test('mensaje real del backend → sessionTooLarge, no model', () {
+      expect(
+        classifyChatError(
+          "Context compression could not bring this session under the "
+          "model's context window (~247,480 tokens vs 128,000). The provider "
+          'call was not sent. Start a new session with /new; this session is '
+          'too large to compress further.',
+        ),
+        ChatErrorKind.sessionTooLarge,
+      );
+    });
+
+    test('código tipado context_overflow → sessionTooLarge', () {
+      expect(
+        classifyChatError('context_overflow'),
+        ChatErrorKind.sessionTooLarge,
+      );
+    });
+  });
+
   group('classifyChatError — unknown fallback', () {
     test('mensaje genérico sin señales → unknown', () {
       expect(classifyChatError('Something went wrong'), ChatErrorKind.unknown);
@@ -173,5 +238,16 @@ void main() {
         ChatErrorKind.searchToolUnavailable,
       );
     });
+  });
+
+  test('a named profile without Dashboard access has its own kind', () {
+    expect(
+      classifyChatError(const ProfileTranscriptAccessRequired().toString()),
+      ChatErrorKind.profileDashboardAccess,
+    );
+    expect(
+      classifyChatError('HTTP 401'),
+      isNot(ChatErrorKind.profileDashboardAccess),
+    );
   });
 }

@@ -4,7 +4,8 @@ on:
   workflow_dispatch:
   # Manual fallback for fork CI diagnostics.
   pull_request:
-    branches: [main]
+    # Also the 1.2.15 integration and review-only bases, so reviewers see CI.
+    branches: [main, 'feat/**', 'review/**']
   push:
     branches: [main]
 
@@ -27,10 +28,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Verify RU translation and stable overlay
+        run: |
+          python3 tool/fork/localization.py check
+          python3 tool/fork/sync.py check-overlay
+          python3 tool/fork/check_identity.py
+
       - name: Set up Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
-          flutter-version: '3.44.1'
+          flutter-version: '3.47.1'
           channel: 'stable'
 
       - name: Set up Java
@@ -42,6 +49,14 @@ jobs:
       - name: Install dependencies
         run: flutter pub get --enforce-lockfile
         id: pub_get
+
+      - name: Verify generated localizations
+        run: |
+          flutter gen-l10n
+          git diff --exit-code -- \
+            lib/l10n/app_localizations.dart \
+            lib/l10n/app_localizations_en.dart \
+            lib/l10n/app_localizations_es.dart
 
       - name: Install REUSE
         run: python3 -m pip install --disable-pip-version-check reuse==6.2.0

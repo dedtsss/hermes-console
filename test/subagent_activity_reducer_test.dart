@@ -120,6 +120,16 @@ void main() {
       expect(missingTotal.details.progress, isNull);
       expect(invalidTotal.details.progress, isNull);
     });
+
+    test('complete event rejects a contradictory live status', () {
+      final event = _native('subagent.complete', _scope(), const {
+        'subagent_id': 'child-contradictory',
+        'status': 'running',
+      });
+
+      expect(event.kind, SubagentActivityEventKind.complete);
+      expect(event.phase, SubagentActivityPhase.completed);
+    });
   });
 
   group('SubagentActivityReducer', () {
@@ -420,6 +430,92 @@ void main() {
       expect(activity.source, SubagentActivitySource.legacyDelegateTask);
       expect(activity.key.identityKind, SubagentIdentityKind.legacyToolCall);
       expect(activity.resultPreview, 'Falló de forma segura');
+    });
+
+    test(
+      'interrupted delegate_task result with error text maps to cancelled',
+      () {
+        // Hermes core emits `status: "interrupted"` AND `error: "Operation
+        // interrupted."` for an interrupted child (delegate_tool_child_run
+        // `_build_result_entry`). The explicit terminal status must win over
+        // the error-presence heuristic; otherwise Console paints a user
+        // cancellation as a failure.
+        final scope = _scope();
+        var state = SubagentActivityReducer.reduce(
+          SubagentActivityState.empty(scope),
+          _legacy('tool.start', scope, 'call-a'),
+        );
+        state = SubagentActivityReducer.reduce(
+          state,
+          _legacy(
+            'tool.complete',
+            scope,
+            'call-a',
+            payload: const {
+              'name': 'delegate_task',
+              'result': {
+                'status': 'interrupted',
+                'exit_reason': 'interrupted',
+                'error': 'Operation interrupted.',
+                'summary': 'Texto parcial antes de la interrupción',
+                'subagent_ids': ['sa-interrupted'],
+              },
+            },
+          ),
+        );
+
+        expect(state.activities.single.phase, SubagentActivityPhase.cancelled);
+      },
+    );
+
+    test('top-level explicit terminal status wins over error presence', () {
+      final scope = _scope();
+      final interrupted = SubagentActivityReducer.reduce(
+        SubagentActivityState.empty(scope),
+        _legacy(
+          'tool.complete',
+          scope,
+          'call-a',
+          payload: const {
+            'status': 'interrupted',
+            'error': 'Operation interrupted.',
+          },
+        ),
+      );
+      expect(
+        interrupted.activities.single.phase,
+        SubagentActivityPhase.cancelled,
+      );
+
+      final completed = SubagentActivityReducer.reduce(
+        SubagentActivityState.empty(scope),
+        _legacy(
+          'tool.complete',
+          scope,
+          'call-b',
+          payload: const {
+            'result': {'status': 'completed', 'error': 'warning text'},
+          },
+        ),
+      );
+      expect(
+        completed.activities.single.phase,
+        SubagentActivityPhase.completed,
+      );
+
+      // A failure with no status keeps the heuristic mapping.
+      final failed = SubagentActivityReducer.reduce(
+        SubagentActivityState.empty(scope),
+        _legacy(
+          'tool.complete',
+          scope,
+          'call-c',
+          payload: const {
+            'result': {'error': 'boom'},
+          },
+        ),
+      );
+      expect(failed.activities.single.phase, SubagentActivityPhase.failed);
     });
 
     test('ignores native-only payload fields and never invents transcript', () {

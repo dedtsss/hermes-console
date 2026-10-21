@@ -1,139 +1,18 @@
-import 'dart:math' as math;
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../models/compaction_progress.dart';
 import '../models/desktop_context_breakdown.dart';
 import '../models/desktop_session_snapshot.dart';
 import '../models/session.dart';
 import '../theme/app_theme.dart';
+import 'activity_pill.dart' show ActivityTicker, formatTurnElapsed;
+import 'chat_status_pill.dart' show contextLevelColor;
+import 'compaction_dock.dart';
 
 typedef SessionContextBreakdownLoader =
     Future<DesktopContextBreakdown?> Function();
-
-Future<void> showSessionContextPopover({
-  required BuildContext context,
-  required Rect anchorRect,
-  required ValueListenable<SessionContextMetrics> metrics,
-  required SessionContextBreakdownLoader loadBreakdown,
-  required ValueChanged<SessionContextMetrics> onMetricsSnapshot,
-}) {
-  final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-  final navigator = Navigator.of(context);
-  return showGeneralDialog<void>(
-    context: context,
-    useRootNavigator: false,
-    barrierDismissible: true,
-    barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
-    barrierColor: Colors.black.withValues(alpha: 0.22),
-    transitionDuration: reduceMotion
-        ? Duration.zero
-        : const Duration(milliseconds: 180),
-    pageBuilder: (dialogContext, animation, secondaryAnimation) =>
-        _SessionContextPopoverFrame(
-          anchorRect: anchorRect,
-          metrics: metrics,
-          loadBreakdown: loadBreakdown,
-          onMetricsSnapshot: onMetricsSnapshot,
-          onClose: navigator.pop,
-        ),
-    transitionBuilder: (context, animation, secondaryAnimation, child) {
-      if (reduceMotion) return child;
-      final curved = CurvedAnimation(
-        parent: animation,
-        curve: Curves.easeOutCubic,
-        reverseCurve: Curves.easeInCubic,
-      );
-      return FadeTransition(
-        opacity: curved,
-        child: ScaleTransition(
-          alignment: Alignment.topRight,
-          scale: Tween<double>(begin: 0.97, end: 1).animate(curved),
-          child: child,
-        ),
-      );
-    },
-  );
-}
-
-class _SessionContextPopoverFrame extends StatelessWidget {
-  const _SessionContextPopoverFrame({
-    required this.anchorRect,
-    required this.metrics,
-    required this.loadBreakdown,
-    required this.onMetricsSnapshot,
-    required this.onClose,
-  });
-
-  final Rect anchorRect;
-  final ValueListenable<SessionContextMetrics> metrics;
-  final SessionContextBreakdownLoader loadBreakdown;
-  final ValueChanged<SessionContextMetrics> onMetricsSnapshot;
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context) {
-    final media = MediaQuery.of(context);
-    final colors = Theme.of(context).hermes;
-    const margin = 12.0;
-    const gap = 6.0;
-    final width = (media.size.width - margin * 2).clamp(288.0, 360.0);
-    final left = (anchorRect.right - width)
-        .clamp(margin, math.max(margin, media.size.width - width - margin))
-        .toDouble();
-    final belowTop = anchorRect.bottom + gap;
-    final belowHeight =
-        media.size.height - media.padding.bottom - belowTop - margin;
-    final aboveHeight = anchorRect.top - media.padding.top - margin - gap;
-    final placeBelow = belowHeight >= math.min(280.0, aboveHeight);
-    final availableHeight = math.max(
-      220.0,
-      placeBelow ? belowHeight : aboveHeight,
-    );
-    final maxHeight = math.min(520.0, availableHeight).toDouble();
-
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            excludeFromSemantics: true,
-            onTap: onClose,
-          ),
-        ),
-        Positioned(
-          left: left,
-          top: placeBelow ? belowTop : null,
-          bottom: placeBelow ? null : media.size.height - anchorRect.top + gap,
-          width: width,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: maxHeight),
-            child: Material(
-              key: const ValueKey('desktop-context-usage-popover-surface'),
-              color: colors.surface,
-              surfaceTintColor: Colors.transparent,
-              elevation: 12,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: colors.divider.withValues(alpha: 0.78)),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: SessionContextFloatingPanel(
-                width: width,
-                maxHeight: maxHeight,
-                metrics: metrics,
-                loadBreakdown: loadBreakdown,
-                onMetricsSnapshot: onMetricsSnapshot,
-                onClose: onClose,
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
 
 /// The one UI projection shared by the chat trigger and its detail sheet.
 ///
@@ -308,57 +187,36 @@ int _boundedContextPercent({
   return raw.round().clamp(0, 100).toInt();
 }
 
-/// Anchored context control used by the chat app bar.
-class SessionContextPopoverButton extends StatefulWidget {
-  const SessionContextPopoverButton({
-    required this.metrics,
-    required this.loadBreakdown,
-    required this.onMetricsSnapshot,
-    super.key,
-  });
-
-  final ValueListenable<SessionContextMetrics> metrics;
-  final SessionContextBreakdownLoader loadBreakdown;
-  final ValueChanged<SessionContextMetrics> onMetricsSnapshot;
-
-  @override
-  State<SessionContextPopoverButton> createState() =>
-      _SessionContextPopoverButtonState();
+String? _cumulativeTokenLabel(SessionContextMetrics metrics) {
+  final cumulative = metrics.cumulativeTotal;
+  return cumulative == null
+      ? null
+      : '${compactSessionContextTokens(cumulative)} tok';
 }
 
-class _SessionContextPopoverButtonState
-    extends State<SessionContextPopoverButton> {
-  final GlobalKey _anchorKey = GlobalKey();
-  bool _opening = false;
+/// Short text of the context trigger: `45%`, else cumulative tokens, else `—`.
+String sessionContextTriggerText(SessionContextMetrics metrics) {
+  final percent = metrics.percent;
+  if (percent != null) return '$percent%';
+  return _cumulativeTokenLabel(metrics) ?? '—';
+}
 
-  Future<void> _open() async {
-    if (_opening) return;
-    final renderBox = _anchorKey.currentContext?.findRenderObject();
-    if (renderBox is! RenderBox || !renderBox.hasSize) return;
-    final topLeft = renderBox.localToGlobal(Offset.zero);
-    final anchorRect = topLeft & renderBox.size;
-    _opening = true;
-    try {
-      await showSessionContextPopover(
-        context: context,
-        anchorRect: anchorRect,
-        metrics: widget.metrics,
-        loadBreakdown: widget.loadBreakdown,
-        onMetricsSnapshot: widget.onMetricsSnapshot,
-      );
-    } finally {
-      _opening = false;
-    }
-  }
+String _contextTriggerSemanticValue(
+  Strings strings,
+  SessionContextMetrics metrics,
+) {
+  final percent = metrics.percent;
+  if (percent != null) return strings.chaContextUsagePercent(percent);
+  return _cumulativeTokenLabel(metrics) ?? strings.chaContextWindowUnavailable;
+}
 
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      key: _anchorKey,
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      child: SessionContextTrigger(metrics: widget.metrics, onPressed: _open),
-    );
-  }
+/// Accessible label of the context trigger (description + best value).
+String sessionContextTriggerSemanticsLabel(
+  Strings strings,
+  SessionContextMetrics metrics,
+) {
+  final value = _contextTriggerSemanticValue(strings, metrics);
+  return '${strings.chaContextUsageOpen}, $value';
 }
 
 /// Compact AI-Elements-inspired trigger. Only this subtree listens to live
@@ -380,21 +238,10 @@ class SessionContextTrigger extends StatelessWidget {
       builder: (context, value, _) {
         final strings = Strings.of(context);
         final percent = value.percent;
-        final cumulative = value.cumulativeTotal;
-        final cumulativeLabel = cumulative != null && cumulative > 0
-            ? '${compactSessionContextTokens(cumulative)} tok'
-            : null;
-        final semanticValue = percent == null
-            ? cumulativeLabel == null
-                  ? strings.chaContextWindowUnavailable
-                  : '${compactSessionContextTokens(cumulative!)} '
-                        '${strings.chaContextTotal}'
-            : strings.chaContextUsagePercent(percent);
         return Semantics(
           button: true,
           onTap: onPressed,
-          label: strings.chaContextUsageOpen,
-          value: semanticValue,
+          label: sessionContextTriggerSemanticsLabel(strings, value),
           excludeSemantics: true,
           child: Tooltip(
             message: strings.chaContextUsageOpen,
@@ -435,9 +282,7 @@ class SessionContextTrigger extends StatelessWidget {
                           ),
                           const SizedBox(width: 6),
                           Text(
-                            percent == null
-                                ? cumulativeLabel ?? '—'
-                                : '$percent%',
+                            sessionContextTriggerText(value),
                             style: TextStyle(
                               color: Theme.of(context).hermes.textPrimary,
                               fontSize: 11.5,
@@ -466,12 +311,16 @@ class SessionContextRing extends StatelessWidget {
     required this.percent,
     this.size = 24,
     this.strokeWidth = 2.4,
+    this.color,
     super.key,
   });
 
   final int? percent;
   final double size;
   final double strokeWidth;
+
+  /// Arc colour; the theme accent when null.
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -483,7 +332,7 @@ class SessionContextRing extends StatelessWidget {
           value: (percent ?? 0) / 100,
           strokeWidth: strokeWidth,
           strokeCap: StrokeCap.round,
-          color: colors.accentText,
+          color: color ?? colors.accentText,
           backgroundColor: colors.divider.withValues(alpha: 0.72),
         ),
       ),
@@ -491,35 +340,41 @@ class SessionContextRing extends StatelessWidget {
   }
 }
 
-/// Anchored mobile counterpart of Hermes Desktop's ContextUsagePanel.
+/// Body of the «Uso de contexto» sheet: the mobile counterpart of Hermes
+/// Desktop's ContextUsagePanel.
 ///
-/// The panel performs exactly one breakdown request per opening. It remains a
-/// snapshot while open, matching Desktop, and never polls during streaming.
-class SessionContextFloatingPanel extends StatefulWidget {
-  const SessionContextFloatingPanel({
-    required this.width,
-    required this.maxHeight,
+/// It performs exactly one breakdown request per opening and stays a snapshot
+/// while open, matching Desktop; it never polls during streaming. The
+/// breakdown only appears when Hermes publishes it; otherwise the honest
+/// notice explains why.
+class SessionContextSheetBody extends StatefulWidget {
+  const SessionContextSheetBody({
     required this.metrics,
     required this.loadBreakdown,
     required this.onMetricsSnapshot,
-    required this.onClose,
+    this.onCompact,
+    this.compaction,
+    this.clock,
     super.key,
   });
 
-  final double width;
-  final double maxHeight;
   final ValueListenable<SessionContextMetrics> metrics;
   final SessionContextBreakdownLoader loadBreakdown;
   final ValueChanged<SessionContextMetrics> onMetricsSnapshot;
-  final VoidCallback onClose;
+
+  /// Runs the chat's existing `/compress`; null hides «Compactar».
+  final VoidCallback? onCompact;
+
+  /// Compaction running or just finished; its full facts head the sheet.
+  final ValueListenable<CompactionProgress?>? compaction;
+  final DateTime Function()? clock;
 
   @override
-  State<SessionContextFloatingPanel> createState() =>
-      _SessionContextFloatingPanelState();
+  State<SessionContextSheetBody> createState() =>
+      _SessionContextSheetBodyState();
 }
 
-class _SessionContextFloatingPanelState
-    extends State<SessionContextFloatingPanel> {
+class _SessionContextSheetBodyState extends State<SessionContextSheetBody> {
   DesktopContextBreakdown? _breakdown;
   Object? _error;
   bool _loading = true;
@@ -553,37 +408,31 @@ class _SessionContextFloatingPanelState
 
   @override
   Widget build(BuildContext context) {
-    return ConstrainedBox(
+    return KeyedSubtree(
       key: const ValueKey('desktop-context-usage-popover'),
-      constraints: BoxConstraints(
-        minWidth: widget.width,
-        maxWidth: widget.width,
-        maxHeight: widget.maxHeight,
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final horizontal = constraints.maxWidth < 330 ? 14.0 : 16.0;
-          return SingleChildScrollView(
-            primary: false,
-            padding: EdgeInsets.fromLTRB(horizontal, 12, horizontal, 18),
-            child: ValueListenableBuilder<SessionContextMetrics>(
-              valueListenable: widget.metrics,
-              builder: (context, liveMetrics, _) {
-                final metrics = _breakdown == null
-                    ? liveMetrics
-                    : SessionContextMetrics.fromBreakdown(
-                        _breakdown!,
-                        fallback: liveMetrics,
-                      );
-                return _PanelContents(
-                  metrics: metrics,
-                  breakdown: _breakdown,
-                  loading: _loading,
-                  error: _error,
-                  onClose: widget.onClose,
+      child: ValueListenableBuilder<SessionContextMetrics>(
+        valueListenable: widget.metrics,
+        builder: (context, liveMetrics, _) {
+          final metrics = _breakdown == null
+              ? liveMetrics
+              : SessionContextMetrics.fromBreakdown(
+                  _breakdown!,
+                  fallback: liveMetrics,
                 );
-              },
-            ),
+          Widget contents(CompactionProgress? progress) => _PanelContents(
+            metrics: metrics,
+            breakdown: _breakdown,
+            loading: _loading,
+            error: _error,
+            onCompact: widget.onCompact,
+            compaction: progress,
+            clock: widget.clock,
+          );
+          final compaction = widget.compaction;
+          if (compaction == null) return contents(null);
+          return ValueListenableBuilder<CompactionProgress?>(
+            valueListenable: compaction,
+            builder: (context, progress, _) => contents(progress),
           );
         },
       ),
@@ -597,49 +446,37 @@ class _PanelContents extends StatelessWidget {
     required this.breakdown,
     required this.loading,
     required this.error,
-    required this.onClose,
+    required this.onCompact,
+    this.compaction,
+    this.clock,
   });
 
   final SessionContextMetrics metrics;
   final DesktopContextBreakdown? breakdown;
   final bool loading;
   final Object? error;
-  final VoidCallback onClose;
+  final VoidCallback? onCompact;
+  final CompactionProgress? compaction;
+  final DateTime Function()? clock;
 
   @override
   Widget build(BuildContext context) {
     final strings = Strings.of(context);
-    final colors = Theme.of(context).hermes;
+    final compaction = this.compaction;
     final categories = breakdown?.categories ?? const [];
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Semantics(
-                header: true,
-                child: Text(
-                  strings.chaContextUsageTitle,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: colors.textPrimary,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-              ),
-            ),
-            IconButton(
-              tooltip: strings.commonClose,
-              visualDensity: VisualDensity.compact,
-              onPressed: onClose,
-              icon: const Icon(Icons.close_rounded, size: 20),
-            ),
-          ],
+        if (compaction != null) ...[
+          _CompactionPanelRow(compaction: compaction, clock: clock),
+          const SizedBox(height: 10),
+        ],
+        _ContextOverview(
+          metrics: metrics,
+          onCompact: onCompact,
+          compacting: compaction != null && !compaction.isFinished,
         ),
-        const SizedBox(height: 6),
-        _ContextOverview(metrics: metrics),
         const SizedBox(height: 10),
         SessionContextPerformance(metrics: metrics),
         const SizedBox(height: 14),
@@ -670,6 +507,71 @@ class _PanelContents extends StatelessWidget {
   }
 }
 
+/// The compaction's full facts at the top of the context panel: the same
+/// outcome text the old floating pill showed («Compactado · 34 → 12
+/// mensajes · …») or «Compactando · 22 msj · ~21.5k tok» with the measured
+/// clock. Only what Hermes published; no estimate.
+class _CompactionPanelRow extends StatelessWidget {
+  const _CompactionPanelRow({required this.compaction, this.clock});
+
+  final CompactionProgress compaction;
+  final DateTime Function()? clock;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = Strings.of(context);
+    final colors = Theme.of(context).hermes;
+    final lang = Localizations.localeOf(context).languageCode;
+    final finished = compaction.isFinished;
+    return Container(
+      key: const ValueKey('context-panel-compaction'),
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        color: colors.surfaceVariant.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.divider.withValues(alpha: 0.7)),
+      ),
+      child: ActivityTicker(
+        active: !finished,
+        clock: clock,
+        builder: (context, now) => Row(
+          children: [
+            CompactionGlyph(compaction: compaction),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                compactionStatusText(strings, compaction, lang),
+                key: const ValueKey('context-panel-compaction-text'),
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.3,
+                  fontWeight: FontWeight.w600,
+                  color: colors.textPrimary,
+                ),
+              ),
+            ),
+            if (!finished) ...[
+              const SizedBox(width: 8),
+              ExcludeSemantics(
+                child: Text(
+                  formatTurnElapsed(compaction.elapsed(now)),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: colors.textSecondary,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Proyección reutilizable de rendimiento y caché. Tanto el chat como Detalles
 /// de sesión reciben estos valores desde [SessionContextMetrics], evitando dos
 /// fórmulas o tratamientos distintos de los campos ausentes.
@@ -681,6 +583,7 @@ class SessionContextPerformance extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final strings = Strings.of(context);
+    final cumulative = metrics.cumulativeTotal;
     final read = metrics.cacheReadTokens;
     final write = metrics.cacheWriteTokens;
     final latency = metrics.observedFirstTokenLatencyMs;
@@ -690,6 +593,11 @@ class SessionContextPerformance extends StatelessWidget {
       child: Column(
         key: const ValueKey('session-context-performance'),
         children: [
+          if (cumulative != null)
+            _PerformanceRow(
+              label: strings.chaContextTotal,
+              value: compactSessionContextTokens(cumulative),
+            ),
           _PerformanceRow(
             label: strings.chaContextObservedTtft,
             value: latency == null
@@ -760,9 +668,15 @@ class _PerformanceRow extends StatelessWidget {
 }
 
 class _ContextOverview extends StatelessWidget {
-  const _ContextOverview({required this.metrics});
+  const _ContextOverview({
+    required this.metrics,
+    required this.onCompact,
+    required this.compacting,
+  });
 
   final SessionContextMetrics metrics;
+  final VoidCallback? onCompact;
+  final bool compacting;
 
   @override
   Widget build(BuildContext context) {
@@ -771,68 +685,87 @@ class _ContextOverview extends StatelessWidget {
     final used = metrics.contextUsed;
     final max = metrics.contextMax;
     final percent = metrics.percent;
-    return Semantics(
-      container: true,
-      label: metrics.hasWindow && used != null && max != null && percent != null
-          ? '${strings.chaContextUsageSummary(compactSessionContextTokens(used), compactSessionContextTokens(max))}. '
-                '${strings.chaContextUsagePercent(percent)}'
-          : strings.chaContextWindowUnavailable,
-      excludeSemantics: true,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: colors.surfaceVariant.withValues(alpha: 0.46),
-          borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: colors.divider.withValues(alpha: 0.78)),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            SessionContextRing(percent: percent, size: 40, strokeWidth: 3.4),
-            const SizedBox(width: 12),
-            Expanded(
-              child:
-                  metrics.hasWindow &&
-                      used != null &&
-                      max != null &&
-                      percent != null
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '$percent%',
-                          style: Theme.of(context).textTheme.headlineSmall
-                              ?.copyWith(
-                                color: colors.textPrimary,
-                                fontWeight: FontWeight.w700,
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                              ),
+    final known =
+        metrics.hasWindow && used != null && max != null && percent != null;
+    final level = contextLevelColor(percent, colors);
+    final compact = onCompact;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Semantics(
+          container: true,
+          label: known
+              ? '${strings.chaContextUsageSummary(compactSessionContextTokens(used), compactSessionContextTokens(max))}. '
+                    '${strings.chaContextUsagePercent(percent)}'
+              : strings.chaContextWindowUnavailable,
+          excludeSemantics: true,
+          child: SizedBox.square(
+            dimension: 76,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                SessionContextRing(
+                  key: const ValueKey('context-sheet-ring'),
+                  percent: percent,
+                  size: 76,
+                  strokeWidth: 6,
+                  color: level,
+                ),
+                if (percent != null)
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Text(
+                        '$percent%',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: colors.textPrimary,
+                          fontFeatures: const [FontFeature.tabularFigures()],
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          strings.chaContextUsageSummary(
-                            compactSessionContextTokens(used),
-                            compactSessionContextTokens(max),
-                          ),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: colors.textSecondary),
-                        ),
-                      ],
-                    )
-                  : Text(
-                      strings.chaContextWindowUnavailable,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: colors.textSecondary,
-                        height: 1.35,
                       ),
                     ),
+                  ),
+              ],
             ),
-          ],
+          ),
         ),
-      ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                known
+                    ? strings.chaContextUsageSummary(
+                        compactSessionContextTokens(used),
+                        compactSessionContextTokens(max),
+                      )
+                    : strings.chaContextWindowUnavailable,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: known ? colors.textPrimary : colors.textSecondary,
+                  fontWeight: known ? FontWeight.w600 : FontWeight.normal,
+                  height: 1.35,
+                ),
+              ),
+              if (compact != null) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  key: const ValueKey('context-compress-now'),
+                  onPressed: compacting ? null : compact,
+                  icon: const Icon(Icons.compress_rounded, size: 16),
+                  label: Text(
+                    compacting
+                        ? strings.sp1215CompactBusy
+                        : strings.sp1215Compact,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1059,13 +992,4 @@ Color _categoryColor(BuildContext context, String id, int index) {
 
 /// Matches Hermes Desktop's shared compact-number formatter.
 @visibleForTesting
-String compactSessionContextTokens(int value) {
-  if (value <= 0) return '0';
-  if (value >= 999950) {
-    return '${(value / 1000000).toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '')}M';
-  }
-  if (value >= 999.5) {
-    return '${(value / 1000).toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '')}k';
-  }
-  return '$value';
-}
+String compactSessionContextTokens(int value) => formatCompactTokens(value);
