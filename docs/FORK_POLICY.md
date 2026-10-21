@@ -7,6 +7,7 @@ This repository is a user-owned fork of `xP3ta/hermes-console` used by TestLab f
 - Canonical upstream: `xP3ta/hermes-console`.
 - Original fork baseline when created: upstream `main` at `a2af8bc6115f96a84138028465d8f71c3ef6d308`.
 - Current stable baseline: `v1.3.0` (`1.3.0+9630`), commit `7c51c99b3d665affda79742ca501aa04dad9d42f`.
+- Current fork source build: `1.3.0-ru.1+9631`. The direct/full Android app updater is separate from server maintenance; release assets and checks follow [APP_UPDATES.md](APP_UPDATES.md).
 - Preserve upstream history. Sync published stable tags only using the explicit local overlay, never unreleased main.
 - Procedure and translation handoff: [STABLE_UPSTREAM_SYNC.md](STABLE_UPSTREAM_SYNC.md).
 - Stable baseline pin: `tool/fork/upstream.json`; overlay classification: `tool/fork/overlay.json`.

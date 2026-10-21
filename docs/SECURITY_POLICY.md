@@ -346,6 +346,18 @@ Esto puede ser logueado por proxies, firewalls y herramientas de debug.
 
 ## Release y distribución
 
+### RU direct application updates
+
+The RU `full` build alone requests `REQUEST_INSTALL_PACKAGES`. About → Check
+for app updates reads only the fork's public GitHub latest release. Download
+and installation each require a user action; there is no silent install or
+background download. The release manifest, GitHub asset digests, bounded APK
+download and Android package/version checks fail closed. A dedicated,
+non-exported FileProvider grants temporary read access only to the update cache
+subdirectory. Android's installer enforces signing compatibility. No storage or
+package-enumeration permission is added. Full contract and limitations:
+[APP_UPDATES.md](APP_UPDATES.md). This is separate from server-side Hermes updates.
+
 - Las entregas de Google Play usan la upload key de XPeta Lab y Play App
   Signing. Keystore, credenciales y copias de seguridad permanecen fuera del
   repo.

@@ -61,6 +61,7 @@ class MainActivity : FlutterFragmentActivity() {
     private var fullDuplexCaptureHandler: HermesFullDuplexCaptureHandler? = null
     private var documentPreviewHandler: HermesDocumentPreviewHandler? = null
     private var clipboardImageHandler: HermesClipboardImageHandler? = null
+    private var appUpdateHandler: HermesAppUpdateHandler? = null
     private var pendingShare: Map<String, Any?>? = null
     private var pendingNewSessionLaunch: Map<String, Any?>? = null
     private var pendingExternalDataSyncStop = false
@@ -156,6 +157,11 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        appUpdateHandler?.close()
+        appUpdateHandler = HermesAppUpdateHandler(this).also { handler ->
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HermesAppUpdateHandler.CHANNEL)
+                .setMethodCallHandler(handler)
+        }
         DurableSecretWriter.attach(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         clipboardImageHandler?.close()
         clipboardImageHandler = HermesClipboardImageHandler(applicationContext).also { handler ->
@@ -462,7 +468,14 @@ class MainActivity : FlutterFragmentActivity() {
             }
     }
 
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        appUpdateHandler?.onActivityResult(requestCode, resultCode)
+    }
+
     override fun onDestroy() {
+        appUpdateHandler?.close()
+        appUpdateHandler = null
         richNotificationsChannel?.let { HermesRichNotifications.detach(it) }
         richNotificationsChannel = null
         if (externalDataSyncStopReceiverRegistered) {

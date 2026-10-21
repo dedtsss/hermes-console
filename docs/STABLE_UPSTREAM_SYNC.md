@@ -21,8 +21,9 @@ annotated tag object, not through the release's mutable `target_commitish: main`
 - `derived`: the five source SBOM outputs, compared against the full generator
   in authoritative Flutter CI.
 
-English and Spanish source catalogs, the Hermes runtime and pairing protocol
-remain upstream code. Spanish remains the upstream `gen-l10n` template because
+English and Spanish source catalogs remain upstream code except the explicit
+`appUpdate*` fork messages. The Hermes runtime and pairing protocol remain
+upstream code. Spanish remains the upstream `gen-l10n` template because
 it carries the complete typed placeholder metadata. EN and ES have the same
 message keys and argument names; some ES messages use plurals where English
 uses a simple count. RU preserves the Spanish template's recursive ICU contract
@@ -129,9 +130,11 @@ secrets and uploads no artifact. Debug output is temporary CI build evidence,
 not an installable release delivery. The existing real-gateway lane remains.
 
 `source_sbom.py` can rebind the stable source SBOM fingerprints only when every
-generator input matches the pinned upstream tree except Android identity and
-comments in Gradle. Dependency graph/inventory data is retained, never invented.
-Any other input change requires full regeneration. CI runs the complete generator
+generator input matches the pinned upstream tree except Android identity/comments
+in Gradle and a dependency-free, monotonic `-ru.N` application version bump.
+The latter updates only root app version/references; third-party graph/inventory
+data is retained, never invented. Any other input change requires full
+regeneration. CI runs the complete generator
 and rejects a difference; these source checks claim no signed/build evidence.
 
 The established Android ID is `io.github.dedtsss.hermesconsole`, visible name
@@ -192,6 +195,21 @@ route), retain the RU package and increasing version, reconcile the upstream-onl
 release anchors, and verify signer/package/version/hash before delivery. Never
 deliver the debug CI output or dispatch the old `main` signing workflow as a
 substitute. A source-build pass alone is not signed-update continuity evidence.
+
+## Fork app updater overlay
+
+The next reviewed build is `1.3.0-ru.1+9631`, based on stable upstream v1.3.0.
+It adds an explicit updater for the Android application, not the server.
+The 24 `appUpdate*` strings are the only additional EN/ES/RU source delta and
+have per-key review. Native RU resources and pairing are unchanged. About and
+the Android channel connect to fork-local updater files. Only the `full`
+manifest adds the scoped installer permission/provider. The version line in
+`pubspec.yaml` is an explicit patch; the next stable sync may stop for deliberate
+version arbitration rather than silently overwrite a fork build number.
+Release names, hashes, package verification and controller steps are specified
+in [APP_UPDATES.md](APP_UPDATES.md). Existing quality, Android and real-gateway
+CI remain the final source gates for the new head; no signed/physical update
+result is implied by the source implementation.
 
 Stable 1.2.15 itself retires Mobile Bridge/local-agent code. Its Dashboard
 migration and `hermes://pair` support are retained unchanged; no private BruceVPS

@@ -3,7 +3,7 @@
 Justification of each permission for Google Play review. The table is the
 merged manifest of `1.2.15 (9540)`: the app's own
 `android/app/src/main/AndroidManifest.xml` (shared by the `play` and `full`
-flavors; `android/app/src/full/AndroidManifest.xml` declares nothing extra) plus
+flavors) plus
 what its dependencies add. It is enforced as an exact set by
 `tool/release/full_release_policy.json` (APKs: `inspect_public_apk.py`; any
 manifest text, AAB included: `check_manifest_policy.py`) and by
@@ -15,6 +15,14 @@ services. No hash is recorded here. Before copying any text into Play Console,
 repeat the check on the exact AAB selected:
 `java -jar bundletool.jar dump manifest --bundle=<aab> > manifest.xml` and then
 `python3 tool/release/check_manifest_policy.py --manifest manifest.xml --pubspec pubspec.yaml`.
+
+RU fork exception: `full` additionally declares `REQUEST_INSTALL_PACKAGES`,
+solely for user-requested app updates through the system Package Installer.
+It grants no silent install, storage access or package enumeration. `play` and
+`qa` do not declare it. The fork's `full_release_policy.json` includes this
+direct-only permission and must not be used as a Play AAB expectation. The
+historical measurements above are not measurements of the new RU build;
+inspect the final signed APK. See [APP_UPDATES.md](APP_UPDATES.md).
 
 ## Permissions of the Play build
 

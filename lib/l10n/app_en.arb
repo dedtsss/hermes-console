@@ -6957,5 +6957,50 @@
   "onb4HelpSafe": "It uses the official Hermes installer. If you already have Hermes, it doesn't touch it, nor Telegram or the Gateway. It takes a few minutes.",
   "onb4HelpVps": "Hermes on an internet server? Install Tailscale on the server and on this phone, then paste the line.",
   "onb4HadPassword": "This Hermes already had a password. Type it once and Console doesn't keep it.",
-  "onb4ManualBody": "Type the address, the user and the password that the setup showed you when it finished."
+  "onb4ManualBody": "Type the address, the user and the password that the setup showed you when it finished.",
+  "appUpdateTitle": "App update",
+  "appUpdateCheck": "Check for app updates",
+  "appUpdateIntro": "Update Hermes Console RU on this phone from this fork’s GitHub Releases. Download and installation start only when you choose.",
+  "appUpdateInstalled": "Installed: {version}",
+  "@appUpdateInstalled": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateAvailable": "Available: {version}",
+  "@appUpdateAvailable": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateDownload": "Download verified APK",
+  "appUpdateInstall": "Open Android installer",
+  "appUpdateWorking": "Checking and verifying…",
+  "appUpdateProgress": "Downloading: {percent}%",
+  "@appUpdateProgress": {
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
+  },
+  "appUpdateCurrent": "No newer app version is available.",
+  "appUpdateNoRelease": "No published app release yet. Try again later.",
+  "appUpdateNoNotes": "No release notes provided.",
+  "appUpdateReady": "APK verified. Tap below to ask Android to install it.",
+  "appUpdateNetworkError": "Could not complete the request or save the APK. Check your connection and free space, then retry.",
+  "appUpdateRateLimit": "GitHub temporarily limited requests. Try again later.",
+  "appUpdateInvalidRelease": "The release has no compatible, verifiable RU APK. Wait for a corrected release.",
+  "appUpdateIntegrityError": "APK verification failed. Nothing was installed. Check for updates and download again.",
+  "appUpdateUnsupported": "This updater requires the direct full RU app on an ARM64 Android device.",
+  "appUpdatePermissionHelp": "Allow installs from Hermes Console RU in Android settings, return here and tap the installer button again. You can cancel at any time.",
+  "appUpdateAllowSource": "Open installation permission settings",
+  "appUpdateInstallerCancelled": "Installation was cancelled or declined. You can retry; Android only permits updates with a compatible signing identity.",
+  "appUpdateInstallerError": "Could not open the Android installer or its settings. Nothing was installed. Try again.",
+  "appUpdateInstallerFinished": "The installer has finished. Check the installed version.",
+  "appUpdateCancelled": "Check or download cancelled."
 }

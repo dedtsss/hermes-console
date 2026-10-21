@@ -9,6 +9,8 @@ import '../theme/app_theme.dart';
 import '../widgets/animated_hermes_logo.dart' show kConsoleIconAsset;
 import '../design/hermes_design.dart';
 import '../feedback/feedback_policy.dart';
+import '../config/flavor.dart';
+import 'app_update_screen.dart';
 
 /// Acerca de: identidad de la app, estado del proyecto, atribuciones y
 /// acceso a las licencias open source. Las licencias viven aquí a propósito
@@ -140,7 +142,7 @@ SOFTWARE.
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Console',
+                      'Hermes Console RU',
                       style: HermesType.display.copyWith(
                         color: colors.textPrimary,
                       ),
@@ -163,6 +165,22 @@ SOFTWARE.
             style: HermesType.text.copyWith(color: colors.textSecondary),
           ),
         ),
+        if (kHermesFlavor == 'full')
+          HermesListGroup(
+            children: [
+              HermesListRow(
+                icon: Icons.system_update_outlined,
+                title: s.appUpdateCheck,
+                subtitle: s.appUpdateIntro,
+                subtitleMaxLines: 3,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const AppUpdateScreen(),
+                  ),
+                ),
+              ),
+            ],
+          ),
         HermesSectionHeader(s.aboutSectionLegal),
         HermesListGroup(
           children: [

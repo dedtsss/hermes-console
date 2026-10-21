@@ -9439,5 +9439,50 @@
   "onb4HelpSafe": "Используется официальный установщик Hermes. Если Hermes уже установлен, установщик не затрагивает его, Telegram и шлюз. Это займёт несколько минут.",
   "onb4HelpVps": "Hermes работает на сервере в интернете? Установите Tailscale на сервер и на этот телефон, затем вставьте строку.",
   "onb4HadPassword": "У этого Hermes уже был пароль. Введите его один раз; Console его не сохранит.",
-  "onb4ManualBody": "Введите адрес, имя пользователя и пароль, которые были показаны по завершении установки."
+  "onb4ManualBody": "Введите адрес, имя пользователя и пароль, которые были показаны по завершении установки.",
+  "appUpdateTitle": "Обновление приложения",
+  "appUpdateCheck": "Проверить обновление приложения",
+  "appUpdateIntro": "Обновление Hermes Console RU на этом телефоне из GitHub Releases нашего форка. Скачивание и установка начинаются только по вашему действию.",
+  "appUpdateInstalled": "Установлено: {version}",
+  "@appUpdateInstalled": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateAvailable": "Доступно: {version}",
+  "@appUpdateAvailable": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateDownload": "Скачать проверенный APK",
+  "appUpdateInstall": "Открыть установщик Android",
+  "appUpdateWorking": "Проверка…",
+  "appUpdateProgress": "Скачивание: {percent}%",
+  "@appUpdateProgress": {
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
+  },
+  "appUpdateCurrent": "Более новой версии приложения нет.",
+  "appUpdateNoRelease": "Опубликованного релиза приложения пока нет. Проверьте позже.",
+  "appUpdateNoNotes": "Описание изменений отсутствует.",
+  "appUpdateReady": "APK проверен. Нажмите кнопку установки, чтобы передать его Android.",
+  "appUpdateNetworkError": "Не удалось завершить запрос или сохранить APK. Проверьте подключение и свободное место, затем повторите попытку.",
+  "appUpdateRateLimit": "GitHub временно ограничил запросы. Попробуйте позже.",
+  "appUpdateInvalidRelease": "В релизе нет совместимого RU APK с проверяемыми данными. Дождитесь исправленного релиза.",
+  "appUpdateIntegrityError": "APK не прошёл проверку. Ничего не установлено. Проверьте обновления и скачайте файл заново.",
+  "appUpdateUnsupported": "Обновлятору нужна RU-версия full для прямой установки на Android-устройстве ARM64.",
+  "appUpdatePermissionHelp": "Разрешите установку из Hermes Console RU в настройках Android, вернитесь сюда и снова нажмите кнопку установщика. В любой момент можно отменить действие.",
+  "appUpdateAllowSource": "Открыть разрешение на установку",
+  "appUpdateInstallerCancelled": "Установка отменена или отклонена. Можно повторить попытку; Android разрешит обновление только с совместимой подписью.",
+  "appUpdateInstallerError": "Не удалось открыть установщик Android или его настройки. Ничего не установлено. Попробуйте ещё раз.",
+  "appUpdateInstallerFinished": "Установщик завершил работу. Проверьте установленную версию.",
+  "appUpdateCancelled": "Проверка или скачивание отменены."
 }

@@ -5,6 +5,11 @@
 > are not authority for `io.github.dedtsss.hermesconsole`. Preserve the existing
 > RU signer/alias and follow [STABLE_UPSTREAM_SYNC.md](STABLE_UPSTREAM_SYNC.md)
 > for fork CI and the separate owner-approved release boundary.
+>
+> RU in-app update assets follow [APP_UPDATES.md](APP_UPDATES.md): fork-only
+> version/tag namespace, exact ARM64 APK name, manifest and SHA-256. The fork's
+> `full_release_policy.json` includes direct-only `REQUEST_INSTALL_PACKAGES`;
+> it is not a Play permission expectation. No signed RU release is asserted here.
 
 Hermes Console has three Android flavors built from one reviewed source commit.
 A flavor name is a security boundary, not a rename operation.

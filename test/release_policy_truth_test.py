@@ -73,7 +73,8 @@ class PolicyFollowsTheManifestTest(unittest.TestCase):
     def test_flavors_share_one_manifest_and_the_full_one_adds_nothing(self):
         self.assertFalse((ROOT / "android/app/src/play").exists())
         full = ET.parse(ROOT / "android/app/src/full/AndroidManifest.xml").getroot()
-        self.assertEqual([child.tag for child in full], [])
+        self.assertEqual(declared_permissions(full), {'android.permission.REQUEST_INSTALL_PACKAGES': None})
+        self.assertNotIn('android.permission.REQUEST_INSTALL_PACKAGES', declared_permissions(MAIN))
 
     def test_every_permission_the_app_declares_is_in_the_policy_with_the_same_limit(self):
         policy = self.policy_permissions()
@@ -84,7 +85,10 @@ class PolicyFollowsTheManifestTest(unittest.TestCase):
 
     def test_the_rest_comes_from_named_dependencies(self):
         policy = self.policy_permissions()
-        extra = set(policy) - set(declared_permissions(MAIN))
+        full = ET.parse(ROOT / "android/app/src/full/AndroidManifest.xml").getroot()
+        extra = set(policy) - set(declared_permissions(MAIN)) - set(declared_permissions(full))
+        for name, maximum in declared_permissions(full).items():
+            self.assertEqual(policy[name], maximum)
         self.assertEqual(extra, set(CONTRIBUTED_BY_DEPENDENCIES))
         self.assertEqual(policy["android.permission.BLUETOOTH"], 30)
 

@@ -66,6 +66,28 @@ index fd99311..8e8725a 100644
         minSdk = 24
         targetSdk = 36
         versionCode = flutter.versionCode
+diff --git a/android/app/src/full/AndroidManifest.xml b/android/app/src/full/AndroidManifest.xml
+index 45306d0..f279d3b 100644
+--- a/android/app/src/full/AndroidManifest.xml
++++ b/android/app/src/full/AndroidManifest.xml
+@@ -1,3 +1,16 @@
+ <!-- SPDX-License-Identifier: GPL-3.0-only -->
+ <!-- SPDX-FileCopyrightText: Copyright (c) 2026 XPeta Lab -->
+-<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
++<manifest xmlns:android="http://schemas.android.com/apk/res/android">
++    <!-- Direct/full self-updates only, always through the user's system installer. -->
++    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
++    <application>
++        <provider
++            android:name="com.hermesagent.hermes_android.HermesAppUpdateFileProvider"
++            android:authorities="${applicationId}.app_update_provider"
++            android:exported="false"
++            android:grantUriPermissions="true">
++            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
++                android:resource="@xml/app_update_paths" />
++        </provider>
++    </application>
++</manifest>
 diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
 index 9a7341e..d65dcc9 100644
 --- a/android/app/src/main/AndroidManifest.xml
@@ -128,6 +150,45 @@ index 65b485e..b5f204c 100644
          const val EXTRA_ACTION_ID = "rich_action_id"
          const val EXTRA_PAYLOAD = "rich_payload"
          const val EXTRA_NOTIFICATION_ID = "rich_notification_id"
+diff --git a/android/app/src/main/kotlin/com/hermesagent/hermes_android/MainActivity.kt b/android/app/src/main/kotlin/com/hermesagent/hermes_android/MainActivity.kt
+index 8cd6768..e03be3c 100644
+--- a/android/app/src/main/kotlin/com/hermesagent/hermes_android/MainActivity.kt
++++ b/android/app/src/main/kotlin/com/hermesagent/hermes_android/MainActivity.kt
+@@ -61,6 +61,7 @@ class MainActivity : FlutterFragmentActivity() {
+     private var fullDuplexCaptureHandler: HermesFullDuplexCaptureHandler? = null
+     private var documentPreviewHandler: HermesDocumentPreviewHandler? = null
+     private var clipboardImageHandler: HermesClipboardImageHandler? = null
++    private var appUpdateHandler: HermesAppUpdateHandler? = null
+     private var pendingShare: Map<String, Any?>? = null
+     private var pendingNewSessionLaunch: Map<String, Any?>? = null
+     private var pendingExternalDataSyncStop = false
+@@ -156,6 +157,11 @@ class MainActivity : FlutterFragmentActivity() {
+ 
+     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+         super.configureFlutterEngine(flutterEngine)
++        appUpdateHandler?.close()
++        appUpdateHandler = HermesAppUpdateHandler(this).also { handler ->
++            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HermesAppUpdateHandler.CHANNEL)
++                .setMethodCallHandler(handler)
++        }
+         DurableSecretWriter.attach(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+         clipboardImageHandler?.close()
+         clipboardImageHandler = HermesClipboardImageHandler(applicationContext).also { handler ->
+@@ -462,7 +468,14 @@ class MainActivity : FlutterFragmentActivity() {
+             }
+     }
+ 
++    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
++        super.onActivityResult(requestCode, resultCode, data)
++        appUpdateHandler?.onActivityResult(requestCode, resultCode)
++    }
++
+     override fun onDestroy() {
++        appUpdateHandler?.close()
++        appUpdateHandler = null
+         richNotificationsChannel?.let { HermesRichNotifications.detach(it) }
+         richNotificationsChannel = null
+         if (externalDataSyncStopReceiverRegistered) {
 diff --git a/android/app/src/main/kotlin/com/hermesagent/hermes_android/NewSessionLaunchContract.kt b/android/app/src/main/kotlin/com/hermesagent/hermes_android/NewSessionLaunchContract.kt
 index 014ae74..425ee12 100644
 --- a/android/app/src/main/kotlin/com/hermesagent/hermes_android/NewSessionLaunchContract.kt
@@ -212,11 +273,39 @@ index 3b759d3..ff1f933 100644
 +    <string name="app_name_qa">Hermes Console RU QA</string>
 +    <string name="new_session_target_package" translatable="false">io.github.dedtsss.hermesconsole.qa</string>
  </resources>
+diff --git a/docs/PLAY_PERMISSIONS.md b/docs/PLAY_PERMISSIONS.md
+index 20ed170..ae03a15 100644
+--- a/docs/PLAY_PERMISSIONS.md
++++ b/docs/PLAY_PERMISSIONS.md
+@@ -3,7 +3,7 @@
+ Justification of each permission for Google Play review. The table is the
+ merged manifest of `1.2.15 (9540)`: the app's own
+ `android/app/src/main/AndroidManifest.xml` (shared by the `play` and `full`
+-flavors; `android/app/src/full/AndroidManifest.xml` declares nothing extra) plus
++flavors) plus
+ what its dependencies add. It is enforced as an exact set by
+ `tool/release/full_release_policy.json` (APKs: `inspect_public_apk.py`; any
+ manifest text, AAB included: `check_manifest_policy.py`) and by
+@@ -16,6 +16,14 @@ repeat the check on the exact AAB selected:
+ `java -jar bundletool.jar dump manifest --bundle=<aab> > manifest.xml` and then
+ `python3 tool/release/check_manifest_policy.py --manifest manifest.xml --pubspec pubspec.yaml`.
+ 
++RU fork exception: `full` additionally declares `REQUEST_INSTALL_PACKAGES`,
++solely for user-requested app updates through the system Package Installer.
++It grants no silent install, storage access or package enumeration. `play` and
++`qa` do not declare it. The fork's `full_release_policy.json` includes this
++direct-only permission and must not be used as a Play AAB expectation. The
++historical measurements above are not measurements of the new RU build;
++inspect the final signed APK. See [APP_UPDATES.md](APP_UPDATES.md).
++
+ ## Permissions of the Play build
+ 
+ | Permission | Used for | Justification |
 diff --git a/docs/RELEASE_DISTRIBUTION.md b/docs/RELEASE_DISTRIBUTION.md
-index 7f1e71d..683e142 100644
+index 7f1e71d..8ac2112 100644
 --- a/docs/RELEASE_DISTRIBUTION.md
 +++ b/docs/RELEASE_DISTRIBUTION.md
-@@ -1,5 +1,11 @@
+@@ -1,5 +1,16 @@
  # Release and distribution
  
 +> RU fork: this document and `tool/release/release_contract.json` describe the
@@ -224,10 +313,83 @@ index 7f1e71d..683e142 100644
 +> are not authority for `io.github.dedtsss.hermesconsole`. Preserve the existing
 +> RU signer/alias and follow [STABLE_UPSTREAM_SYNC.md](STABLE_UPSTREAM_SYNC.md)
 +> for fork CI and the separate owner-approved release boundary.
++>
++> RU in-app update assets follow [APP_UPDATES.md](APP_UPDATES.md): fork-only
++> version/tag namespace, exact ARM64 APK name, manifest and SHA-256. The fork's
++> `full_release_policy.json` includes direct-only `REQUEST_INSTALL_PACKAGES`;
++> it is not a Play permission expectation. No signed RU release is asserted here.
 +
  Hermes Console has three Android flavors built from one reviewed source commit.
  A flavor name is a security boundary, not a rename operation.
  
+diff --git a/docs/SECURITY_POLICY.md b/docs/SECURITY_POLICY.md
+index 62bcfea..e9b55f0 100644
+--- a/docs/SECURITY_POLICY.md
++++ b/docs/SECURITY_POLICY.md
+@@ -346,6 +346,18 @@ Esto puede ser logueado por proxies, firewalls y herramientas de debug.
+ 
+ ## Release y distribución
+ 
++### RU direct application updates
++
++The RU `full` build alone requests `REQUEST_INSTALL_PACKAGES`. About → Check
++for app updates reads only the fork's public GitHub latest release. Download
++and installation each require a user action; there is no silent install or
++background download. The release manifest, GitHub asset digests, bounded APK
++download and Android package/version checks fail closed. A dedicated,
++non-exported FileProvider grants temporary read access only to the update cache
++subdirectory. Android's installer enforces signing compatibility. No storage or
++package-enumeration permission is added. Full contract and limitations:
++[APP_UPDATES.md](APP_UPDATES.md). This is separate from server-side Hermes updates.
++
+ - Las entregas de Google Play usan la upload key de XPeta Lab y Play App
+   Signing. Keystore, credenciales y copias de seguridad permanecen fuera del
+   repo.
+diff --git a/lib/core/screens/about_screen.dart b/lib/core/screens/about_screen.dart
+index 1c14ffa..b44a93f 100644
+--- a/lib/core/screens/about_screen.dart
++++ b/lib/core/screens/about_screen.dart
+@@ -9,6 +9,8 @@ import '../theme/app_theme.dart';
+ import '../widgets/animated_hermes_logo.dart' show kConsoleIconAsset;
+ import '../design/hermes_design.dart';
+ import '../feedback/feedback_policy.dart';
++import '../config/flavor.dart';
++import 'app_update_screen.dart';
+ 
+ /// Acerca de: identidad de la app, estado del proyecto, atribuciones y
+ /// acceso a las licencias open source. Las licencias viven aquí a propósito
+@@ -140,7 +142,7 @@ SOFTWARE.
+                   crossAxisAlignment: CrossAxisAlignment.start,
+                   children: [
+                     Text(
+-                      'Console',
++                      'Hermes Console RU',
+                       style: HermesType.display.copyWith(
+                         color: colors.textPrimary,
+                       ),
+@@ -163,6 +165,22 @@ SOFTWARE.
+             style: HermesType.text.copyWith(color: colors.textSecondary),
+           ),
+         ),
++        if (kHermesFlavor == 'full')
++          HermesListGroup(
++            children: [
++              HermesListRow(
++                icon: Icons.system_update_outlined,
++                title: s.appUpdateCheck,
++                subtitle: s.appUpdateIntro,
++                subtitleMaxLines: 3,
++                onTap: () => Navigator.of(context).push(
++                  MaterialPageRoute<void>(
++                    builder: (_) => const AppUpdateScreen(),
++                  ),
++                ),
++              ),
++            ],
++          ),
+         HermesSectionHeader(s.aboutSectionLegal),
+         HermesListGroup(
+           children: [
 diff --git a/lib/core/services/install_source.dart b/lib/core/services/install_source.dart
 index 5ce9e16..7225daf 100644
 --- a/lib/core/services/install_source.dart
@@ -301,6 +463,118 @@ index 18788d6..dc6b857 100644
                  showChevron: false,
                  onTap: () => launchUrl(
                    Uri.parse(InstallSourceInfo.updateUrl(source)),
+diff --git a/lib/l10n/app_en.arb b/lib/l10n/app_en.arb
+index 52c1f71..1386e0f 100644
+--- a/lib/l10n/app_en.arb
++++ b/lib/l10n/app_en.arb
+@@ -6957,5 +6957,50 @@
+   "onb4HelpSafe": "It uses the official Hermes installer. If you already have Hermes, it doesn't touch it, nor Telegram or the Gateway. It takes a few minutes.",
+   "onb4HelpVps": "Hermes on an internet server? Install Tailscale on the server and on this phone, then paste the line.",
+   "onb4HadPassword": "This Hermes already had a password. Type it once and Console doesn't keep it.",
+-  "onb4ManualBody": "Type the address, the user and the password that the setup showed you when it finished."
++  "onb4ManualBody": "Type the address, the user and the password that the setup showed you when it finished.",
++  "appUpdateTitle": "App update",
++  "appUpdateCheck": "Check for app updates",
++  "appUpdateIntro": "Update Hermes Console RU on this phone from this fork’s GitHub Releases. Download and installation start only when you choose.",
++  "appUpdateInstalled": "Installed: {version}",
++  "@appUpdateInstalled": {
++    "placeholders": {
++      "version": {
++        "type": "String"
++      }
++    }
++  },
++  "appUpdateAvailable": "Available: {version}",
++  "@appUpdateAvailable": {
++    "placeholders": {
++      "version": {
++        "type": "String"
++      }
++    }
++  },
++  "appUpdateDownload": "Download verified APK",
++  "appUpdateInstall": "Open Android installer",
++  "appUpdateWorking": "Checking and verifying…",
++  "appUpdateProgress": "Downloading: {percent}%",
++  "@appUpdateProgress": {
++    "placeholders": {
++      "percent": {
++        "type": "int"
++      }
++    }
++  },
++  "appUpdateCurrent": "No newer app version is available.",
++  "appUpdateNoRelease": "No published app release yet. Try again later.",
++  "appUpdateNoNotes": "No release notes provided.",
++  "appUpdateReady": "APK verified. Tap below to ask Android to install it.",
++  "appUpdateNetworkError": "Could not complete the request or save the APK. Check your connection and free space, then retry.",
++  "appUpdateRateLimit": "GitHub temporarily limited requests. Try again later.",
++  "appUpdateInvalidRelease": "The release has no compatible, verifiable RU APK. Wait for a corrected release.",
++  "appUpdateIntegrityError": "APK verification failed. Nothing was installed. Check for updates and download again.",
++  "appUpdateUnsupported": "This updater requires the direct full RU app on an ARM64 Android device.",
++  "appUpdatePermissionHelp": "Allow installs from Hermes Console RU in Android settings, return here and tap the installer button again. You can cancel at any time.",
++  "appUpdateAllowSource": "Open installation permission settings",
++  "appUpdateInstallerCancelled": "Installation was cancelled or declined. You can retry; Android only permits updates with a compatible signing identity.",
++  "appUpdateInstallerError": "Could not open the Android installer or its settings. Nothing was installed. Try again.",
++  "appUpdateInstallerFinished": "The installer has finished. Check the installed version.",
++  "appUpdateCancelled": "Check or download cancelled."
+ }
+diff --git a/lib/l10n/app_es.arb b/lib/l10n/app_es.arb
+index a552261..ae7ea69 100644
+--- a/lib/l10n/app_es.arb
++++ b/lib/l10n/app_es.arb
+@@ -8835,5 +8835,50 @@
+   "onb4HelpSafe": "Usa el instalador oficial de Hermes. Si ya tienes Hermes, no lo toca, y tampoco Telegram ni el Gateway. Tarda unos minutos.",
+   "onb4HelpVps": "¿Hermes en un servidor de internet? Instala Tailscale en el servidor y en este móvil, y después pega la línea.",
+   "onb4HadPassword": "Este Hermes ya tenía contraseña. Escríbela una vez y Console no la guarda.",
+-  "onb4ManualBody": "Escribe la dirección, el usuario y la contraseña que te mostró la instalación al terminar."
++  "onb4ManualBody": "Escribe la dirección, el usuario y la contraseña que te mostró la instalación al terminar.",
++  "appUpdateTitle": "Actualización de la aplicación",
++  "appUpdateCheck": "Buscar actualizaciones de la aplicación",
++  "appUpdateIntro": "Actualiza Hermes Console RU en este móvil desde los Releases de este fork en GitHub. La descarga y la instalación solo comienzan cuando tú lo eliges.",
++  "appUpdateInstalled": "Instalada: {version}",
++  "@appUpdateInstalled": {
++    "placeholders": {
++      "version": {
++        "type": "String"
++      }
++    }
++  },
++  "appUpdateAvailable": "Disponible: {version}",
++  "@appUpdateAvailable": {
++    "placeholders": {
++      "version": {
++        "type": "String"
++      }
++    }
++  },
++  "appUpdateDownload": "Descargar APK verificado",
++  "appUpdateInstall": "Abrir el instalador de Android",
++  "appUpdateWorking": "Comprobando y verificando…",
++  "appUpdateProgress": "Descargando: {percent}%",
++  "@appUpdateProgress": {
++    "placeholders": {
++      "percent": {
++        "type": "int"
++      }
++    }
++  },
++  "appUpdateCurrent": "No hay una versión más reciente de la aplicación.",
++  "appUpdateNoRelease": "Todavía no hay una versión publicada. Vuelve a intentarlo más tarde.",
++  "appUpdateNoNotes": "No se han incluido notas de la versión.",
++  "appUpdateReady": "APK verificado. Pulsa abajo para pedir a Android que lo instale.",
++  "appUpdateNetworkError": "No se pudo completar la solicitud o guardar el APK. Revisa la conexión y el espacio libre y vuelve a intentarlo.",
++  "appUpdateRateLimit": "GitHub ha limitado temporalmente las solicitudes. Inténtalo más tarde.",
++  "appUpdateInvalidRelease": "La versión no incluye un APK RU compatible y verificable. Espera a una versión corregida.",
++  "appUpdateIntegrityError": "La verificación del APK ha fallado. No se ha instalado nada. Busca actualizaciones y vuelve a descargarlo.",
++  "appUpdateUnsupported": "Este actualizador requiere la aplicación RU directa full en un dispositivo Android ARM64.",
++  "appUpdatePermissionHelp": "Permite instalaciones desde Hermes Console RU en los ajustes de Android, vuelve aquí y pulsa de nuevo el botón del instalador. Puedes cancelar en cualquier momento.",
++  "appUpdateAllowSource": "Abrir ajustes del permiso de instalación",
++  "appUpdateInstallerCancelled": "La instalación se ha cancelado o rechazado. Puedes reintentarlo; Android solo permite actualizar con una firma compatible.",
++  "appUpdateInstallerError": "No se pudo abrir el instalador de Android o sus ajustes. No se ha instalado nada. Inténtalo de nuevo.",
++  "appUpdateInstallerFinished": "El instalador ha terminado. Comprueba la versión instalada.",
++  "appUpdateCancelled": "Comprobación o descarga cancelada."
+ }
 diff --git a/lib/main.dart b/lib/main.dart
 index e651738..27644bb 100644
 --- a/lib/main.dart
@@ -338,6 +612,19 @@ index e651738..27644bb 100644
                  return const Locale('en');
                },
                theme: AppFonts.applyToTheme(activeTheme, AppFonts.byId(font)),
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 3db2020..13027b2 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -1,7 +1,7 @@
+ name: hermes_android
+ description: "Hermes Agent — chat with your Hermes Gateway API Server over LAN. SSE streaming, Bearer auth, session management."
+ publish_to: 'none'
+-version: 1.3.0+9630
++version: 1.3.0-ru.1+9631
+ 
+ environment:
+   sdk: ^3.12.0
 diff --git a/test/design/install_source_test.dart b/test/design/install_source_test.dart
 index 74803d8..0f531a3 100644
 --- a/test/design/install_source_test.dart
@@ -492,3 +779,41 @@ index f01b497..14a9d11 100644
      final shortcut = File(
        'android/app/src/main/res/xml/shortcuts.xml',
      ).readAsStringSync();
+diff --git a/test/release_policy_truth_test.py b/test/release_policy_truth_test.py
+index c9385f4..7699487 100644
+--- a/test/release_policy_truth_test.py
++++ b/test/release_policy_truth_test.py
+@@ -73,7 +73,8 @@ class PolicyFollowsTheManifestTest(unittest.TestCase):
+     def test_flavors_share_one_manifest_and_the_full_one_adds_nothing(self):
+         self.assertFalse((ROOT / "android/app/src/play").exists())
+         full = ET.parse(ROOT / "android/app/src/full/AndroidManifest.xml").getroot()
+-        self.assertEqual([child.tag for child in full], [])
++        self.assertEqual(declared_permissions(full), {'android.permission.REQUEST_INSTALL_PACKAGES': None})
++        self.assertNotIn('android.permission.REQUEST_INSTALL_PACKAGES', declared_permissions(MAIN))
+ 
+     def test_every_permission_the_app_declares_is_in_the_policy_with_the_same_limit(self):
+         policy = self.policy_permissions()
+@@ -84,7 +85,10 @@ class PolicyFollowsTheManifestTest(unittest.TestCase):
+ 
+     def test_the_rest_comes_from_named_dependencies(self):
+         policy = self.policy_permissions()
+-        extra = set(policy) - set(declared_permissions(MAIN))
++        full = ET.parse(ROOT / "android/app/src/full/AndroidManifest.xml").getroot()
++        extra = set(policy) - set(declared_permissions(MAIN)) - set(declared_permissions(full))
++        for name, maximum in declared_permissions(full).items():
++            self.assertEqual(policy[name], maximum)
+         self.assertEqual(extra, set(CONTRIBUTED_BY_DEPENDENCIES))
+         self.assertEqual(policy["android.permission.BLUETOOTH"], 30)
+ 
+diff --git a/tool/release/full_release_policy.json b/tool/release/full_release_policy.json
+index eaa4140..7602111 100644
+--- a/tool/release/full_release_policy.json
++++ b/tool/release/full_release_policy.json
+@@ -16,6 +16,7 @@
+     {"name": "android.permission.POST_PROMOTED_NOTIFICATIONS"},
+     {"name": "android.permission.RECEIVE_BOOT_COMPLETED"},
+     {"name": "android.permission.RECORD_AUDIO"},
++    {"name": "android.permission.REQUEST_INSTALL_PACKAGES"},
+     {"name": "android.permission.USE_BIOMETRIC"},
+     {"name": "android.permission.USE_FINGERPRINT"},
+     {"name": "android.permission.VIBRATE"},

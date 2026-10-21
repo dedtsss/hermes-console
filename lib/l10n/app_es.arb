@@ -8835,5 +8835,50 @@
   "onb4HelpSafe": "Usa el instalador oficial de Hermes. Si ya tienes Hermes, no lo toca, y tampoco Telegram ni el Gateway. Tarda unos minutos.",
   "onb4HelpVps": "¿Hermes en un servidor de internet? Instala Tailscale en el servidor y en este móvil, y después pega la línea.",
   "onb4HadPassword": "Este Hermes ya tenía contraseña. Escríbela una vez y Console no la guarda.",
-  "onb4ManualBody": "Escribe la dirección, el usuario y la contraseña que te mostró la instalación al terminar."
+  "onb4ManualBody": "Escribe la dirección, el usuario y la contraseña que te mostró la instalación al terminar.",
+  "appUpdateTitle": "Actualización de la aplicación",
+  "appUpdateCheck": "Buscar actualizaciones de la aplicación",
+  "appUpdateIntro": "Actualiza Hermes Console RU en este móvil desde los Releases de este fork en GitHub. La descarga y la instalación solo comienzan cuando tú lo eliges.",
+  "appUpdateInstalled": "Instalada: {version}",
+  "@appUpdateInstalled": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateAvailable": "Disponible: {version}",
+  "@appUpdateAvailable": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateDownload": "Descargar APK verificado",
+  "appUpdateInstall": "Abrir el instalador de Android",
+  "appUpdateWorking": "Comprobando y verificando…",
+  "appUpdateProgress": "Descargando: {percent}%",
+  "@appUpdateProgress": {
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
+  },
+  "appUpdateCurrent": "No hay una versión más reciente de la aplicación.",
+  "appUpdateNoRelease": "Todavía no hay una versión publicada. Vuelve a intentarlo más tarde.",
+  "appUpdateNoNotes": "No se han incluido notas de la versión.",
+  "appUpdateReady": "APK verificado. Pulsa abajo para pedir a Android que lo instale.",
+  "appUpdateNetworkError": "No se pudo completar la solicitud o guardar el APK. Revisa la conexión y el espacio libre y vuelve a intentarlo.",
+  "appUpdateRateLimit": "GitHub ha limitado temporalmente las solicitudes. Inténtalo más tarde.",
+  "appUpdateInvalidRelease": "La versión no incluye un APK RU compatible y verificable. Espera a una versión corregida.",
+  "appUpdateIntegrityError": "La verificación del APK ha fallado. No se ha instalado nada. Busca actualizaciones y vuelve a descargarlo.",
+  "appUpdateUnsupported": "Este actualizador requiere la aplicación RU directa full en un dispositivo Android ARM64.",
+  "appUpdatePermissionHelp": "Permite instalaciones desde Hermes Console RU en los ajustes de Android, vuelve aquí y pulsa de nuevo el botón del instalador. Puedes cancelar en cualquier momento.",
+  "appUpdateAllowSource": "Abrir ajustes del permiso de instalación",
+  "appUpdateInstallerCancelled": "La instalación se ha cancelado o rechazado. Puedes reintentarlo; Android solo permite actualizar con una firma compatible.",
+  "appUpdateInstallerError": "No se pudo abrir el instalador de Android o sus ajustes. No se ha instalado nada. Inténtalo de nuevo.",
+  "appUpdateInstallerFinished": "El instalador ha terminado. Comprueba la versión instalada.",
+  "appUpdateCancelled": "Comprobación o descarga cancelada."
 }

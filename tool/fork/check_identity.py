@@ -34,7 +34,7 @@ def check(root=ROOT):
     main = (root / 'lib/main.dart').read_text()
     assert "AppLocaleOption('ru', 'Русский', Locale('ru'))" in main
     assert "if (locale?.languageCode == 'ru') return const Locale('ru');" in main
-    version = re.search(r'^version: \d+\.\d+\.(\d+)\+(\d+)$', (root / 'pubspec.yaml').read_text(), re.M)
+    version = re.search(r'^version: \d+\.\d+\.(\d+)(?:-ru\.[1-9][0-9]*)?\+(\d+)$', (root / 'pubspec.yaml').read_text(), re.M)
     assert version and int(version[2]) > 4964, 'version code must update the established RU install'
     # Upstream release policy has its own signer/package anchors. It stays
     # upstream reference material, never authority to sign or publish RU.

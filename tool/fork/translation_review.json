@@ -851,6 +851,102 @@
     "source": "d0e028cfeebaf234a3bba0aa06d2f0fb4d1169fb2d894b91480c6c6d95468af0",
     "translation": "2ffcbcc1bab18ae575b1da5d115b88f2e8d69de3da54dcfafb582fcf1c45ab0e"
   },
+  "arb/appUpdateAllowSource": {
+    "source": "e2b855df9a0c204d9f75f77a7a57e2d1519ef2eba706fe7ea0b1853a6c609d9e",
+    "translation": "04666da0958c6b16aa8db2a7f5f7052d83a09c89ec4ca1acceae84fdff18e7ed"
+  },
+  "arb/appUpdateAvailable": {
+    "source": "a6aa9a19a1fcfaa0f83f69c46ab711fe58932fff781e003a9e3939d233763849",
+    "translation": "a11933083729eb70bacaca5dbb04da81cc09b3ff0c60681f50ca825459b1a92a"
+  },
+  "arb/appUpdateCancelled": {
+    "source": "99e56da955440db6dfb8b267a7396d4e09f2ba0343e218dd4d0c518d7fde1fb7",
+    "translation": "b9a0e6d73058f562484c209b8eb7806269fc08eedb5b1e8d82211b07d90e2027"
+  },
+  "arb/appUpdateCheck": {
+    "source": "4b8b9f1184c15318a142068bbdf73d28b7c0ff2949eacec7cbca85b36363f764",
+    "translation": "1395fe2c7bfc687b99dab2d5ffd98e9db1cc7a2af1a54697afb2885416ac3e20"
+  },
+  "arb/appUpdateCurrent": {
+    "source": "757e3cf6e35d60cee3eea59722cc7e86ee21828fe24b51895fff356de7100a22",
+    "translation": "16785873e8cdf8d81f7cc7fab7cc9e4dd3b439f6fa79c59bb7b93171aa75a931"
+  },
+  "arb/appUpdateDownload": {
+    "source": "34a1aab551550a81af42e274b68e5d08689c995251d368241a3f6654f5ca7b58",
+    "translation": "693bfb20a88be1b505f3f919340d79b898c702a23177f4f65bd77ce9d20c64e8"
+  },
+  "arb/appUpdateInstall": {
+    "source": "bdd2f31e039da48343f8392f457f9c5b450c4d1e7eca2a4ee3c2178e3f0f7794",
+    "translation": "65ee551bd648b532afe93443d1141db972f7fd2430d37f2f499927e943c769ab"
+  },
+  "arb/appUpdateInstalled": {
+    "source": "a1d2be034640cedbdf04274f85cd6de473fc8aa5663a9e7488ff82222cfa497a",
+    "translation": "9f59889b64a05f83e8f57af16a6e67e8a1c4339dc09da2dee6e015da242a6874"
+  },
+  "arb/appUpdateInstallerCancelled": {
+    "source": "cc343d52cd1c179771923ef672e688f978e8baf469b67c511e97f03933a3ff02",
+    "translation": "84beab85bf0780c41aa7027852dd35f96d27990d9585e7156525ae3e13bed1fd"
+  },
+  "arb/appUpdateInstallerError": {
+    "source": "b576801c6de7c052d2608a1ca4886ca1f1f844a54f81d25dbba7d96a24204819",
+    "translation": "d87f3c12d1472462850c0e8b6afe9ec9632bd1fe73f894f973d7c34e7eb2c4ea"
+  },
+  "arb/appUpdateInstallerFinished": {
+    "source": "bbdd4e44e0ba3aaaa40400e73d8abba49a20efff07c6522e37989b823f734c05",
+    "translation": "a7be1a3f8d6892855c4ab5ae2dabb49413f0e09e9bdcdc4626fe4878d36f5e7d"
+  },
+  "arb/appUpdateIntegrityError": {
+    "source": "f5581a74e906475e232c2709c4d8643464ecf62e397c58405959c6c9f5761bf5",
+    "translation": "6a3e53814cfab26a2eea591b02112cdd4f9a01566e9bdfb0dc8e307b01160843"
+  },
+  "arb/appUpdateIntro": {
+    "source": "38ccbaa172ef2d45ad5c6f35ce585dbf6bcebe67137cf47b91941cdcbffd2e81",
+    "translation": "2eaaea34219b8dc915ca58c4a6b0c460e9e97d49a682b3883b29406a1afa67ee"
+  },
+  "arb/appUpdateInvalidRelease": {
+    "source": "0c2a4389cd695a01101081ce7c1108278cf7acc1a4e0f135ff394b393b2e9ada",
+    "translation": "64aa6108710594407811320988ae8bf7116b119053293fbe002c17a9dee5de2e"
+  },
+  "arb/appUpdateNetworkError": {
+    "source": "3969fbf5848512c65795781b53052f7e5501615083bb80394faa1eaf37b5a2fc",
+    "translation": "b065ef835e3d1de1406c9e302d548ec8f43f19ac10e2fdadb82578a08ae77c8e"
+  },
+  "arb/appUpdateNoNotes": {
+    "source": "9d62307957558fcd1c5949d8a9c94b17c744da5334fd9c9c0e446385e93accd7",
+    "translation": "39f7ea63b2a84fe4c0d2c54b7e74aa7c0763667fe61b87aac3ea88d8ac343566"
+  },
+  "arb/appUpdateNoRelease": {
+    "source": "adf72bd0b0a141fb46db9e1db4e5e5c10b7e35c7266cd5529b3922fb3d699a82",
+    "translation": "0208553cc8bd8c0d5fda8410bfa55edf2d8df72d408b3bccf7c03adf049054e5"
+  },
+  "arb/appUpdatePermissionHelp": {
+    "source": "15b45367dcac0384603af39b2a281c69a155fbfc876475732b21c72c74c4b05a",
+    "translation": "8e4e21b4739364e11e9c826aaab56cd4f3f00b070d15761f00ea44726ccb5308"
+  },
+  "arb/appUpdateProgress": {
+    "source": "ef1f7ba75efef6ffa38f76a9ad92da98942fb0a3ffa4b7cb7dfb04bac574c9da",
+    "translation": "c3f1c3d0bd3b36c270053b16a1af58aba133721e13712782db07a8efb779da69"
+  },
+  "arb/appUpdateRateLimit": {
+    "source": "7922a378728e7ddd64dd66108e673c7358d368fdaecbfee561a1c0aa134f2679",
+    "translation": "efa31e611fa189bb0bf0795c58732109221bea9410519d78d6015a8dda55aa1d"
+  },
+  "arb/appUpdateReady": {
+    "source": "4f4d0fc3f904e4bca1bb2a62ec2bc7287076ce8551032518196b20c634f8cf34",
+    "translation": "498e58b6405b3046104d550d4b041e861d47f1e47d0fb3e075900bcf80132a23"
+  },
+  "arb/appUpdateTitle": {
+    "source": "cfdfa894934b1c03e8f4d9725128cde66a9c9664850cbc2dc8ae49a37f57d459",
+    "translation": "d8624978b34e57deec91b3161d5f063403af077a0185bf2b621258206e21af6a"
+  },
+  "arb/appUpdateUnsupported": {
+    "source": "aac119656469fefc67722172c707388261aa14904afca768f82816f808403130",
+    "translation": "d2082d6cadd2d8d7c7f8b69850b4f6423030de93c3348ab1782c0393df1244d5"
+  },
+  "arb/appUpdateWorking": {
+    "source": "6055f8b9375345e0df9abbe616cdd23d19294fbc6668841ed9ad345c0d69db6d",
+    "translation": "f298779ee7fe95ec9712337330d9b8615e5ac48243c1bb3d9d56752ba5ecd0e0"
+  },
   "arb/approvalAllow": {
     "source": "a66503d019bcce26438d348c64d7f1197a47381d7c8d809c4af0032457473c4a",
     "translation": "dd6ccba3d07077d1fd9b8edf6d459720bf47e4ea5904ec3aaefc7f3a3d3e8634"

@@ -16,6 +16,7 @@
     {"name": "android.permission.POST_PROMOTED_NOTIFICATIONS"},
     {"name": "android.permission.RECEIVE_BOOT_COMPLETED"},
     {"name": "android.permission.RECORD_AUDIO"},
+    {"name": "android.permission.REQUEST_INSTALL_PACKAGES"},
     {"name": "android.permission.USE_BIOMETRIC"},
     {"name": "android.permission.USE_FINGERPRINT"},
     {"name": "android.permission.VIBRATE"},
