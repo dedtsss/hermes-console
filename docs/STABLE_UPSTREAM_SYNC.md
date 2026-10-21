@@ -124,10 +124,13 @@ changes fail. Stage individual paths, never `git add -A`.
 
 Use lightweight source checks locally. `pr-quality.yml` remains authoritative
 for Flutter analysis, all Dart/Python tests, localization generation, SBOM
-regeneration, licensing and secret scans. `fork-android-check.yml` compiles the
-`full` flavor in debug mode to verify Android compatibility, reads no signing
-secrets and uploads no artifact. Debug output is temporary CI build evidence,
-not an installable release delivery. The existing real-gateway lane remains.
+regeneration, licensing and secret scans. `fork-android-check.yml` builds one
+unsigned, non-debuggable `fullRelease` ARM64 APK, verifies package/version/ABI
+libraries/signature state, then uploads only that short-lived candidate under
+a run-unique artifact name. It reads no signing secrets and leaves the
+permanent release-signing guard intact. This candidate is reserved for the
+owner-controlled signing route; it is not a release asset. The existing
+real-gateway lane remains.
 
 `source_sbom.py` can rebind the stable source SBOM fingerprints only when every
 generator input matches the pinned upstream tree except Android identity/comments

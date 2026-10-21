@@ -302,7 +302,7 @@ index 20ed170..ae03a15 100644
  
  | Permission | Used for | Justification |
 diff --git a/docs/RELEASE_DISTRIBUTION.md b/docs/RELEASE_DISTRIBUTION.md
-index 7f1e71d..8ac2112 100644
+index 7f1e71d..401a36a 100644
 --- a/docs/RELEASE_DISTRIBUTION.md
 +++ b/docs/RELEASE_DISTRIBUTION.md
 @@ -1,5 +1,16 @@
@@ -322,6 +322,32 @@ index 7f1e71d..8ac2112 100644
  Hermes Console has three Android flavors built from one reviewed source commit.
  A flavor name is a security boundary, not a rename operation.
  
+@@ -20,15 +31,21 @@ Play inspection-tool digests, and the GitHub CLI verifier digest.
+ ## Public-repository CI is verification-only
+ 
+ GitHub Actions artifacts are public-repository downloads for readers of this
+-repository. They must never carry a signed APK, AAB, keystore, mapping, private
+-comparison result, or pre-publication candidate. Cross-job artifact transfer is
+-therefore prohibited for release candidates.
++repository. The sole permitted APK artifact is the unsigned ARM64 `fullRelease`
++candidate produced by `.github/workflows/fork-android-check.yml` for the
++owner-controlled signing route described in `docs/APP_UPDATES.md`. It contains
++only that APK, expires after seven days, and is verified as unsigned and
++non-debuggable before upload. No other workflow may upload artifacts. Signed
++APKs, AABs, keystores, mappings, private comparison results, QA/debug/profile
++or Play binaries, and release evidence remain prohibited as Actions artifacts.
++Cross-job artifact transfer remains prohibited for release candidates.
+ 
+ `.github/workflows/build-apk.yml` is CI verification only. It checks the exact
+ tag/commit, authorized forge actor, lock, checked-in SBOMs, licenses, scanners,
+ analysis and tests. It has read-only repository permissions, receives no signing
+ secret, builds no signed candidate, creates no attestation, and invokes no
+-artifact upload/download action. Successful CI is not a build, staging,
++artifact upload/download action. The separate RU source workflow can produce
++only the explicitly permitted unsigned ARM64 candidate. Successful CI is not a build, staging,
+ publication or Play upload result.
+ 
+ Sensitive building, comparison and staging stay on one owner-controlled machine
 diff --git a/docs/SECURITY_POLICY.md b/docs/SECURITY_POLICY.md
 index 62bcfea..e9b55f0 100644
 --- a/docs/SECURITY_POLICY.md
@@ -805,6 +831,58 @@ index c9385f4..7699487 100644
          self.assertEqual(extra, set(CONTRIBUTED_BY_DEPENDENCIES))
          self.assertEqual(policy["android.permission.BLUETOOTH"], 30)
  
+diff --git a/test/release_safety_gate_test.py b/test/release_safety_gate_test.py
+index d37e615..e2b2265 100644
+--- a/test/release_safety_gate_test.py
++++ b/test/release_safety_gate_test.py
+@@ -2197,10 +2197,12 @@ class WorkflowContractTest(unittest.TestCase):
+         self.assertIn('"--cert-identity"', command)
+         self.assertNotIn('"--signer-workflow"', command)
+ 
+-    def test_distribution_policy_documents_private_local_staging_only(self):
++    def test_distribution_policy_allows_only_the_ru_unsigned_ci_candidate(self):
+         policy = (ROOT / "docs/RELEASE_DISTRIBUTION.md").read_text(encoding="utf-8")
+         self.assertIn("GitHub Actions artifacts are public-repository downloads", policy)
+-        self.assertIn("must never carry a signed APK, AAB", policy)
++        self.assertIn("The sole permitted APK artifact is the unsigned ARM64 `fullRelease`", policy)
++        self.assertIn("No other workflow may upload artifacts", policy)
++        self.assertIn("Signed\nAPKs, AABs, keystores, mappings", policy)
+         self.assertIn("owner-controlled local/private filesystem", policy)
+         self.assertIn("observed two-build byte identity", policy)
+         self.assertIn("not a general reproducible-build claim", policy)
+diff --git a/test/security_hardening_test.py b/test/security_hardening_test.py
+index 562af8d..b074875 100644
+--- a/test/security_hardening_test.py
++++ b/test/security_hardening_test.py
+@@ -206,6 +206,28 @@ class ReleaseWorkflowBoundaryTest(unittest.TestCase):
+         self.assertNotIn("contents: write", self.workflow)
+         self.assertNotIn("gh release", self.workflow)
+ 
++    def test_only_ru_android_ci_uploads_the_unsigned_arm64_candidate(self):
++        workflow_path = ROOT / ".github/workflows/fork-android-check.yml"
++        workflow = workflow_path.read_text(encoding="utf-8")
++        self.assertEqual(workflow.count("actions/upload-artifact@"), 1)
++        self.assertIn(
++            "path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk",
++            workflow,
++        )
++        self.assertIn(
++            "name: ru-fullrelease-arm64-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
++            workflow,
++        )
++        self.assertIn("Build fullRelease ARM64 candidate without a signer", workflow)
++        self.assertIn("Verify ARM64 candidate identity, libraries and unsigned release state", workflow)
++        self.assertNotIn("KEYSTORE_BASE64", workflow)
++        self.assertNotIn("key.properties", workflow)
++        workflow_dir = ROOT / ".github/workflows"
++        candidates = list(workflow_dir.glob("*.yml")) + list(workflow_dir.glob("*.yaml"))
++        for candidate in candidates:
++            if candidate != workflow_path:
++                self.assertNotIn("actions/upload-artifact", candidate.read_text(encoding="utf-8"))
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
 diff --git a/tool/release/full_release_policy.json b/tool/release/full_release_policy.json
 index eaa4140..7602111 100644
 --- a/tool/release/full_release_policy.json

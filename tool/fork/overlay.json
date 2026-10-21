@@ -31,6 +31,8 @@
     "test/l10n_catalog_parity_test.dart",
     "test/new_session_android_resources_test.dart",
     "test/release_policy_truth_test.py",
+    "test/release_safety_gate_test.py",
+    "test/security_hardening_test.py",
     "tool/release/full_release_policy.json"
   ],
   "local": [
