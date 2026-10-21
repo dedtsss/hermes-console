@@ -2197,10 +2197,12 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn('"--cert-identity"', command)
         self.assertNotIn('"--signer-workflow"', command)
 
-    def test_distribution_policy_documents_private_local_staging_only(self):
+    def test_distribution_policy_allows_only_the_ru_unsigned_ci_candidate(self):
         policy = (ROOT / "docs/RELEASE_DISTRIBUTION.md").read_text(encoding="utf-8")
         self.assertIn("GitHub Actions artifacts are public-repository downloads", policy)
-        self.assertIn("must never carry a signed APK, AAB", policy)
+        self.assertIn("The sole permitted APK artifact is the unsigned ARM64 `fullRelease`", policy)
+        self.assertIn("No other workflow may upload artifacts", policy)
+        self.assertIn("Signed\nAPKs, AABs, keystores, mappings", policy)
         self.assertIn("owner-controlled local/private filesystem", policy)
         self.assertIn("observed two-build byte identity", policy)
         self.assertIn("not a general reproducible-build claim", policy)

@@ -56,6 +56,21 @@ newness from a version string; the updater compares actual codes and rejects
 equal versions/downgrades. Manifest version name must equal the tag without
 `v` and the compiled APK version name.
 
+### GitHub Actions build candidate
+
+The `RU Android source build` workflow may expose one short-lived Actions
+artifact named `ru-fullrelease-arm64-<sha>-<run-id>-<attempt>` containing only
+`build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`. This is an unsigned,
+non-debuggable `fullRelease` ARM64 build candidate for the owner-controlled
+signing route; it is not a release asset and cannot pass the app updater's
+signature checks. The workflow verifies package, version, ABI libraries and
+absence of a signature before upload. It uses no signing secret and leaves the
+permanent Gradle release-signing guard intact. No other workflow may upload an
+artifact. The controller downloads the exact successful run artifact, signs
+the APK with the established RU JKS, then independently verifies the signed
+APK and creates the release manifest and checksums. Never reuse the unsigned
+candidate as a public asset.
+
 Both required assets must have GitHub API `digest: sha256:<64 lowercase hex>`
 and exact `browser_download_url` under this repository/tag. Manifest bytes are
 checked against its GitHub digest; APK bytes must match both the manifest hash

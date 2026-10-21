@@ -31,15 +31,21 @@ Play inspection-tool digests, and the GitHub CLI verifier digest.
 ## Public-repository CI is verification-only
 
 GitHub Actions artifacts are public-repository downloads for readers of this
-repository. They must never carry a signed APK, AAB, keystore, mapping, private
-comparison result, or pre-publication candidate. Cross-job artifact transfer is
-therefore prohibited for release candidates.
+repository. The sole permitted APK artifact is the unsigned ARM64 `fullRelease`
+candidate produced by `.github/workflows/fork-android-check.yml` for the
+owner-controlled signing route described in `docs/APP_UPDATES.md`. It contains
+only that APK, expires after seven days, and is verified as unsigned and
+non-debuggable before upload. No other workflow may upload artifacts. Signed
+APKs, AABs, keystores, mappings, private comparison results, QA/debug/profile
+or Play binaries, and release evidence remain prohibited as Actions artifacts.
+Cross-job artifact transfer remains prohibited for release candidates.
 
 `.github/workflows/build-apk.yml` is CI verification only. It checks the exact
 tag/commit, authorized forge actor, lock, checked-in SBOMs, licenses, scanners,
 analysis and tests. It has read-only repository permissions, receives no signing
 secret, builds no signed candidate, creates no attestation, and invokes no
-artifact upload/download action. Successful CI is not a build, staging,
+artifact upload/download action. The separate RU source workflow can produce
+only the explicitly permitted unsigned ARM64 candidate. Successful CI is not a build, staging,
 publication or Play upload result.
 
 Sensitive building, comparison and staging stay on one owner-controlled machine

@@ -206,6 +206,28 @@ class ReleaseWorkflowBoundaryTest(unittest.TestCase):
         self.assertNotIn("contents: write", self.workflow)
         self.assertNotIn("gh release", self.workflow)
 
+    def test_only_ru_android_ci_uploads_the_unsigned_arm64_candidate(self):
+        workflow_path = ROOT / ".github/workflows/fork-android-check.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("actions/upload-artifact@"), 1)
+        self.assertIn(
+            "path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk",
+            workflow,
+        )
+        self.assertIn(
+            "name: ru-fullrelease-arm64-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+            workflow,
+        )
+        self.assertIn("Build fullRelease ARM64 candidate without a signer", workflow)
+        self.assertIn("Verify ARM64 candidate identity, libraries and unsigned release state", workflow)
+        self.assertNotIn("KEYSTORE_BASE64", workflow)
+        self.assertNotIn("key.properties", workflow)
+        workflow_dir = ROOT / ".github/workflows"
+        candidates = list(workflow_dir.glob("*.yml")) + list(workflow_dir.glob("*.yaml"))
+        for candidate in candidates:
+            if candidate != workflow_path:
+                self.assertNotIn("actions/upload-artifact", candidate.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
