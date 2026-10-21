@@ -42,7 +42,6 @@
   "sAddressHint": "home-pc или вставленный адрес",
   "sScanNewCode": "Сканировать новый код",
   "sAdvanced": "Дополнительно",
-  "sChatPort": "Порт чата",
   "sDashboardPort": "Порт панели управления",
   "sEncrypted": "Зашифрованное подключение к чату",
   "sIconTerminal": "Терминал",
@@ -60,8 +59,6 @@
   "sRemove": "Удалить",
   "sChecking": "Проверяем подключение к чату и доступ к панели управления.",
   "sUnchecked": "Проверьте подключение, чтобы проверить чат и доступ к панели управления.",
-  "sChatKeyRejected": "Hermes отклонил ключ чата; вставьте правильный ключ или сканируйте новый код.",
-  "sWrongChatAddress": "По этому адресу Hermes не отвечает; проверьте адрес и порт чата.",
   "sDashboardUnreachable": "Чат работает, но панель управления недоступна; проверьте её адрес в дополнительных настройках.",
   "sCertificate": "Не удалось проверить зашифрованное подключение; проверьте сертификат на компьютере.",
   "sReady": "Подключение и вход в панель управления работают; ваш Hermes готов.",
@@ -71,12 +68,9 @@
   "sConnectionChanged": "Данные изменились во время проверки; проверьте подключение ещё раз.",
   "sPaste": "Вставить",
   "o2WelcomeTitle": "Подключитесь к своему Hermes",
-  "o2WelcomeBody": "Сканируйте код на экране компьютера.",
   "o2Scan": "Сканировать код",
   "o2Connect": "Подключиться",
-  "o2HaveLink": "У меня есть ссылка",
   "o2Manual": "Подключиться вручную",
-  "o2NoCode": "У меня нет кода",
   "o2ConfirmTitle": "Подключиться к {name}",
   "@o2ConfirmTitle": {
     "placeholders": {
@@ -91,7 +85,6 @@
   "o2Connecting": "Подключение к вашему Hermes",
   "o2InvalidCode": "Это не код Console; сканируйте код подключения.",
   "o2ClipboardFailed": "Не удалось прочитать ссылку; скопируйте её ещё раз и вставьте сюда.",
-  "o2KeyRejected": "Hermes отклонил этот ключ; получите новый код на компьютере.",
   "o2Unreachable": "Телефон не может подключиться к компьютеру; подключитесь к той же сети Wi-Fi или включите Tailscale и повторите попытку.",
   "o2ConnectionFailed": "Не удалось завершить подключение; проверьте сеть и повторите попытку.",
   "o2Duplicate": "Этот Hermes уже сохранён; откройте его подключение для проверки.",
@@ -104,12 +97,8 @@
   "o2SuccessBody": "Ваш Hermes готов к общению.",
   "o2ReadOnly": "Вы можете просматривать свой Hermes, но это подключение не разрешает изменения.",
   "o2GoHome": "На главную",
-  "o2HelpTitle": "Получите код на компьютере",
   "o2MacLinux": "Mac или Linux",
   "o2Windows": "Windows",
-  "o2AlreadyPrepared": "Я уже настроил этот компьютер",
-  "o2PrepareComputer": "Настроить этот компьютер",
-  "o2CodeVisible": "Я вижу код",
   "o2IssueTitle": "Не получилось",
   "o2DuplicateTitle": "Уже сохранено",
   "o2OtherShort": "Сканировать другой",
@@ -119,14 +108,12 @@
   "o2StepTerminal": "Откройте терминал",
   "o2StepPowerShell": "Откройте PowerShell",
   "o2StepPaste": "Вставьте эту строку и нажмите Enter",
-  "o2StepCode": "На экране появится код",
   "o2CheckFind": "Найти ваш Hermes",
   "o2CheckChat": "Войти в чат",
   "o2CheckDashboard": "Войти в панель управления",
   "o2SummaryChat": "Общение с Hermes",
   "o2SummaryDashboard": "Задачи, профили и память",
   "o2SummaryDashboardLater": "Далее вы войдёте в панель управления",
-  "o2KindTitle": "Где работает этот Hermes?",
   "o2KindHome": "Дома",
   "o2KindServer": "Сервер",
   "o2KindPrivate": "Частная сеть",
@@ -356,7 +343,6 @@
   "statusOffline": "не в сети",
   "statusWrongPassword": "неверный пароль",
   "statusLoginRequired": "требуется вход",
-  "statusKeyRejected": "ключ API отклонён",
   "statusRunning": "выполняется",
   "statusEnabled": "включено",
   "statusDisabled": "отключено",
@@ -1230,17 +1216,6 @@
   "cevAlways": "Всегда",
   "cevPermissionHeadline": "Hermes запрашивает разрешение",
   "cevRemember": "Запомнить",
-  "cevSendError": "Не удалось отправить: {error}",
-  "@cevSendError": {
-    "placeholders": {
-      "error": {
-        "type": "Object"
-      }
-    }
-  },
-  "cevApprovalResolved": "Подтверждение обработано",
-  "cevApprovalDenied": "отклонено",
-  "cevApprovalGranted": "подтверждено",
   "cevApprovalRequired": "Требуется подтверждение",
   "cevApprovalPending": "ожидает решения",
   "cevApprovalHistorical": "Подтверждение (историческое)",
@@ -1367,33 +1342,22 @@
     }
   },
   "ieGatewayUrlBeforeTest": "Перед проверкой введите адрес компьютера.",
-  "apiKeyHelpTitle": "Ключ API шлюза",
-  "apiKeyHelpBody1": "Это ключ API-сервера Hermes Agent (переменная API_SERVER_KEY). Это не ключ OpenAI или OpenRouter — они настраиваются непосредственно в шлюзе.",
-  "apiKeyHelpGatewayLabel": "На машине, где запущен шлюз:",
-  "apiKeyHelpBody2": "Если переменной нет, добавьте API_SERVER_KEY=<значение> в этот файл .env и перезапустите шлюз. Ключ хранится в зашифрованном виде в Android Keystore и передаётся только вашему шлюзу.",
-  "apiKeyHelpCopied": "команда скопирована",
-  "apiKeyHelpOk": "Понятно",
   "ieGatewayUrlRequired": "Введите адрес компьютера.",
-  "ieGatewayTokenRequired": "Вставьте ключ сервера или отсканируйте код.",
   "ieName": "Имя",
   "ieNote": "Примечание (необязательно)",
   "ieReadOnly": "Только чтение",
   "ieReadOnlySub": "Просмотр без внесения изменений",
   "ieGatewayUrl": "Адрес компьютера",
-  "ieGatewayToken": "Ключ сервера",
-  "ieGatewayTokenEmpty": "Новый ключ сервера (необязательно)",
   "ieDashboardUrl": "Отдельный адрес панели управления (необязательно)",
   "ieDashboardAuth": "Способ входа",
   "ieDashboardAuthAuto": "Сохранённые данные входа",
   "ieDashboardAuthSession": "Токен сессии",
   "ieDashboardAuthBasic": "Имя пользователя и пароль",
   "iePasswordEmpty": "Пароль панели управления (оставьте пустым, чтобы сохранить прежний)",
-  "ieSecGateway": "ШЛЮЗ",
   "ieSecDashboard": "ПАНЕЛЬ УПРАВЛЕНИЯ / АДМИНИСТРИРОВАНИЕ",
   "ieDiagCopied": "Диагностические данные скопированы (без токенов)",
   "ieNetworkNote": "Приложение использует системную сеть Android. Если вы используете VPN/Tailscale/WireGuard, включите его перед проверкой подключения.",
   "ieCapabilitiesDetected": "ОБНАРУЖЕННЫЕ ВОЗМОЖНОСТИ",
-  "ieDeclaredByCapabilities": "ЗАЯВЛЕНЫ ЧЕРЕЗ /v1/capabilities",
   "setTitle": "Настройки",
   "setSecurity": "Безопасность",
   "setSecuritySub": "Блокировка приложения, конфиденциальность и защита учётных данных",
@@ -1722,15 +1686,6 @@
   "permRevoke": "Отозвать",
   "permNoActivity": "Действий с разрешениями пока нет.",
   "runsNewRun": "Новый запуск",
-  "runsLaunchError": "Не удалось запустить: {error}",
-  "@runsLaunchError": {
-    "placeholders": {
-      "error": {
-        "type": "String"
-      }
-    }
-  },
-  "runsRefreshStates": "Обновить состояния",
   "runsEmpty": "Запусков пока нет",
   "runsEmptySub": "Запустите задачу для агента кнопкой «+»",
   "runsDelete": "Удалить",
@@ -1744,51 +1699,7 @@
     }
   },
   "runsCleared": "Список очищен",
-  "runsAgentTask": "Задача агента",
-  "runsApprovalRequested": "Запрошено подтверждение",
-  "runsAutoApproved": "Автоматически подтверждено · {reason}",
-  "@runsAutoApproved": {
-    "placeholders": {
-      "reason": {
-        "type": "String"
-      }
-    }
-  },
-  "runsAutoApproveError": "Не удалось подтвердить автоматически: {error}",
-  "@runsAutoApproveError": {
-    "placeholders": {
-      "error": {
-        "type": "String"
-      }
-    }
-  },
-  "runsAllowAlwaysThis": "Всегда разрешать это действие агента",
-  "runsApproveHighRisk": "Подтвердить действие с высоким риском",
-  "runsApproveAction": "Подтвердить действие агента",
-  "runsApprovalSent": "Подтверждение отправлено",
-  "runsResolveError": "Не удалось обработать подтверждение: {error}",
-  "@runsResolveError": {
-    "placeholders": {
-      "error": {
-        "type": "String"
-      }
-    }
-  },
-  "runsAllowAlwaysQ": "Разрешить всегда?",
-  "runsAllowAlwaysBody": "Сервер запомнит это решение, и агент сможет повторять это действие без запроса.",
-  "runsHighRiskWarn": "Высокий риск: этот шаблон похож на разрушительное действие. Не выбирайте «всегда», если не уверены.",
   "runsAllowAlways": "Разрешить всегда",
-  "runsStopError": "Не удалось остановить: {error}",
-  "@runsStopError": {
-    "placeholders": {
-      "error": {
-        "type": "String"
-      }
-    }
-  },
-  "runsStop": "Остановить",
-  "runsRefreshState": "Обновить состояние",
-  "runsExpired": "Шлюз больше не хранит этот запуск (состояния запусков не сохраняются после перезапуска).",
   "runsReplyCopied": "Ответ скопирован",
   "runsError": "Ошибка: {error}",
   "@runsError": {
@@ -1810,36 +1721,7 @@
   "runsStatusExpired": "истёк",
   "runsDetailTitle": "запуск",
   "runsRunIdCopied": "run_id скопирован",
-  "runsAgentBusy": "агент работает…",
-  "runsActivitySection": "активность агента",
   "runsReplySection": "ответ",
-  "runsToolCompleted": "завершено",
-  "runsToolFailed": "не выполнено",
-  "runsApprovalResolved": "подтверждение обработано: {choice}",
-  "@runsApprovalResolved": {
-    "placeholders": {
-      "choice": {
-        "type": "String"
-      }
-    }
-  },
-  "runsAutoApprovedScope": "автоматически подтверждено ({scope})",
-  "@runsAutoApprovedScope": {
-    "placeholders": {
-      "scope": {
-        "type": "String"
-      }
-    }
-  },
-  "runsApprovalSummary": "запрошено подтверждение",
-  "runsAllowedOnce": "Разрешено один раз",
-  "runsAllowedSession": "Разрешено на этот сеанс",
-  "runsAllowedAlways": "Разрешено всегда",
-  "runsDenied": "Отклонено",
-  "runsApprovedOnce": "Подтверждено (один раз)",
-  "runsApprovedSession": "Подтверждено на весь сеанс",
-  "runsApprovedAlways": "Всегда подтверждено для этого шаблона",
-  "runsDeniedAction": "Действие отклонено",
   "runsApproveOnce": "один раз",
   "runsApproveSession": "этот сеанс",
   "voiceTitle": "Голос",
@@ -2900,7 +2782,6 @@
   "prfLoadErrorToken": "Панель управления требует токен. Укажите его в настройках экземпляра (порт 9119).",
   "prfNameRequired": "введите имя",
   "prfNamePatternError": "Только строчные латинские буквы, цифры, _ и - (до 64 символов, начало — буква или цифра)",
-  "apiKeyHelpLinkLabel": "Где взять этот ключ?",
   "actLinesCopied": "Скопировано строк: {count}",
   "@actLinesCopied": {
     "placeholders": {
@@ -3091,6 +2972,13 @@
     }
   },
   "legacyBridgeStepAction": "Войти",
+  "@leg3UpdatesExisting": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
   "dashboardSetupForgotPassword": "Я не знаю пароль",
   "dashPasswordHelpTitle": "Задать новый пароль",
   "dashPasswordHelpIntro": "Пароль панели управления нельзя прочитать или восстановить: его заменяют новым на компьютере, где установлен Hermes.",
@@ -3356,15 +3244,6 @@
   "chatActivityRunningSkill": "Выполнение навыка…",
   "chatActivityReasoning": "Рассуждение",
   "connectInstallHelp": "Официальная документация Hermes",
-  "diagGwRefused": "Шлюз отклонил подключение. Убедитесь, что URL указывает на порт 8642 и межсетевой экран разрешает доступ.",
-  "diagGwTimeout": "Шлюз не отвечает. Если вы используете VPN/Tailscale/WireGuard, включите его на Android перед проверкой.",
-  "diagGwDns": "Не удалось определить адрес шлюза по имени. Проверьте имя или используйте IP (для Tailscale проверьте MagicDNS).",
-  "diagGwTls": "Недействительный сертификат TLS шлюза. Если сертификат самоподписанный, можно использовать HTTP внутри VPN.",
-  "diagCapsAuthInvalid": "/v1/capabilities вернул 401: токен шлюза недействителен или отсутствует. До успешного входа возможности будут определяться пробными запросами.",
-  "diagCapsNotFound": "Эта версия hermes-agent не предоставляет /v1/capabilities; возможности будут определяться дополнительными пробными запросами.",
-  "diagTokenMissing": "Нет токена шлюза — добавьте API_SERVER_KEY из ~/.hermes/.env в настройках экземпляра.",
-  "diagTokenInvalid": "Токен шлюза недействителен — ключ не совпадает с API_SERVER_KEY сервера.",
-  "diagDashDownGwOk": "Шлюз работает, но панель управления недоступна. Проверьте, что её URL указывает на порт 9119 и межсетевой экран разрешает доступ.",
   "diagDashDownBoth": "Панель управления тоже не отвечает. Проверьте сеть и порты (9119).",
   "diagDashNotFound": "Адрес отвечает, но это не похоже на панель управления Hermes (/api/status не существует). Проверьте URL панели управления.",
   "diagDashAuthRequired": "Панель управления требует входа (базовая аутентификация). Укажите имя пользователя и пароль в настройках экземпляра.",
@@ -3777,15 +3656,6 @@
   "voiceErrorPreviewTimeout": "Не удалось получить звук вовремя. Проверьте, скачана ли модель голоса, и повторите попытку.",
   "voiceErrorUnexpected": "Не удалось выполнить голосовую операцию. Проверьте настройки и повторите попытку.",
   "voiceExtracting": "Распаковка…",
-  "setupStepsDashboardTitle": "1 · Панель управления с именем пользователя и паролем",
-  "setupStepsDashboardEnv": "Добавьте эти две строки в файл .env Hermes (в Linux и macOS — ~/.hermes/.env).",
-  "setupStepsDashboardRun": "Запустите её с доступом из вашей сети.",
-  "setupStepsGatewayTitle": "2 · Шлюз с ключом",
-  "setupStepsGatewayKey": "Создайте длинный ключ: Hermes не принимает короткие.",
-  "setupStepsGatewayEnv": "Добавьте его в тот же файл .env с этими строками.",
-  "setupStepsKeyPlaceholder": "вставьте-ключ-сюда",
-  "setupStepsGatewayRun": "Запустите его.",
-  "setupStepsPrivateOnly": "Только в частной сети или через Tailscale: не открывайте эти порты в интернет.",
   "commonCleartextPublic": "Для доступа и разговоров через интернет нужно шифрование; используйте https:// или частную сеть.",
   "commonCleartextPrivate": "Незашифрованное подключение внутри частной сети (LAN или Tailscale).",
   "ieLocalChatMode": "Режим локального чата",
@@ -3885,7 +3755,6 @@
   "homeEditInstance": "Изменить экземпляр",
   "drawerNoActiveInstance": "Нет активного экземпляра",
   "chaLinkSchemeBlocked": "Ссылка заблокирована: протокол не поддерживается",
-  "apiKeyHelpCopy": "Копировать команду",
   "chaUploadingAttachment": "Загрузка вложения…",
   "chaAttachmentUploadInProgress": "Загрузка {name}. Подождите.",
   "@chaAttachmentUploadInProgress": {
@@ -9448,5 +9317,50 @@
   "mascotSuggestOpenSettings": "Открыть настройки",
   "@mascotSuggestOpenSettings": {
     "description": "Floating mascot suggestion: the action that opens the notification settings."
+  },
+  "@connStatusNoNetwork": {
+    "description": "Connection status: the phone has no network."
+  },
+  "@connStatusAuthRequired": {
+    "description": "Connection status: the Dashboard refused the saved login."
+  },
+  "@connStatusNoServer": {
+    "description": "Connection status: the network works but the server does not answer."
+  },
+  "@serverStartingTitle": {
+    "description": "Server warm-up: the Dashboard answered 502/503/504 and is expected back shortly (Desktop backend-health.ts)."
+  },
+  "@serverStartingWait": {
+    "description": "Server warm-up: how long Console waits and that the app stays usable."
+  },
+  "@serverStartingGaveUp": {
+    "description": "Server warm-up: the 3 minute wait ended without a healthy answer."
+  },
+  "@serverStartingCloudHint": {
+    "description": "Server warm-up on a Nous Cloud host: where to look next."
+  },
+  "@connStatusPersistent": {
+    "description": "Notice shown once the connection has been failing for 5 minutes."
+  },
+  "@walkIslandNoServerLine": {
+    "description": "Chat notice when the server cannot be reached (simple-connect flag on)."
+  },
+  "@walkIslandWhatToDo": {
+    "description": "Action of the no-server notice: opens the official Dashboard command page."
+  },
+  "@walkStartHint": {
+    "description": "Sign-in screen after the start-up wait gave up: what to do, above the command button."
+  },
+  "@walkProbeFailed": {
+    "description": "Sign-in screen when the Dashboard check failed without a typed reason (simple-connect flag on)."
+  },
+  "@chatRowFailedTitle": {
+    "description": "Chat row that failed to render: title of the replacement card."
+  },
+  "@chatRowCopyPlain": {
+    "description": "Action on the failed-row card: copies the message text unformatted."
+  },
+  "@chatRowCopied": {
+    "description": "Inline confirmation after copying the plain text of a failed row."
   }
 }

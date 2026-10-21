@@ -260,10 +260,10 @@ index 5ce9e16..7225daf 100644
 +  static String updateUrl(InstallSource source) => githubReleasesUrl;
  }
 diff --git a/lib/core/services/notifications/background_listener.dart b/lib/core/services/notifications/background_listener.dart
-index 3045135..0a6ae50 100644
+index ea5ad9d..71d99f5 100644
 --- a/lib/core/services/notifications/background_listener.dart
 +++ b/lib/core/services/notifications/background_listener.dart
-@@ -2929,11 +2929,11 @@ class BackgroundListener {
+@@ -2563,11 +2563,11 @@ class BackgroundListener {
    static const String readAloudEndButtonId = 'read_aloud_end';
  
    static const String _serviceIconMeta =
@@ -302,10 +302,10 @@ index 18788d6..dc6b857 100644
                  onTap: () => launchUrl(
                    Uri.parse(InstallSourceInfo.updateUrl(source)),
 diff --git a/lib/main.dart b/lib/main.dart
-index 4643adb..8fe0b15 100644
+index e651738..27644bb 100644
 --- a/lib/main.dart
 +++ b/lib/main.dart
-@@ -540,6 +540,7 @@ class AppLocales {
+@@ -544,6 +544,7 @@ class AppLocales {
      AppLocaleOption('system', 'Sistema', null),
      AppLocaleOption('es', 'Español', Locale('es')),
      AppLocaleOption('en', 'English', Locale('en')),
@@ -313,7 +313,7 @@ index 4643adb..8fe0b15 100644
    ];
  
    static AppLocaleOption byId(String? id) =>
-@@ -3103,7 +3104,7 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
+@@ -3108,7 +3109,7 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
            builder: (context, font, _) => ValueListenableBuilder<String>(
              valueListenable: localeId,
              builder: (context, locId, _) => MaterialApp(
@@ -322,7 +322,7 @@ index 4643adb..8fe0b15 100644
                debugShowCheckedModeBanner: false,
                // Scroll con inercia (coasting) en toda la app: un flick sigue
                // rodando y frena solo, en vez del frenazo seco de Material.
-@@ -3111,13 +3112,10 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
+@@ -3116,13 +3117,10 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
                locale: AppLocales.byId(locId).locale,
                localizationsDelegates: Strings.localizationsDelegates,
                supportedLocales: Strings.supportedLocales,
@@ -363,7 +363,7 @@ index 74803d8..0f531a3 100644
        InstallSource.githubObtainium,
        'GitHub / Obtainium',
 diff --git a/test/diagnostic_bundle_service_test.dart b/test/diagnostic_bundle_service_test.dart
-index 0f2f494..50e394e 100644
+index 1abaf4b..f8fe857 100644
 --- a/test/diagnostic_bundle_service_test.dart
 +++ b/test/diagnostic_bundle_service_test.dart
 @@ -43,7 +43,7 @@ void main() {
