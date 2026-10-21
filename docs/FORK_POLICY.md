@@ -6,7 +6,7 @@ This repository is a user-owned fork of `xP3ta/hermes-console` used by TestLab f
 
 - Canonical upstream: `xP3ta/hermes-console`.
 - Original fork baseline when created: upstream `main` at `a2af8bc6115f96a84138028465d8f71c3ef6d308`.
-- Current stable baseline: `v1.2.15` (`1.2.15+9540`), commit `aa6e5119d8397220eea4399a352ce746b21f1834`.
+- Current stable baseline: `v1.3.0` (`1.3.0+9630`), commit `7c51c99b3d665affda79742ca501aa04dad9d42f`.
 - Preserve upstream history. Sync published stable tags only using the explicit local overlay, never unreleased main.
 - Procedure and translation handoff: [STABLE_UPSTREAM_SYNC.md](STABLE_UPSTREAM_SYNC.md).
 - Stable baseline pin: `tool/fork/upstream.json`; overlay classification: `tool/fork/overlay.json`.
@@ -32,4 +32,4 @@ Use the repository's existing Flutter/Android CI as the authoritative build/test
 - RU must cover all source ARB and native Android messages, with compatible recursive ICU, metadata and printf contracts. New or changed source text requires explicit translation review.
 - `tool/fork/untranslated.json` is the Codex handoff. CI fails closed until it is empty and the reviewed-source ledger matches; never approve English fallback automatically.
 - Stable detection/staging may open one draft source PR in this fork. It never merges, signs, tags, uploads binaries or publishes a release.
-- Upstream 1.2.15 release helpers retain upstream certificate/Play/provenance anchors as reference policy. They do not authorize RU signing or publication; reconcile actual established RU certificate evidence in a separate owner-approved release task.
+- Upstream release helpers retain upstream certificate/Play/provenance anchors as reference policy. They do not authorize RU signing or publication. After the final head passes CI, the host/controller owns automatic tested-build delivery under the owner's standing Android authorization; the implementation worker does not sign or publish. Actual established RU certificate and artifact evidence remain mandatory; see the handoff in `docs/STABLE_UPSTREAM_SYNC.md`.

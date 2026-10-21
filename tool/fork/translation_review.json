@@ -672,8 +672,8 @@
     "translation": "9df2b4d5389547fa9b86251319b924c37ac8c4e18709ca902e51f3ba210b9a4c"
   },
   "arb/aboutTagline": {
-    "source": "729cd82c3d344c8cac7bf00fbf19a12f50d83338d3c9e43ea6cf437cde8c9869",
-    "translation": "1e745a04a47df9773bd885e89abd92662b71acf7e0f07395b2598b62ab390a01"
+    "source": "a09cff675208f6a50b5c67a0fe7b1219e05e28a6622361a4a3b9c3cb17928bcb",
+    "translation": "4be76fd7971a9bba61a1d5644df37592068277d725d5d3f26e2d1c0c01d11ef5"
   },
   "arb/aboutThirdParty": {
     "source": "c853702bd3c2835842aac599f2bdc04a0fcd49b76cdbb24699603134b07545f5",
@@ -850,38 +850,6 @@
   "arb/apiErrorUnknown": {
     "source": "d0e028cfeebaf234a3bba0aa06d2f0fb4d1169fb2d894b91480c6c6d95468af0",
     "translation": "2ffcbcc1bab18ae575b1da5d115b88f2e8d69de3da54dcfafb582fcf1c45ab0e"
-  },
-  "arb/apiKeyHelpBody1": {
-    "source": "dce63acd34257377d0bac6d144bdfa9bbb7763893702ed110c8e1baabf810b27",
-    "translation": "61940066ba884555118a61d08f4d06b90da7214b8169386464f22d3397c6879d"
-  },
-  "arb/apiKeyHelpBody2": {
-    "source": "6371031fabaa05507c599c3d360bec0c623bd6274c69c103bae3c89cd599abec",
-    "translation": "77a7c964704f36690e11cf8032c67421bc6aa7d33d4f85f9b872ae7b599190a0"
-  },
-  "arb/apiKeyHelpCopied": {
-    "source": "78901af3e2ea2a8a1c51d9410ca5a2929056547c50384a851815ff74736da588",
-    "translation": "393faf5806ea197c6cff5ffd14007559d39e351762f2bf444c0bcb31927879f8"
-  },
-  "arb/apiKeyHelpCopy": {
-    "source": "80485645413efa14d52741543ca9df5f088dc8244a52f551256139011f795ea9",
-    "translation": "797b5bee3de196020abda093732a775b54ba03ecacaa18f642f8604f94c12bb5"
-  },
-  "arb/apiKeyHelpGatewayLabel": {
-    "source": "545e39337b589ce6a731d0717662b163150f1758c7bec3ee8bd5b5d029355274",
-    "translation": "5c2b3c9b32f5f77fe4f249944cd9bfa3e0498ff56a6df3de6fea9d433968169a"
-  },
-  "arb/apiKeyHelpLinkLabel": {
-    "source": "e6df9afd35262d9de27c8c7a3a2eaf44c54963a918b553906eeb3216db601e39",
-    "translation": "d741c70882973e970b6c40537d88f32282b8a015a8a87aede70127d31bb9ebe9"
-  },
-  "arb/apiKeyHelpOk": {
-    "source": "aa0a27129f1f40c7dcae6031cc2ae73183c8f47217177bb9c1b9ac8b6f3e5ea5",
-    "translation": "fe3b7b35a663a742bb7619005d62f8701368108c3c30c1dfdbe3ff5628863f4f"
-  },
-  "arb/apiKeyHelpTitle": {
-    "source": "1763ade19aa5ec2e9a60328af089b34ac0f0eb7af20ed0eae06c1f268664721b",
-    "translation": "dfeeb747aaa8842c37f33906f5d0bd7b0dbb4fe5e74961f301d7ac0047f703f9"
   },
   "arb/approvalAllow": {
     "source": "a66503d019bcce26438d348c64d7f1197a47381d7c8d809c4af0032457473c4a",
@@ -1683,14 +1651,6 @@
     "source": "5b8315bfe51716b74355e97a41ea92165c587762fb9ef0e6006e64bcf6536ee9",
     "translation": "4febde1d953957e9cd5677757ae2cc37dc9169f5e7e865ffcd39978a5ec6b3e9"
   },
-  "arb/cevApprovalDenied": {
-    "source": "dd2e4eba1d79cb0804e5a6e8a135762c2ffa0071d28c9b56d44be401d0b8efaa",
-    "translation": "63cdd0a9cf28b6f185ab16daab57c1a1423383a1718ceea52c426b396f62af2d"
-  },
-  "arb/cevApprovalGranted": {
-    "source": "54d24006338ffe1174d041440b6a3a8f541e06de01f2c3658629e6e1534a4a75",
-    "translation": "08af712c9daf37902013422ef24cf578d2d78b575d98b1f95b4776f506ec9d29"
-  },
   "arb/cevApprovalHistorical": {
     "source": "55ead62ad741225c601e0a53197db8de864d7bbaceb77ac5b6c5d54c8532f57f",
     "translation": "7781202a12a8480f62f3452a2c0a7759b92df147340a0dfa85ede0296137854d"
@@ -1702,10 +1662,6 @@
   "arb/cevApprovalRequired": {
     "source": "c5e40a393b36f8eeb4e9007c9e3593cc8dd710ccdae66b4e3ac870721fc7ba0e",
     "translation": "238674bac1b25321ccd99d61d8aa3b0d66617dd2d73a606132f9e2c70a2b91cc"
-  },
-  "arb/cevApprovalResolved": {
-    "source": "296d1fcecfb744fdb27e84861810ef61cf2cdbc9125794a842aa84e3a2c648d9",
-    "translation": "e2e154b194d8b074413a2142e1d6d12bb4a153d128bc59f5e7040f31400bff43"
   },
   "arb/cevCopyTooltip": {
     "source": "80485645413efa14d52741543ca9df5f088dc8244a52f551256139011f795ea9",
@@ -1750,10 +1706,6 @@
   "arb/cevResolvedRecord": {
     "source": "24bc7f5aff45d8a18b2ae8f621fe727f765449d8080c44655fa5a955056371b0",
     "translation": "9b1a7d8b3c4cf6232d8d738b06601731bc2e888df1141c2a5144e4701d2e101d"
-  },
-  "arb/cevSendError": {
-    "source": "b06db268310c1beb1d4546479610d247b108ea1850dab5eb8859969f32de8bcd",
-    "translation": "61f681a531dea7509ab9a18cd720677e6967059314936b887910fe986c5d6007"
   },
   "arb/cevShowFull": {
     "source": "4ed107e4822c653b727a7fcaee1c4bfc059113067c5f5aa5785a0f761d49c614",
@@ -3271,6 +3223,18 @@
     "source": "a61aab10dba230381da300fc3126ecb4d2e57118df4e012c7985590b47e2a366",
     "translation": "618009d5f5279abbc93f443cb00f574dc36c5afe2ef7d24aa0955c120c5793f8"
   },
+  "arb/chatRowCopied": {
+    "source": "e0c7a86a9a8d1df02002d15e30b3e3db554e0d11c01013d0b7240da985134440",
+    "translation": "25d2cbfdff525f548ef5d6b3c2b29ab2e31353498b57d6bfcc8aadad75186511"
+  },
+  "arb/chatRowCopyPlain": {
+    "source": "97fb2b4ca77a97487cc0635090c94809ca3c6898e75f91fcc12d5970bece06b5",
+    "translation": "f6b36de713574983b9cc252aa3054bd6faa2ed0531ee0dc55378fecdbe3d8348"
+  },
+  "arb/chatRowFailedTitle": {
+    "source": "0618196ac9b64bcd55f6a8ae8d95e1a812a7b0f5c362b7d965e52942d29d2d8b",
+    "translation": "33dfcdb9a2ebe9c265f2c6ee654fbf2092334ee1db83b5faa6657317c8c2c290"
+  },
   "arb/chatStopSaveFailed": {
     "source": "b3d05a6af5eeec65bc81098c9e0cf21fa3b4fbeed82105521c645c2e41fbb854",
     "translation": "c136f6ae66004f388abb601ce65da6d54279299a160014a45820e26ba83ec47d"
@@ -3402,6 +3366,22 @@
   "arb/companionAnimatedLabel": {
     "source": "3b2a71e0245d7d276957fbbdec5a0dd2fa14c62dbcd4d391f054e405b89dc5e4",
     "translation": "6afbcfa22b763ea340bd5e29e2bedf2e5d042cc88dfe3cac4941208b4d62a776"
+  },
+  "arb/connStatusAuthRequired": {
+    "source": "5082d3f6424ef8923deadca6c2bfbe26d4c0093c73ee089824ae5337f902b1c3",
+    "translation": "db7889609785b6e830ea6ff9d377a0472718422305780797264165fcd14e4233"
+  },
+  "arb/connStatusNoNetwork": {
+    "source": "ba0cf138f51a835aa9a5ed103b14622cdb36f90d2425972e49ab6306138de461",
+    "translation": "ed0b5fac52092ba26ef4b76a72a84642aa7447c5f14e053de228fcb9e203d92f"
+  },
+  "arb/connStatusNoServer": {
+    "source": "40aa097f332a50e16a457a566639e71a7d5095f177001b05140f84df3bcc8453",
+    "translation": "56d27a47d002856d267953fa5bb2360f047da4ea51e3bea6c36e98bd524dbcfc"
+  },
+  "arb/connStatusPersistent": {
+    "source": "9882012fa4bb4010eac4816485a343aa86860f8f3435eb499923aa757efe54fe",
+    "translation": "2388977c0f0015ae05bb436d3066c7e0bd5af4c0e373265b60ecc2f7a07b04b1"
   },
   "arb/connectInstallHelp": {
     "source": "991d541ddb4ce6ac5482361796caa60fd916b30071ebcd611572fe04b37f4965",
@@ -4772,16 +4752,20 @@
     "translation": "4fbea1d05e4bab0638f9ae7783b1ae9764caf0a5c40000a4a389e60dbbf95576"
   },
   "arb/dashPasswordHelpCommand": {
-    "source": "cec4fab8ddf7efcbf0664eca8c5c093d4365ab58a0df26f4ea508be3704a3166",
-    "translation": "8efd769be36acbaf23f2d676dc752d4c77b2237e9470c1ffd7a736153bd14b44"
+    "source": "20e048c886680a30d23608bd5638f40a3650687e3d222160f98c42ea5f1c10e5",
+    "translation": "d5f7b9dac1a5d9337ba26458f853c7a3be2dbe0ca7b2dcdf9796cd1d0c37076f"
+  },
+  "arb/dashPasswordHelpEnvNote": {
+    "source": "71d7a09930319d456157955017f5b5c6b5975a9e502c6cb7d7e3423f35f110f9",
+    "translation": "e95fce0c21f78ab7d1587301ab2ee860b6822a9a8116be350fa8fcb38c6e4f16"
   },
   "arb/dashPasswordHelpIntro": {
     "source": "e64f0c67b4c2291c96c4863640281113c961e2ab87c91d8e29762ea45ce07b27",
     "translation": "8de6e968d1457b6543732aa39e7cab8c82a281bfeb8e59e911a61e466f28dce2"
   },
   "arb/dashPasswordHelpOthers": {
-    "source": "62db3d64bc0518c7c23c7ad4b8e61ca9e7fd7cc9b787b090b167630ead116f18",
-    "translation": "7dad55df3a199788187afec3b5d0e8d63065afcb0df70ffc19a234e9feaf57db"
+    "source": "ca1e7d50b07d0e42e48c9f4bb0f4eea58ef9ff48bd302ffa7f4921f3ba833a16",
+    "translation": "abfc5527eb8b151d5d1193a43e6cb9cde5bde1640fb10803c190a7c0c70c45e0"
   },
   "arb/dashPasswordHelpPlaceholder": {
     "source": "6a9153c90fc375403f09ef71722cdcec7f5a5ed11ac556daa091d35350842ca7",
@@ -4822,6 +4806,26 @@
   "arb/dashboardSetupAuthorityChanged": {
     "source": "6e725564f6c51ea1fd9967757780ead0b6c1b200a526fbce15c5e9dfe5537cbd",
     "translation": "a83e1ef5d900e7d05b5cff79e7bfef622f796a7328c549916866638792012d38"
+  },
+  "arb/dashboardSetupBrowserComeBack": {
+    "source": "2480ec046ef1202935e50aee85fc9dcd15b3f8f6dd2df4d3dd3dadd2cfca5d1f",
+    "translation": "14769f195e70b8d45f3aa9331789d090a1337ec06f1a61ba2d6cabf42e9152fd"
+  },
+  "arb/dashboardSetupBrowserHandlesPassword": {
+    "source": "d11aff085b553e49290a2d9b4d01f65e9b3ca433c94e734f7fbdcb8bd4ed5b54",
+    "translation": "c4bbdf1b6a3666ecf4f33c3cbc91266150ec50e3016891eeb07bc99a53231243"
+  },
+  "arb/dashboardSetupBrowserIncomplete": {
+    "source": "918b256586ffc4911218f3707505305669ad1212c8e37afd3c84814a6ce08a16",
+    "translation": "ab00a0f38e53a820d5468796ffbe44578e68266eb67312eaf7af2e0bcad761a2"
+  },
+  "arb/dashboardSetupBrowserOpening": {
+    "source": "c76b92b0ff2d42d802d7924b610b6355a9f4ae824acf18ebdab3dfb7b1d55aed",
+    "translation": "63f0db0e7fa9388351439b0cce8d708f7b0b644cdb63a8d2b7d60260626581f2"
+  },
+  "arb/dashboardSetupBrowserSignIn": {
+    "source": "c5fac991d1e66c9dab5e679e0212a95cc3ebc821cfa99f5696b934ca7dba44b2",
+    "translation": "dbef7d3cbd7306a769506fa4fc2451eec6663561fc5c833e2e741ae5160e29d4"
   },
   "arb/dashboardSetupCredentialConsent": {
     "source": "74d410b9ed9e6fd078a111a181e6db1c67b135fdf0966689dc07bf3848e6d872",
@@ -4870,6 +4874,10 @@
   "arb/dashboardSetupSignIn": {
     "source": "8fdfaeafcbccfaa029e2119c9df4a078f6a12ed296436b5f75b62a47f8d160a6",
     "translation": "f9b4591ff382ea4a057a87098da3c030e82adc696cd759bbf1f8ff80c98b2a05"
+  },
+  "arb/dashboardSetupUsePasswordHere": {
+    "source": "75bc29488a8f3e48c1a77ee1ab9af53ec97f069c8abf8c908a70cb6c150ba1e5",
+    "translation": "27faa807cb7da64c6140187be346cd1882ac30e1cb9514b467ddc677aaf7dd03"
   },
   "arb/dc1215WaitingAnswer": {
     "source": "3bbce33e8981cbedc32535523f45c8c5a355b41309f84034dd61b030e0ed82c8",
@@ -4959,14 +4967,6 @@
     "source": "6126981ffe8f052cc622e5c2c8c5af52ad786c83fd4081d0b1e8d640e550660b",
     "translation": "7b1bbf0d3194a5f40a65711240c925bc0b116d6254c903c27a3280bfb6987380"
   },
-  "arb/diagCapsAuthInvalid": {
-    "source": "2403f95dbe020aa20908cb28cd9213b155f7a81c0ebd0eb520016be9d988a13f",
-    "translation": "8ca192594297a24a36bdb03dea0f46f0c38ea37d85bb66523b9abb39efa29425"
-  },
-  "arb/diagCapsNotFound": {
-    "source": "5e9673072aab3499642831678334eff488a2ca86d3b8caa7d9fe8e10866af3bc",
-    "translation": "7d6486b85fe24440b1815508dc4f89d035d54a432f95d908e223f3fb3128a576"
-  },
   "arb/diagCopySuggestions": {
     "source": "25dad65aa797e852d0d79b6ce4043fbed9485dfe8ba5f1500cbc35cb2a7f422a",
     "translation": "28e3adebb4e2bb861d3ed326e6941afa23625e93decbc46e3176eb8f971822d9"
@@ -4984,12 +4984,8 @@
     "translation": "d5b469a45cb5b56aaf639dc901f1e0b9601f088afadded157eba8d3b713c5b90"
   },
   "arb/diagDashDownBoth": {
-    "source": "005646ae04c44bc7686da2e7e800e2746dc3d35414ca1a3d44dc47ca3a80287d",
-    "translation": "b2a3e7ce89382eb33511c9a365d2048f9711cf9697bb4e3f945cfb363b3c750e"
-  },
-  "arb/diagDashDownGwOk": {
-    "source": "da6b242ff689d3c75a1ce807e0f8d8505a29bfe38d7b6a4c0b7aa717218f3958",
-    "translation": "e7fa585f92f4d4a7583ab32a69e4b19a028d642246c372107b9dac85c8a883fb"
+    "source": "a8f05654be740cadf3a14c5d0a73aa717b1864816845f2c8188cc801f0220b08",
+    "translation": "2aca618b3e5bfc51856f32e144146f097dae1470236d3992d1e88d68de597453"
   },
   "arb/diagDashNotFound": {
     "source": "ee4587838e850c6d5517d1497269659285d1ef7017d6e8483264b02e31538cf9",
@@ -5014,22 +5010,6 @@
   "arb/diagDetailTls": {
     "source": "c547fdf21af625949a4f1880af28b0dc6937563ee31dfdeec64b34ad9d87abc2",
     "translation": "9c9b7843eede06026da4e02b92332ec7b7521bcd73a1f12f93e367a928b51d0c"
-  },
-  "arb/diagGwDns": {
-    "source": "e9f9573e961777d347bac72ec5298e796e897e763ffb9d3f2b7324fcee60343e",
-    "translation": "c4f49298b04efa491d21337531aa15447aa45c563f22e173e30a6266e985d208"
-  },
-  "arb/diagGwRefused": {
-    "source": "3e4bd557e8448cc92336acca4ea8c6e8fcefc588032ac07f66528b22f94e4828",
-    "translation": "634722d6aa2da570ffd4d4928df66060a6977fa3309e3893409fad3052acec23"
-  },
-  "arb/diagGwTimeout": {
-    "source": "f324288ff5e4373cae2b620c96e73ca31c78b371e6581252134b8b1d3ca8a7f8",
-    "translation": "12e1b55ad125eb8cfb735fab8269477a1daa0e2c502162fdf142cc5d83ceb62e"
-  },
-  "arb/diagGwTls": {
-    "source": "b883399607cf7bde329daff311c872a5621f2e037e36d18b2c39196b1db7e0cd",
-    "translation": "e21a1cbb8a14208fab75733c79b2f6fd4afbf538e1b1d7d72fc997fe50be5481"
   },
   "arb/diagHttpsProxy": {
     "source": "b1329ecb4490c817ac7a5621551a65daee12554419787bb10f501bf4333f7de5",
@@ -5086,14 +5066,6 @@
   "arb/diagStatusTls": {
     "source": "9bb77c049429e9b0ce44d9ec8f8b36dab255d9e4334cdb03b523e82c727d2774",
     "translation": "f8d315d7fd8fa66d7fa4800071522d5d23fb6b4d562a1d17ac656b0b20d4b65f"
-  },
-  "arb/diagTokenInvalid": {
-    "source": "d5b7b9220848e29c9610576599f530c4059776369b62e28281dfa179b4e88d80",
-    "translation": "39a198bb8f81e5dd799376e45dabd6f5877c40caa601e73338172bc01909d4f3"
-  },
-  "arb/diagTokenMissing": {
-    "source": "c7e2ed658703a014219ab592b51bcb258a411d6fd36960651063f3bc316ca486",
-    "translation": "5573856b5d7920c68fc12b0774750ce4937b1eeb750a465b5b3e25d5cc443179"
   },
   "arb/dockBackLabel": {
     "source": "6fa4889494ba95dc4458b89a8d7acd023e3a541df15c3ec48258eba1e3e286cd",
@@ -6223,6 +6195,14 @@
     "source": "d41137e6c24b4b4d88d6e6a2c4f7cdbe3aaef699b3669240cd673b91526047c5",
     "translation": "334d83fabe71457c4100688ace528bf8cd6639257663bef070b31e2858063af9"
   },
+  "arb/gatewayEraAction": {
+    "source": "6304d5ee6d8d887d6a88b5e4f305405aaf66e5d696231600fa66b80d156e4c7a",
+    "translation": "498f022046e4064aa2e69538e9dec3534a49665c0814bc2bd96d58b7d1bce04e"
+  },
+  "arb/gatewayEraTitle": {
+    "source": "bd5fc2148b7e7975cc108971198511c80db3073826c2053a36ceb59807da7e40",
+    "translation": "8cdbbf80c6f1af74e98c37db4441a98cb83ee3138f85dc287fd18634b1ad7555"
+  },
   "arb/gdActivityTitle": {
     "source": "996bc25008d6a01ce2a6b07e39049140c981fa11554ad0e02a478089a573d409",
     "translation": "ba1efb3264415b43800afc2799707a5511747a0f5616814733316a114da974e4"
@@ -6739,6 +6719,10 @@
     "source": "acf3cd742b8240841b04cdf99a3f87854650274c15b2908feb696395e80b360f",
     "translation": "351c0f013b49a87fe427d4db04d57f512a8ff64defc597b62673a284cd771697"
   },
+  "arb/homeOfflineDashboardSetup": {
+    "source": "821562b822ecd46c70822b4df38117f6cbb42db11302a92e2b11bcc15781a956",
+    "translation": "8612e4c78dbd30511966cbb8b3ada2b26dc786795ae565796725e7d2cf4b3775"
+  },
   "arb/homeOpenStatusHint": {
     "source": "6ef227de664a06b49a658f5b3b666b11298b2dd46d2c3366d49cc3b067e6971a",
     "translation": "7cbdb156340abf0f58ec05827a1bba68de35cd71cbcd603c5e4409221f5fd3c9"
@@ -6800,8 +6784,8 @@
     "translation": "a6c34ba5690f2c415af877687f8648e19630db91975e1b6069a30b011a44ed86"
   },
   "arb/hr1215CompactionOnlyAuthBody": {
-    "source": "d59872157ae1d61ea2ee704c44b2bf44ecb655eecb935662acc6879b288ea5b5",
-    "translation": "c3bdbe808ab56dfed6c7a38b4ef02fd84381e809e97e1ae16d6627f5fcf4d6b5"
+    "source": "9ec6d3e075bc9e9ca957f3670d5e1d90cbd5df5cd3d66220597075aa57534900",
+    "translation": "42b98166fe3a6146545a9b5792832417912531e90f55512dd9f4d6b6e2c3a784"
   },
   "arb/hr1215CopyCommand": {
     "source": "80485645413efa14d52741543ca9df5f088dc8244a52f551256139011f795ea9",
@@ -7467,6 +7451,10 @@
     "source": "1685f18d042f10eace7e407cc050c5b8487987689b164159d6a5327f90c789af",
     "translation": "1a4e5bed58d436a7b4e6c328c155ac3ddfd9712c078b6adb9d7d4e5acaa11157"
   },
+  "arb/ieChecking": {
+    "source": "3c13faabfa5eb69829b56e4e3e841083d75c607ee9d680e9961d507ff9c2dd81",
+    "translation": "3bd3128ad8c087646afa1d671873c437e557c42d2a6559bde4975f8591576417"
+  },
   "arb/ieConnectionCheckAgain": {
     "source": "2c5d571a9c94df62d732aa010ec7738a59a89e5d3dd86c9cc346bbe3b7b34213",
     "translation": "0b5c30dd886f76d0acde2c9e219eb0ccc603e116b938522f5175aadf489b00bf"
@@ -7492,12 +7480,12 @@
     "translation": "56868cef9c38cd6531ab7d58937553e0a1a23852cd96d8e0e4054d8146602cc1"
   },
   "arb/ieConnectionCheckRunning": {
-    "source": "3dfab66f980a88d1a772b72ad77183d017e40e66f0de8b31e21eae65902db508",
-    "translation": "ac71ad9445257e4bc8ddd70e05e84d33d3684d2c41b3c2467ba78a3c8bf8c9b1"
+    "source": "a1fd56aea43f94d09e062c9e834de5b17a76d6d54f8ed00145ecf946d613a498",
+    "translation": "bba0e3de2d9d6e314cf3bed1cc933d059c91c4eff87aea97dda8b559529cf426"
   },
   "arb/ieConnectionCheckSubtitle": {
-    "source": "e700836b6cf722a2b97e489bb699f85f34ef201f954f94706680f248ba974dee",
-    "translation": "25abdcf696b073fa0a4ba0fdc32424350870917de81edcccf5e07fae042bba80"
+    "source": "60810be33028163d574fa23cd6fbd5f61b3357e6ccc90532a6057f4d3bf2d2be",
+    "translation": "54da0efab82872ade9a2af1c95b605c6b22d967102630a156c501c9f53c7375b"
   },
   "arb/ieConnectionCheckTitle": {
     "source": "664a87acee27040a7a98c73f38728d88ff1ac63106e10f941508585ebfa4c7c4",
@@ -7567,10 +7555,6 @@
     "source": "fd8b1cfcfcab161bc5d2917fbbb756d8868c4aa78b243c7b1424646f34e76c5d",
     "translation": "a87f3ad9cf31e3e2c9f20c8435720ab5a9ecf61b5a77023963503eae58c076fb"
   },
-  "arb/ieDeclaredByCapabilities": {
-    "source": "d52cf06abfcdb72b5443429f2e23734cbf80bb87e8f9885d2837279a821e43f4",
-    "translation": "32e53f8153679e85cc87fd9da45c46fa541213087882911ee08d638d755bc3e7"
-  },
   "arb/ieDiagA11yChecking": {
     "source": "79c917c96cffa4992f8a9a3af718158918ccac78e3fc29cfdd720b62e065f32c",
     "translation": "fc129c458b404e07639de0e41ce60a2781a1de5c095821058a259b1c05075608"
@@ -7634,18 +7618,6 @@
   "arb/ieExternalPairingTitle": {
     "source": "e67af23e5973907dc670f2acb0199c5b2d7b6a1b4321b10352e903d05fe54b6c",
     "translation": "473396df693baf5b66e043c687980a1a8b83fef3d0d2b4260883d044a9c0abf1"
-  },
-  "arb/ieGatewayToken": {
-    "source": "f3dbba3781a90883e59891ccc370b24f5d77b4f0e23f8eb785ec6781e8bb4222",
-    "translation": "f78dcb170dcf635494fe90b2cdf30eb86174695b7863bad3b143284a9d3b1939"
-  },
-  "arb/ieGatewayTokenEmpty": {
-    "source": "9f5ee7bd8e2186a3f5457d8ed88630965413b0ee8458fe7dcbb4fc7c599143d8",
-    "translation": "c792ee83a3f9fbaca6d7625c23b2a0472c23be717bd039b67cf1e1fd08095d10"
-  },
-  "arb/ieGatewayTokenRequired": {
-    "source": "1de6a8414be5d6c9a8f97fa174806cb90021d337abf30817e0c264f99dc46df7",
-    "translation": "3e75a829d1ff9e86b605cda16c31455323029f0b4dd479765e43709676f98b96"
   },
   "arb/ieGatewayUrl": {
     "source": "ddbded744da9052c47d8bc24ad65398802b97ad2b9669d62a0280a2f17fa09a7",
@@ -7731,10 +7703,6 @@
     "source": "1d2e252f5d62d2f2540fbfa4dc650adfc0b502e6d1ad9188938c5352ca8203a3",
     "translation": "47606d39a01ef33fce7e7501da0efe7e6fbdac8da4676a2b08d8ef2bc62a14fe"
   },
-  "arb/ieSecGateway": {
-    "source": "c05b609c37d6b83ef6a903ad7ba79423b97786ba3c9f0997198338372e3ebe16",
-    "translation": "d71e4238311ec6b17127ef0a2880862b80ff950798b0a33e2df9c7abc99520b2"
-  },
   "arb/ieServiceAttention": {
     "source": "2c2a6c5a91f8a3a4c2fdd104d49822a56a96a0f2a993345feeddc27840011660",
     "translation": "796f4fdfaeab4c030dc3a4c87ac9e000bba81e8354f0e16f23de732180078309"
@@ -7754,6 +7722,14 @@
   "arb/ieServiceUncheckedNote": {
     "source": "7ed532007a18987d2ecf36ab215d1a09d4d343116c340d7e86dcefd773ce2a74",
     "translation": "502f034d22c36c4c3a59d15337e86fbea326aa95c7db524e689e83da7194b9ca"
+  },
+  "arb/ieSignInAgain": {
+    "source": "16278cf83ba3ba1c382c26fc9473dc826c13d7863e2e072c12e77893c9830e3d",
+    "translation": "3a054ee2fa991df60ec46733eb1709800c76c089ee8ea8093ba32a91e14c7f9d"
+  },
+  "arb/ieSignInExpired": {
+    "source": "15da7f8edc4f7e5c5757da29bfecd38628e20799d94722f212029a05e71d3071",
+    "translation": "ed3fd4ff7e8392f8f366ef46d04ab605d43b3b500db924669da262e5a2011eed"
   },
   "arb/ieTechnicalDetails": {
     "source": "82611efa587f319ce5d9c3e5a718afe141cb9f961015648ed732b946668dd601",
@@ -8290,6 +8266,26 @@
   "arb/languageSpanish": {
     "source": "1e6219940030b5fe472f449b1a821aebbb78e3db29f5fd2d350aaeca528dc32e",
     "translation": "9a12b7ee2837b1c19079d22f88697200f1b85c228fbc18d3d318c8d71fbe0e0d"
+  },
+  "arb/leg3EraBody": {
+    "source": "50b1fd2b82d39c31b86e4d293d7e168a89f446729ec2df06e6dcb802f1dc07a5",
+    "translation": "2cd590250715b6261e9d46e5c4e9d11fece29181639737a0e9c77ef30fd912ed"
+  },
+  "arb/leg3RecoverBody": {
+    "source": "c882a5b9e3d0d601f791a576d7c3d6181de3495cd90020a5f434b38ba0b5db0e",
+    "translation": "7d99b9c03719bc56a20ce8a39987b1c7aa9366310acbe7574b5b5276c717c21f"
+  },
+  "arb/leg3SetupBody": {
+    "source": "6cd9e9548c2a27a485e8d0d9fe634f849d01dbf8ea392a95707ba60040e9ae0c",
+    "translation": "7705b3025519e0687a4574f41a29047293b67f94efea3ece848382ea0992c9d4"
+  },
+  "arb/leg3SetupTitle": {
+    "source": "fa5bc2d3965965946a36331ceb806c45b9b51278ec2013d1b636d47350c1d1a3",
+    "translation": "0601572081a7f2526c6194aa2a49b5c07f7b38a6e4bee213df6c285dd515db27"
+  },
+  "arb/leg3UpdatesExisting": {
+    "source": "d26a722be69a87d0a909e1a94ea6aeb248c35c1fae53dc9e7c0639f7d89128b7",
+    "translation": "2e1fafb31f355c4f20c0314901772deceef6dc9ec76871c2d4fc76e54477947a"
   },
   "arb/legacyBridgeStepAction": {
     "source": "97c7ec718bde28c2009518bbfce2150de0f9f906b9c9421603e9334dc8bebc6b",
@@ -10235,10 +10231,6 @@
     "source": "4aa04fdd3efe7897f680d7bc12c38c0f296cd2db01e07c22d3e9ee9e92872f78",
     "translation": "d5c55f6e1fd04c2974f854db0e9650ca182a2172eae03223e94fb69d8ab6c37b"
   },
-  "arb/o2AlreadyPrepared": {
-    "source": "89a2689f340a3e8f387484719cdb3abb2596101f8cd8427317f66b78748af354",
-    "translation": "4f66926b52b413b19083071e943b719874dc62f6de52ae82f79c12368791cd88"
-  },
   "arb/o2ChatOnly": {
     "source": "55962b65c3fc1135a0a9759fef890a60276fa9dfd41a259c8dc0b916def267b5",
     "translation": "d53eb7a86edb3c43538c349a46b2509b6fc97e83bffd86be3f787b49453b736a"
@@ -10255,17 +10247,17 @@
     "source": "dafc137ac0e8effa51f3a207aa54f623c30cc3872324001ac5b9b0793e376fbf",
     "translation": "69beab29599a1766ee2cad21a3ff1d87379d036160f3da076aa70aeadce04ea4"
   },
+  "arb/o2ChooseModel": {
+    "source": "1e477b572e471a67565fe6347227d174023d209be8e1f738f069c12bb5392401",
+    "translation": "0c6b2f6ad69b3d07a055c6c37962ec0afcb78d1c0ef1d3b949760f26286441c4"
+  },
   "arb/o2ClipboardFailed": {
     "source": "14c92a39c4619dc89c1fdb326b35988f546705eb12a492b2f7d8d1acaa0d1bed",
     "translation": "39a835782487e97cf678c089f8aa04e0a677d4162e828e2a15063da29a2b828b"
   },
-  "arb/o2CodeVisible": {
-    "source": "2c8300393272de2e011d6238ca73b503cf88d54751d20282cca2b7b275f311c4",
-    "translation": "92f56f7c43de70973b15429cf5c7afe1f90937e6f9c53fd3a222f4eef9f2cd98"
-  },
   "arb/o2ConfirmChat": {
-    "source": "61a69b7e0f0876cf473a269e454fcb21fe07ceca2d4d569e0b750dd076821382",
-    "translation": "0c89b2892e702c7d294c945fb24a5d00ff5bf54ce4a9fb8a690f60a8ac9e0423"
+    "source": "de500952ac5a31f50deb914334d893f0d3fff7106abbf6671d28e2651e7cb9ae",
+    "translation": "96c6500279ae53e59b07cb1e2d2308f81a2ba09dc4a1dd3c44f5e71e32b4357a"
   },
   "arb/o2ConfirmFull": {
     "source": "7177f9236ef39c8b2c4b03a2c56711c13650740299f7a4d2ef24a24fcabce610",
@@ -10315,14 +10307,6 @@
     "source": "23651fec13a938a46e2b94a5e2bd000f69128f9d04de20e4170df003caf79875",
     "translation": "222fc3329885b469d9a57febf7a8d1fb5f860b6c3596c4e3e2f30638cf3f41ff"
   },
-  "arb/o2HaveLink": {
-    "source": "523b9d2f94611b41ce143b875c7ea993200629d85c1c980245e75d5651e3b57d",
-    "translation": "c02d7567b9283fbc358efe148b812503ce49e41b526e2e14a4263c963862ed1a"
-  },
-  "arb/o2HelpTitle": {
-    "source": "e899f6e01f41103d1b909dc67fd62d934164850056ea4824278e2cce387a27ca",
-    "translation": "13a2e7ba485f00d250f22480b42e1888981946c1b3c455f169e3306a29f48e4b"
-  },
   "arb/o2InvalidCode": {
     "source": "632bb2da2fb60891c21e08886afaf9d6064a25518c9c22807612ce9e4ae83e5b",
     "translation": "80af1a0546793f7c2d334b1b1a0a95fa080d495f7ff005cd0c8aec885f1dbfe8"
@@ -10330,10 +10314,6 @@
   "arb/o2IssueTitle": {
     "source": "7dca239c125a8b64fb7a9ed914f4db5a9116c868acded22ab250e0930dc040ff",
     "translation": "df5fbfd30fdde3be21704d4332981984a3271ebb14ccf5228eff6b949b6687a7"
-  },
-  "arb/o2KeyRejected": {
-    "source": "38cbb71f057dd98197f987e8ee7431a4b24de3ddba993d75c7973f6a9d0bea98",
-    "translation": "d2e96016be2ef9ebec6e9a52ce47ab32c616c7a2b4140af33a3f31beed723b7f"
   },
   "arb/o2KindComputer": {
     "source": "7b8a07e3f3d4370c569111065d6522a46bc9a1fab15d965ac6682f6a6bc6f890",
@@ -10351,10 +10331,6 @@
     "source": "5eb9a5fc515f1b4808cb2c4d037423ecd6e2d8ab7913cf134638a0dfccabf25b",
     "translation": "4ececbd69ec5befa96c499ef0babe1e86e1beef3df517c92b0e9b8264203a4a4"
   },
-  "arb/o2KindTitle": {
-    "source": "ca76664cbe9f28162667823b930d7cfb3e74adac9d1b210678f046acdbf478ee",
-    "translation": "d43777c7c50604febb27aed60241c11e10823eef81a1ce726b4866ce9b0ef374"
-  },
   "arb/o2MacLinux": {
     "source": "291c9a752d44f98784448acac4f03d14cf3669707b0b0d176e65d6d53dc2a9e1",
     "translation": "2a8010e0fb4d480cf0e7e15ea39dc67e1357d9f6b3b0ead9f061b5e4e86ef96b"
@@ -10364,8 +10340,8 @@
     "translation": "d59eef10c453b600e41cd0c3c285c1b26d78607b2f4c267b496e6c105674392f"
   },
   "arb/o2MissingDashboard": {
-    "source": "1948c61e115a3bf0c079921167ae227e4246a5b2b3fdf71e6a3c4347c55667a3",
-    "translation": "3f34866b5b44f45d6528e5c2f5d22dd348932edec672389cd935b1774a6c5db0"
+    "source": "80a9700eb1bc27f01418cd99e8397993a69cedfdd6d2704841863712b4235c36",
+    "translation": "02bbb681352ca290bbacc210ef38eb3299fa76862c35af123b29c2f731062186"
   },
   "arb/o2MissingPassword": {
     "source": "e69e9579e478726ca11f65c7bbfe9001ccd3db594e32727120e60a54ddb5eff6",
@@ -10375,9 +10351,13 @@
     "source": "24292f931af585407eff6b7ba7ba3cd1d4e2f96f25a5fe43abbe48291bf6b6d2",
     "translation": "a801d17c2878aa4b2dc4805caab45783d6a3d62896edc1bcd8018a61e3617384"
   },
-  "arb/o2NoCode": {
-    "source": "3b302c336320055e61caadf64ff30832925b6550f2fd6d1b8e79373354d8c1b8",
-    "translation": "2eb1c445017b12553f6d6dfa4f3b9fd3d8fd6736210fd37e8447571ce4f33d60"
+  "arb/o2NeedsModelBody": {
+    "source": "7d1bfb26cabe5e0cdc8ec4ebc5a2510fd87af1f74d40538746a6683389345c50",
+    "translation": "92f238351a9417fd3034ae92731f0f02f4a0b57de99399f0995ae4390473aabc"
+  },
+  "arb/o2OpenChat": {
+    "source": "771f33924d16bd9eb8a2c9b2783b3053666bdc3daea0e86652fe8ea864f2741c",
+    "translation": "93a6bbb68c1193876c6a5addaaa980169f05d06dbe44770331f0503e105fba86"
   },
   "arb/o2OpenConnection": {
     "source": "b24511e2ec1baca538b19a06302775dfdbd30e8ee02818e6698b4ff4ac7ecc0b",
@@ -10394,10 +10374,6 @@
   "arb/o2OtherShort": {
     "source": "9400737024ec79367bb83b99baf1aa5caed9ad65df229122d7dfafbfa1fd0939",
     "translation": "542991c516b242782b8168cd9b98d21600a90ad1232a9ff469ff2ceca662fbca"
-  },
-  "arb/o2PrepareComputer": {
-    "source": "17e20311c10346adb2f8d9f589c13d6efd2e5ae560ffd8c0bcd6f36fd5b7ca59",
-    "translation": "84b15f41d2312d16bfadca5c447d8ea838d7431344316cbfb59dc28dd54f5744"
   },
   "arb/o2ReadOnly": {
     "source": "525f5ed57e2db4a8c14ab06b1b8b6cf643815cd71294205f63e58bc81e750e1c",
@@ -10422,10 +10398,6 @@
   "arb/o2SignIn": {
     "source": "a5def80d1677045c762a13a7fe50bdc91ee470b11aa449533a2569ba13dbb2a1",
     "translation": "b779a9f60fb4c34a0f931e4ff41c6feec2a60f7b67645af26d7c65ac8b806eca"
-  },
-  "arb/o2StepCode": {
-    "source": "58f5ff7d3a3fec1af9c073a42df23276f7a6a174d2e826b9e1a25d260d247da0",
-    "translation": "4ab92989d7a04cd4cc7c2a32dbab7212f420adb81a94b0dc19f502c93c4cb137"
   },
   "arb/o2StepPaste": {
     "source": "8f54cc936bf487798ef8d88bb8d3eefc45cd2be7c6327a0e90256f9a604ce793",
@@ -10463,10 +10435,6 @@
     "source": "e173c8aa4eb2973ece542a95b7f902c476acf02044c5988af78b63d5b4103034",
     "translation": "f57347bd0421cc28015abc2ed4fa55033d9fd9d27fde014a3bae91e9148fdc85"
   },
-  "arb/o2WelcomeBody": {
-    "source": "8fd6ca7538c95844dee690fd5e8dc55e19020be0675ba801930ba7e660b500b0",
-    "translation": "f8e29e20416e30fca93a1ad07f125e446a90a0012e4c7e13f741b167e944d647"
-  },
   "arb/o2WelcomeTitle": {
     "source": "610da58f7239474f31cf59492d8346632fcdd271fd641f4bd4f5ade2002996bf",
     "translation": "4565290e8beb112ca17f650768ea5694304421db61bbedb67f98a05ff5b5ce2a"
@@ -10475,13 +10443,145 @@
     "source": "6b9b967680002f28e0664c31bbceab8219f8af6fba9257ef7d2f20e5b5a8d48d",
     "translation": "0b1d1e9a36456a50dec652d22d95df7908422c429f91c65e9906ce500aaa2d8b"
   },
+  "arb/onb2CredentialsIntro": {
+    "source": "63061a8d6763ec59ae49ba315281d5a841a64fe637e2d6cc101f7f2289ef632e",
+    "translation": "fc94cc186feeea343d972d2b7bc4875c55ed28d262551e6bdf188f2a9e72b029"
+  },
+  "arb/onb2HidePassword": {
+    "source": "928130ea29db2aa2df30f5764dfb1809f9d579ed3737017c305bc3034a09ee2a",
+    "translation": "08079fba9bc8d9a809303d6b69d7bd9249a25cd1fa676f867ae09a3de5fce86e"
+  },
+  "arb/onb2PasswordUnsupported": {
+    "source": "9ea43ed1b9d3d74561eb1c0fd7c3cc46c723dab1b179212361cf87d86cbc8619",
+    "translation": "2d187d2c94ad6729ba551c03e847eacd619d718709ceacaa62a855fdbb33af13"
+  },
+  "arb/onb2RecoverAfter": {
+    "source": "dee55c934505c241d3988d028a6714dab151e6eb46a26a56c07ee7c4ab609e19",
+    "translation": "c139c7e8287a5c05e590b669b608c64efee559c6fc9e6b2f742df305d27fd145"
+  },
+  "arb/onb2RecoverOther": {
+    "source": "7dafa552dc226456230fa7b0a8abc5f87dad120fa2ec5581c457f7b92f06a6fc",
+    "translation": "5d6fdc9c9d51b7ee9910d213c5b5019c65e0d8fd4d01b2c9d344cb8b66328ccd"
+  },
+  "arb/onb2RecoverTitle": {
+    "source": "b8dd766f37312cbdc7b811e77d0d1fad021645406111595f5b5f50369cdfb06f",
+    "translation": "2d1e794b43734e81459541ebf7ef2ed6db0cb7348e16c4a54149f154e73dad26"
+  },
+  "arb/onb2ShowPassword": {
+    "source": "814118375ea6b85e9a01a0f74ace4d9fa6dbeff3463910abb2d435c8b580b946",
+    "translation": "513bf1c9fb97a9b6235c72ec5321ded336decfb5e2fb16abf8a15f772b98d420"
+  },
+  "arb/onb2TooManyTries": {
+    "source": "8154f1a34b140fde41cfbc0f5fe3223cd11cce62f47c431b80b6809f6c229203",
+    "translation": "04477433fcfdee760d59a6904b560712ebc59a4a330b5d21a5ac4c400760b66b"
+  },
+  "arb/onb2WrongPassword": {
+    "source": "dab9ffeb6df2ab804f35c7b99057c719d3ad25b772cc5980f72c51f2033b208f",
+    "translation": "d2540b6bc7cf2a1c9fc917e12149659ba9555bd2bfbfff67ef27eaaa0989a507"
+  },
+  "arb/onb3AddressHint": {
+    "source": "1dd407be8c826163392bc526505d96de14581c8a94276433a2e610a949d30932",
+    "translation": "47261b588b71aa5e037f8e3b83ae7e7bfe502258873f3df69f02709c7223dcf8"
+  },
+  "arb/onb3Checking": {
+    "source": "0f5f64cb2ada53c046034f7857c4b6444639bc11037d97745419ddefd00aa92b",
+    "translation": "d1296f87896ce7eca56cc5565d2029f2b8d21fc02ae9e91c7d34a8b747268367"
+  },
+  "arb/onb3ConfirmDashboard": {
+    "source": "12920885490e619468165890f2e260400769f3b8a07095fab2c8cd6f0131ea6c",
+    "translation": "e3565c2357a7e71afccb850417f35f9360358d2c523aab29e972200fe7b70eb2"
+  },
+  "arb/onb3DontKnow": {
+    "source": "d7c2134b304d86a6a90b8438993098d181a0a946ecc7ce5c4b003acf440aff08",
+    "translation": "489d10a89117a3bb04ec31eb94a651f07efc50b108a25cd7bd7e8574a63e0383"
+  },
+  "arb/onb3Found": {
+    "source": "6075b19bdfbe988b65dd8bf169546874c4d9f33da4e69edcb35e2eb9a608c6bd",
+    "translation": "80bdde44bf7ac9bd4d1b40a3ad3d3adf026df075d7abc5abf105624d9365caec"
+  },
+  "arb/onb3HelpStepScan": {
+    "source": "a255ae458accae54889ac684810820c7a6d2f3d1ebc312ee003a7c1a54965ef7",
+    "translation": "f61a9f353ee9636f62d6e63a615f86afc6b2b59acef93fa1c36a5a57fc6446f4"
+  },
+  "arb/onb3Unreachable": {
+    "source": "72b9944cacd4c4c78ccae75837a389270a43538254d594af77240d93b1f584a4",
+    "translation": "a68a175ef8b5a3117a8f53a9f76b20dc8854af84d78d42a0aab0b0148f1ba96b"
+  },
+  "arb/onb4AddressLabel": {
+    "source": "7e0e8bce48e96f4aa7fe8892f65783c4061c7e15a23ec9946ed1bfee2c42e5ac",
+    "translation": "16d9dcaf8b8d2063ec4d258be7793e1219b4ae42a52e6bc56b4b948f64ce113d"
+  },
+  "arb/onb4HadPassword": {
+    "source": "3e7e82925f9191d832dd82644f200e40a98bb8f2d8e0efbd607aa99f406f53d3",
+    "translation": "d80f03c3431924713239b64805bc37d9b6fb33f06b02aa5e3380d698c9203aeb"
+  },
+  "arb/onb4HaveHermes": {
+    "source": "93b36bea379996361d04b62f6e46ef6d5cd794fcf82f5e8f07e5a9a21ef5c082",
+    "translation": "3c54ad1b7bde3015bb30139a58309057231a78d3720c7e6dc3e7a323cf70c0a3"
+  },
+  "arb/onb4HelpIntro": {
+    "source": "9c1cb2fdf5ffb0f1d6902c5aeed5dd2cc1b0e0d7186b9d027baafe5dd48ed830",
+    "translation": "773499a8bfa5fc75d3bb507920aadb4fde2bc9dde1a51edf1a99c86c34dd6aea"
+  },
+  "arb/onb4HelpSafe": {
+    "source": "1948f852945bd5a9ec591003284328c4656485f3f4b409eb3cf096ef76cb1014",
+    "translation": "43be0b46aa56bc793ff580630e172cafb29bb8b9fc2ce0b6f1ed1639810a98d8"
+  },
+  "arb/onb4HelpSafeTitle": {
+    "source": "a315e9531662d09a733c3d6f423942845d799ba512ec0898ebe926ec40403b4c",
+    "translation": "e141b409fbbc01a1cc6d9a9158f10750b090368b19118b0cb0578474abfe6ae4"
+  },
+  "arb/onb4HelpTitle": {
+    "source": "eff6bca46bc3c854980a1948af3a09453aebd8b0a624141f31894fb28458f821",
+    "translation": "b9603a66e4f16af340b9fee17263064c2c88455d8f1069fcafeaee9c548883c5"
+  },
+  "arb/onb4HelpVps": {
+    "source": "3a6ab70a0dcac573c7b0cb95b5fc91f1756a3fa1292e49b14c0da91a4902f730",
+    "translation": "0781d48f28cd89b8e41ee38c42feab75f7e87cdfb6d55f77a90040923a9c2258"
+  },
+  "arb/onb4ManualBody": {
+    "source": "05f05f4a50f6ac8dc943188e89d3fdccb0516e2d082cfa0dba715775847468bb",
+    "translation": "1c1adc40da069064be938a6d5eef0d35bb05fce3642ecf34f23fc0b42f961cab"
+  },
+  "arb/onb4NoCodeBody": {
+    "source": "4e99bdda5d425200ef3d82850c9015bb05686da3a4678eb396fe832e3915af6d",
+    "translation": "f15bf182955e351f67085c5baf40915592838d2018233f017bd2abee6e3f47d4"
+  },
+  "arb/onb4NoCodeTitle": {
+    "source": "0d7f3a3ec4c9a9cf0d023fad9854aa39cd6332ba7403704ed2d626e857290991",
+    "translation": "eea9a3d981520c0b7bbab171eae3234452937df00911f9980f1b744e8257857c"
+  },
+  "arb/onb4NoHermes": {
+    "source": "e193c58e42cf730727738b4036b0464260be21b01d605298775f342c2c401b22",
+    "translation": "a26663404b9b031620250c9130d45bfbf18b8894784e254748b3490631f9edb3"
+  },
+  "arb/onb4ScanHint": {
+    "source": "09cad433857e07c60e2062b9930616d678b340e96d48df3973ccd74051dc4479",
+    "translation": "b23a2c6469d2b75a70dba6f07d49056866b844e7ec9e15fec5e04ec8862cf602"
+  },
+  "arb/onb4StepOpenPowerShell": {
+    "source": "ad7c72c819bf07d47921e258ed957bb67a699b8a5e7a45b4a5b97e72430996f8",
+    "translation": "b2e78766f6a56b1b27cc80724b3c71adb392ddcc2d70145439c230e1a793fcbd"
+  },
+  "arb/onb4StepOpenTerminal": {
+    "source": "c9de5dba51bf16f580ef6ef19f5a084b8016ef2998d9236bf991c0137a3e8efc",
+    "translation": "eb9a0e403e12d98646d7add45dd165bfcf8118c1fd89b772ec6f3bc2e11f2b73"
+  },
+  "arb/onb4StepWhere": {
+    "source": "fabeba074162db982be0c88086650117754afa3c58827349dc0131af120b4b41",
+    "translation": "41dab56d00742111f272ec3bc2e586e785eaed0515323269fa1f09e3fd932f32"
+  },
+  "arb/onb4WelcomeBody": {
+    "source": "7728c30cb21fd399be3a686614595d7b102c9075dbc3b919d4f64712ff828354",
+    "translation": "0e92b3d1c7cb25f630e093f99224c3988f0cf8a2ebad4421bcd2d4ed0eeffbdc"
+  },
   "arb/pairLinkSetsGateway": {
-    "source": "7d04c414b9090d2bdeb6acccb6602fbdad4aa8ca438bda64198335c1bfc76003",
-    "translation": "9ee50675a24c30bc3009369e222b191036b17d72f49bb7dc498dcfca852950e8"
+    "source": "7f6ea32c86fe2a67546ccbd66b4e8d56c2a86d5989c97b89a212c953c875700b",
+    "translation": "0bebf73d8a5ec4a744f8bbd71a5b0ceae4467a9e20b1fc3affc3f4fa58bf24d2"
   },
   "arb/pairLinkSetsGatewayAndDashboard": {
-    "source": "f7757434049f8028f447c95a49aa6087411c4fa2fa80eb932cff67b1809edceb",
-    "translation": "2668687a250cf27c7dbdd2e03911a6a5ae8b7f59fb7406f8940aff3e9f89d25d"
+    "source": "bee8a3958b66a5f720cbff979aa9e4b3b26c0e733090d095d5a22c30cee4bcd1",
+    "translation": "608a6b92246faeeeeab087f904cb4fee595187a3f497050f3c1fc921a4d0c11e"
   },
   "arb/pb1215ChatCount": {
     "source": "22efd8923a9f5f1b949c9f386272a7f227e2fda6db8a58df94045b449b0dafd5",
@@ -13371,69 +13471,9 @@
     "source": "5a9d967354c61835589fb81a32aaf297ce4945cc664f30cc194322a5a09d5ff2",
     "translation": "aeab140f34d96818990fbfecf96206b97ead1b408609cc4c41c99ff059d23f9d"
   },
-  "arb/runsActivitySection": {
-    "source": "44fa2cd53ef7a869a1a686f175bd14605a10bdcf05a6dde4159b6cd3022a0167",
-    "translation": "d740f1252ed5d70f632ed8f0bfd28bcf9b28b7ab1c7c10c79dadff45c7853f6c"
-  },
-  "arb/runsAgentBusy": {
-    "source": "bcf0170045b8591da28a757851dd56660f324862a39fdb0d0a573064231d906c",
-    "translation": "ede784fb156623d534727e1d622f13c4509a2190cf7fdb6d504c35224279631b"
-  },
-  "arb/runsAgentTask": {
-    "source": "d4522b25a347b2edb6e3b76db5b2cf7ac664bf05166097876446ee98590fca23",
-    "translation": "4e9479b62c92409e0f6a78f334dd459d590270a277bde719a4a6026297932e70"
-  },
   "arb/runsAllowAlways": {
     "source": "a2a499c955cb2a2ae0c592c5f4415022c0dca8d209c1d84f0da975b67a9f452e",
     "translation": "7bdf6086562fc7177e200755ab4f3462bc1fece4e3077ee07597200386f529de"
-  },
-  "arb/runsAllowAlwaysBody": {
-    "source": "72c6bb95cd692a90d6b646467d31d1dbfcd13801cbcd1cc0c0bc9e8d5a398a35",
-    "translation": "85c6f4e8cfd1e0f7759bb46a66b55d7c1b982d58ac714fea3e6d9ad257c09134"
-  },
-  "arb/runsAllowAlwaysQ": {
-    "source": "e026d059b2960dbe1bc28d9298f486d624060ef87754a7f1639eadbf74a0fcbe",
-    "translation": "685474d4eaac0ca712a7c2f0ca4ad286a271a16a782433fa788862eeb2ec6879"
-  },
-  "arb/runsAllowAlwaysThis": {
-    "source": "537c21fe3f6d1fad71d35870234578d49bc4e187246445591875149ee0938315",
-    "translation": "5d85e0edcb861f2a540cb5c6edfe8e4e41971d364121caecefeae0510aade80f"
-  },
-  "arb/runsAllowedAlways": {
-    "source": "656ab08e0284513eac20f353464c938128d1bc8c4f0854365a1299858ba02bf0",
-    "translation": "a06e7b14db68aac375863f211309843c465969872d0f98d22d96b8852d23b901"
-  },
-  "arb/runsAllowedOnce": {
-    "source": "3fe614696aa1969d6e3ecddcf6893e6a089d82fbc1b9134f1b61e8cce0fd139d",
-    "translation": "1bb727145bf4518578241e69d52673bfebc84b8f6c1d6e5dd02617e0c027f6d8"
-  },
-  "arb/runsAllowedSession": {
-    "source": "691e2af01c9ca3e7f65f61859bb844395c8740a6f4bbd1399112331e80373b70",
-    "translation": "483ba180816f032047d059b80f6faefc552911df458ddad2e85d2d528c89d8cf"
-  },
-  "arb/runsApprovalRequested": {
-    "source": "e9ab42cd0f86903fa4793d1ee974e26a3d0ace1bf610f9d732cb86fbc7ac6b0c",
-    "translation": "6822fb242ba92591663fc506b0f863531096fc79d004c8d0e91585f3576189d4"
-  },
-  "arb/runsApprovalResolved": {
-    "source": "4ce14377669253360405cd143e995f2561d95512b4d9c895b4b07c6cb5aca772",
-    "translation": "f345f75225f75ed809900c78198afc6bf66d80b37dddfe43e87fdbd5ab63a11b"
-  },
-  "arb/runsApprovalSent": {
-    "source": "b32651967b105d1b40630d41281aff8f685374312891fb03fd81ffda4f94cd81",
-    "translation": "0eda0d4a308a4ac789e1338f64c9f529154041317782b3a12899247dd2549997"
-  },
-  "arb/runsApprovalSummary": {
-    "source": "6d70c26d9b0418f5db117c83be395ac661294981d46475105c2b3a9f52091e1b",
-    "translation": "dfd015f54587e5f5b10399d245e80ac033ef7fbbb42c479a475738efd3b07387"
-  },
-  "arb/runsApproveAction": {
-    "source": "bb183264ec7869c2154737c87a13e310fdb329a2ab1813710a4e1cca10d05fea",
-    "translation": "c45042c1d01b6f1e96a04f488cd1a29554a731cb4f419bacec3ae6d897cc60c0"
-  },
-  "arb/runsApproveHighRisk": {
-    "source": "724d50e4b8ee8e8ca874dcedef0da9e8258804614e9d623ce9523e19f3989e8a",
-    "translation": "43ddc58c242a1f4ea4dc53e2976742407707313dcc21668fcf252cddbcde2faa"
   },
   "arb/runsApproveOnce": {
     "source": "2558e7f1d0d3c6a0ca7ce8568ff32f592ac5f47426f1fce063f4d07400a57336",
@@ -13442,30 +13482,6 @@
   "arb/runsApproveSession": {
     "source": "5866ee3bcb20f97d08aba8d9bf8b65072909d65b3cd75cc49ba065cc871a0462",
     "translation": "3418d37905f18deb26df77be7b63c7fdf2838e566b6a1ef3ecc1091533803feb"
-  },
-  "arb/runsApprovedAlways": {
-    "source": "bc89d20746bfbc73acf343f339e7be27a4adb7becf6e3f971d07df993c924b09",
-    "translation": "9d6e14504d921434c7b9d5df8c1d40c27d4468dcfb5b2361893d4c9655b3fe73"
-  },
-  "arb/runsApprovedOnce": {
-    "source": "2fe68b617ab44e437f333738879c012b6ed24fb32a6b093645b6c525216f0308",
-    "translation": "5d2717aabb25fb1849e90e7ae319562c0d65f51e3b664e1519eb7c5b79531f72"
-  },
-  "arb/runsApprovedSession": {
-    "source": "e6a4075010f8ef0294a30d1043b1dda5a2c8a2b51eca5b4249e2b95bfcf31aeb",
-    "translation": "d686263cd1c68c4aa6f3ec09724efa326f88f7b4c601d28f07ac6f03f4a5a62c"
-  },
-  "arb/runsAutoApproveError": {
-    "source": "459c391390d9399a3ceb1d5c4c76ea1d9877802fa50aee90801fe83ef59851a1",
-    "translation": "66e70f54b478f377d8bcfed5abb3b37edbdd205a0fa2da71f6d3b7cdffb85ba8"
-  },
-  "arb/runsAutoApproved": {
-    "source": "50ec7de07053941687b8a81089b9400d45f6fd59ffa26e47fc409bdbd4637fdd",
-    "translation": "8d5eafdabc8786c8b046cf3d034b7d483bbee18194c1fe9cec160a64d7ae319a"
-  },
-  "arb/runsAutoApprovedScope": {
-    "source": "386c0d57a5ae4c3392b9e475d34145ccbaca06c2c0c88c3ed68b85bc2949a80c",
-    "translation": "5ceba8aa2ba882859d2cb73a4f5d6ef480da4b30a804d15c3d25dcf0d067e458"
   },
   "arb/runsClear": {
     "source": "e38ff998a6e53906e3a04d3a85974767616e544d202e2c40fa1f83eff0dc9f42",
@@ -13495,14 +13511,6 @@
     "source": "3c4a9e4b95c4587ee0536d1a91a9cbce0906674399bb8693bb234989116e1fc2",
     "translation": "bd220b51826b488eaef7d9a34de9e4d7bcb949a3ee8b961764890fa50ef1a89e"
   },
-  "arb/runsDenied": {
-    "source": "280302ec43f58068fcdfda32c910968aa3a4841366629a4e93fd00765d5bd452",
-    "translation": "c9ed4a0189e2df6b57ec6dd57abd74a7dc1fafe34d6b06d77fd1bc3c8335d028"
-  },
-  "arb/runsDeniedAction": {
-    "source": "608adfea037053c3509b58c8582f26d5ee69da80175affbc23186e732809afec",
-    "translation": "eaebeb54cb4badc0cfeac1d93ad18d7007f1814db651291bb154fcb36070c9d0"
-  },
   "arb/runsDeny": {
     "source": "fa24bdb4673077b4bb0c0ac08af4d00faa34a21aaad3652880f9d463553bbaaf",
     "translation": "611105086c7054d210a616fc027afc811087226cd2f5f540ddbf56671a8d2495"
@@ -13523,29 +13531,17 @@
     "source": "2868202c12bd24d1d8a17ebc297b0c365e1c1f603e01f7fe390e61168f21b5b4",
     "translation": "cd063a7cc1b0bd287d8e352e255d032a2e8ebc8b587318f10f2d2e1586ff45da"
   },
-  "arb/runsExpired": {
-    "source": "52df592076a5fbe3f25f2eb6b4de7360fade0df24973fadc5acb60a2b19c9837",
-    "translation": "e54ab7fe55c5f8fd12fab324e0406db27939f2fc67f6a384d561b4bb6970ad9b"
+  "arb/runsHistoryHeader": {
+    "source": "0aca3d1ce341647893192ee1a40367a8b6171d0158b7236c896a27b9acb8206a",
+    "translation": "37a86d1713af7f525cfec83f7110eae8f8e8fca9f2364fa26945907170f22b28"
   },
-  "arb/runsHighRiskWarn": {
-    "source": "d5e6eef31ce6f6f391aab2283d6900a488eb940264dc0c33dd87d49c4e67be61",
-    "translation": "ee4ee8a68d892b819baab6f96ab72273c46bee44c8f0e96541bbd8eacb759898"
-  },
-  "arb/runsLaunchError": {
-    "source": "3d64c58fbba35cc0c5cddd5803707bc0db736e1a3802617b6e455c9301e39091",
-    "translation": "1520f6895e7076e8a8baa40f5a0b3e04c7da93c9f7475f6484c8759104ac91dc"
+  "arb/runsHistoryReadOnly": {
+    "source": "c254bcd7f77ea00812dd5311c2b59ec3de932d9e02e239307a75d98671660750",
+    "translation": "1263d8ed0cff9a05fd5232c587f27eafbed492bf66498e9d369197d49c5bba1b"
   },
   "arb/runsNewRun": {
     "source": "067fc7ac705d39362b81d661b80c6372d6674d820221117ad0a9335bc8d6411e",
     "translation": "2dd417df69949bcc22643039a111d2dc8ac7402236a639e0dfa7904188a2df61"
-  },
-  "arb/runsRefreshState": {
-    "source": "b4be3a959743055b416a04908d5f6eda4763ccef884e4e272aba73b67b1d7dd2",
-    "translation": "e0bc11060ec4e60ab9f451c01a42a24627e926c15fd21ae2386f505c4c2f7424"
-  },
-  "arb/runsRefreshStates": {
-    "source": "17e305a86f0fe0b2ef6b84ef3aab4aefe572b98d4e105507106f3862a5ea3e5f",
-    "translation": "3466a1735ede8b7d40a236c35c38af94f85ba430d5ba9008bb0102dc1105cc71"
   },
   "arb/runsReplyCopied": {
     "source": "4f0fd3448be819f87f1a9a634a3befa673f3a198339faba0ead62bb744d6d978",
@@ -13554,10 +13550,6 @@
   "arb/runsReplySection": {
     "source": "44d44125a9771f73f032917f1f49e5f2d8b2861432535ad3f304647c34c84b33",
     "translation": "3d65e5c4d6eb73dc0843100ac34316b09e552014d2514dba156fd23fa85467c7"
-  },
-  "arb/runsResolveError": {
-    "source": "113c30c72afc05c1903c9d8afd1a04e85ee3db213e0b44a318863e0404a35d2c",
-    "translation": "fa5d64b6623940845bf024f72c2d5a52fc150c47fd0c8e2826b213ed8adcae1f"
   },
   "arb/runsRunIdCopied": {
     "source": "584072ea547d27994f383c385c56c16112681a1b4feb1f72e8dbe912600d9794",
@@ -13595,22 +13587,6 @@
     "source": "415e4ab7fe4d2c3e96c8171e414a3082adfbef593461216807a577f51f517abf",
     "translation": "bb6126c856a525c5c919025c729aeefa4158323adec2267130cf8862d7d51712"
   },
-  "arb/runsStop": {
-    "source": "54352a6f4ec9a4fc0fdb6277a6ae8fa648dc3fee8b1326a9a228b1fc2772474a",
-    "translation": "3090ea9a4c468c8c564af147cc0767375b365ec659f3b33e5170677c9ad1a223"
-  },
-  "arb/runsStopError": {
-    "source": "f06daf5e8d1d571f2cf9efd9544099b0126f1347befd434a2e4caf2eea5529df",
-    "translation": "aad92314bc73d83562ae2a097f283e8615a802988bb46138cbefb2cad30a6696"
-  },
-  "arb/runsToolCompleted": {
-    "source": "3434d15072d7f63652c17ff3f24f522fd56e84804ba008f18d6b9357ddae517e",
-    "translation": "9d7f84bf0d8624d7d54812de553dd265b22d13de894725ed4cbc1bd96f6a4b93"
-  },
-  "arb/runsToolFailed": {
-    "source": "07f9c4d490e7c4f5726ddd017c45a6ffecf94e7328ac4be488f77c102341dbf4",
-    "translation": "68a44c790c9ee8372490e26d1f715fb2177b4a914f5b64ad492aac2155d52c6b"
-  },
   "arb/s1216StartupFailedBody": {
     "source": "56d99b5508e01566730ea35a552ce127432274cb85189272c911f3b3619ae578",
     "translation": "c3903799e9dc371a893a9609c53f9fb45fe2b8023d863bab30ac4ca2a5e04840"
@@ -13622,6 +13598,18 @@
   "arb/s1216StartupRetry": {
     "source": "7c7d4ca4816d6913114d9e2ada02aa4e46944a054ee00037876aa279df1d95ce",
     "translation": "25cae588b5fb487069d1014dc48edb1c7ecf044f10b42a5b4aac94391d9ec1b7"
+  },
+  "arb/s2SessionExpiredBody": {
+    "source": "eddb512a219f2fd301fd626400c8a96096002ccd87ca54a145ca8040dcbc3ff1",
+    "translation": "7831d57e3c3bb588edf7ea6a2f89fee0343ef7f1d66269b94e00b53e93b71058"
+  },
+  "arb/s2SessionExpiredLine": {
+    "source": "ceb5de4196196b564ed1354fd71ec05293ffbe6896ec59deba46e595a8366e52",
+    "translation": "95bb946029099f72caa1ec0dd055f1707f41e2a46d6c69a1234e366d3b193b9f"
+  },
+  "arb/s2SessionExpiredSignIn": {
+    "source": "a0737b87a7eb8cccbd5e72c7e88cad522acb4ceb5f1fd78a8e933f1540ae210e",
+    "translation": "f9b4591ff382ea4a057a87098da3c030e82adc696cd759bbf1f8ff80c98b2a05"
   },
   "arb/sAccess": {
     "source": "f6cca02b85784980c81092cfc0434417566db6d0bddf0c6d1ead7924c7126d36",
@@ -13655,14 +13643,6 @@
     "source": "2208990bd610f48ff1ef4fcbac3dfb2245cc3e409d467b8265e7cc19b70e8e4f",
     "translation": "1429cdd80ca6e6b809ca0d68ecc8d43019c6bccdb86ea7ed3c148f0ed99a6583"
   },
-  "arb/sChatKeyRejected": {
-    "source": "36c3a3c2507e04f6b25218658c9b2425b69114ed4a9200359c5f1c24e7d664f9",
-    "translation": "702afa23331c9202ae767673e302b0a0cafeacd8c99ed225bb4ea416ff6a4ec5"
-  },
-  "arb/sChatPort": {
-    "source": "7c44a2a621ce1db2ced76f5a36ee97df96bb0c1c5fa7a3c09a69cecaf477c394",
-    "translation": "35cdc98ea4f565ea9b566ec448fac25e8843c21fd21bd59f4bd6381d562695c8"
-  },
   "arb/sChecking": {
     "source": "2e3e61c69286fb19331454fa76e40d34650f2cbb5b16adb2227cf27310cb8032",
     "translation": "62ee841f8b35782e692936a187151d41c01bdf02e3e9a154a85d50a0aa15549c"
@@ -13683,9 +13663,13 @@
     "source": "298e4ebcce12e49731d340905597a17b4dd58db6ef969c75796a6448c0fca7cb",
     "translation": "fa28dda4c0da8d8eb05ca18066de47ddfa0f95287cd9068d57cffdb59634d18f"
   },
+  "arb/sDashboardSignInMissing": {
+    "source": "cbf08ac6d6d9674c0d15abed08054b5809c2d8a41b1ad3451467a500690ce3f0",
+    "translation": "7edfc0573365f88f6ca5139045386999a01b9792bf5baf1d0cb0d982cba272bf"
+  },
   "arb/sDashboardUnreachable": {
-    "source": "3c151593bf1200b27f358353ed7fab684584cd35591c6a05b3e492998e748537",
-    "translation": "214b435b3389adc1086a756672272a9fb020d1485dcf0c3c8ac736a8221c2051"
+    "source": "6892ec0ea3c9701dd999512f169c3b6e360da6bf46ca0b80b32bf70aa6b2cd40",
+    "translation": "0eb0142ecd1e113ee83d6c2e09862aa213b93f3e5e6d3bf83576f5aeecb3c585"
   },
   "arb/sDashboardUser": {
     "source": "749e6688e5fd130c4704968c26ae421d2e358e0104d07cbae3f010b40545b9e0",
@@ -13810,10 +13794,6 @@
   "arb/sWhere": {
     "source": "ca1bdacc58e28ba91a3cbfe9512324e1fb070e3fdc61ebca1401b511d1ce6399",
     "translation": "ba5852c8f80b7112a192f0e5910b19bf468813e5ee59b5d09e3239fd8e037988"
-  },
-  "arb/sWrongChatAddress": {
-    "source": "e08c3e50b900abce3bcfba79161aa186f37152c336a97b6283cbaee016d5bcce",
-    "translation": "4395944099752db735c709bdb3c2a9a59df7a8b1c1db14bb024bf827b5211b32"
   },
   "arb/sa1215AgentPreviews": {
     "source": "7fdaeb479992db91fafe5dc40c33879f3ec5d9afdde55d53ec78bf2a1da47624",
@@ -14204,8 +14184,8 @@
     "translation": "4cbebf5b2cd29b10c3add009cd01eb69d8a1fb8a5d1877b000578df084532225"
   },
   "arb/secCredentialStorageSub": {
-    "source": "572bbdfc60dd83fdf04a52194240d5ddffcecee5319fdcb1767e0071d6ef61d3",
-    "translation": "299cef1a7511d75ce54670ab0e04eba1e145ad6f5715c0377d9ee5ba9e9b5acb"
+    "source": "be5a6db504207c07d87655b6e56af32cfce385da4cfcc51d30f0313403fe97b6",
+    "translation": "73bef48493645110c4dd43f5d4f165d5a6b060888be316e41b9ad788c21eed09"
   },
   "arb/secCredentialStorageTitle": {
     "source": "343db848a298e50a08dd7540854cd423dfce9da272314fd37a0ccdb069a1bbbe",
@@ -14356,20 +14336,36 @@
     "translation": "d2de0bfebd34e42c2f22d6b61262231f68768aacf202e00611e9322a317874e1"
   },
   "arb/secWipeContent": {
-    "source": "c3440dc6ba3dde11c2f416c90f1abdbfb2293a7f069d28a1622ddc3ee789a770",
-    "translation": "be7d229ea994c53398167b10457e0d71a2874eebfffc9a34e3af490c372291cf"
+    "source": "7d2e8629b3505fa22a2f09050a74baf3cc95231e1d73eb24607cb832cfdea407",
+    "translation": "7dee4d72eff5690d17eedcb523d31b3e18fee054fdae0c9eca0b0436f7b6aedf"
   },
   "arb/secWipeKeysSubtitle": {
-    "source": "8a7e03b496a510395d7b545f6fa9d9f6ead59515f6683d6f76e66bdc06b00e58",
-    "translation": "76b337a2c15acd1c04bbdf9f0c03878ff7ac43bedc5ac7cef18c6eb93ff7f459"
+    "source": "e6dd2c87ff212739044796d2d533e0974bf1d0d0465f8d715c50ab2e50746cab",
+    "translation": "730a86a43ade07be3c1c2f4219d532e2b4f095b4273158198a3368637f396936"
   },
   "arb/secWipeKeysTitle": {
-    "source": "69438934b5573f6fa9a40dc91b57c2b76f14f3fdc7c96cd3f864c327823515f1",
-    "translation": "6f22183502dfc61b73376ea71f7822b909c64fe72861f66f933f416a38fe6dab"
+    "source": "a186a072dfe1bd7207dea1b731ebcd3f497cd7f0321a337e5b79c5a136bdba4c",
+    "translation": "3a13506dd1cfdae7bab50323f677eb1d5843b4782e07ba046d3b1d80127f4c04"
   },
   "arb/secWipeTitle": {
     "source": "3bf11c2c17cf16a76bc9a9bea3068089084f34b0cda75530d379ab4871c29d42",
     "translation": "58d4ee5cd97cbeb4085a6ea88d2d04860a21bad2a44812d4d572cad70d30d03c"
+  },
+  "arb/serverStartingCloudHint": {
+    "source": "369ad8c52ee1b1a839e64680cf8bdb12b007271106cf2c609f8a483f2923d815",
+    "translation": "3213dfef8bc8db616fd53a16140d06a8b68f6e3ab80c56f25a4d83e088abf0c5"
+  },
+  "arb/serverStartingGaveUp": {
+    "source": "ddb633d20f9537e21805c2d68a84008ab2fe17d3c3fed4df87a780f989633d9f",
+    "translation": "c25e072937ff3e02a583e02e4409dc303a82a2d4c0d0dade797031e833720f1e"
+  },
+  "arb/serverStartingTitle": {
+    "source": "dbac192b208577ffb042b12d028978db2c32557d7107fdccc7e099eb8d0dac24",
+    "translation": "8d560eaf7f6d2291fc05d8adb50dc5a3c15cef5816c5932534a0c2979e63eb57"
+  },
+  "arb/serverStartingWait": {
+    "source": "0a4f61dd330f3a449d238b1eae95012db6a6c3a19d5342cc6f7da75164526945",
+    "translation": "a918a36a1fd9c694de15964588fffe4d5c70a64439093ff073fc783c7800f6a0"
   },
   "arb/sesBranchesCurrent": {
     "source": "d58cb87fa3dd18221c9ebb32af61e4418a85ad15422673a27df509f9e060e42d",
@@ -14783,6 +14779,10 @@
     "source": "07457bbaf9619490aa44a4b191ce86fdfc2ebc2a3fbe40a25afc82122e0486e0",
     "translation": "46c7f63780c57a3afe8c9a19fadf9aeced6ae92dcabadc85ebde17e54c2810eb"
   },
+  "arb/setCheckingUpdate": {
+    "source": "345599c42cc6c8401cf6f6cbc989f96ab33e71908abdc3014f6578914513f91b",
+    "translation": "d2275310cd127352d6c02c3acc3fed56a5b4ca7f29790033e6cccb8b228ed146"
+  },
   "arb/setClearConvos": {
     "source": "de44a622e6f6cd520044e2191a38b9222ad6dec6e3f1a951dfe449ecc2519b31",
     "translation": "c86cc5900387b799589a091148de42724c2b499398da3eebeeefd281b84b6769"
@@ -15191,42 +15191,6 @@
     "source": "291c9a752d44f98784448acac4f03d14cf3669707b0b0d176e65d6d53dc2a9e1",
     "translation": "2a8010e0fb4d480cf0e7e15ea39dc67e1357d9f6b3b0ead9f061b5e4e86ef96b"
   },
-  "arb/setupStepsDashboardEnv": {
-    "source": "ad7669888569a265659be55f79dad2496eafbbb9fb1f61df4a4d9bac4a3f54d2",
-    "translation": "b7161c0c1a7c78cb1dae0cf0cb63519df1ebc29327104b8c1aa23f6944cdf5de"
-  },
-  "arb/setupStepsDashboardRun": {
-    "source": "0ce1e4e598c46f5e7593984965f914ec39f562b0bad6f50c781a037a02128338",
-    "translation": "1f1792c67dc68af14795f3e3bee23d36fee9760e49e67d7db1b2611d0755b6f6"
-  },
-  "arb/setupStepsDashboardTitle": {
-    "source": "d4759362aea754299afd814b44113393e8795141646cbb110b336189663331b9",
-    "translation": "6f720a4c1bee04d8326054f57f9a52305bd86a5e5942d46359825217308af2e8"
-  },
-  "arb/setupStepsGatewayEnv": {
-    "source": "905f4d4cdb7488d9d51fd72913a230a4191257c5ad28eeccfd2bf284b0c02310",
-    "translation": "adfba956ed3db13f37dcc8172f361d868b9f66898326ab56e40eb6c5593e316e"
-  },
-  "arb/setupStepsGatewayKey": {
-    "source": "d6c7acda70dbd83d834525d42154398f2dc9a24f277a9645fd84c37f507324b2",
-    "translation": "f2c2049545542f10599edd69599fedbd32dd4247178dcc9cde3a895772c0e0bb"
-  },
-  "arb/setupStepsGatewayRun": {
-    "source": "fd0b87f5f15aa58e679a0f3b78fb78232e1b16abec3a303aebe7f3e87b2db270",
-    "translation": "dab02577aea176d13a480888e7e511ef71a64078dba11c35a17e3973ceb04677"
-  },
-  "arb/setupStepsGatewayTitle": {
-    "source": "5b7f856a6bc447a59a901ba410e4575fcb5c60a83fbf150c0e33118a67248bae",
-    "translation": "1417a7e7779e5c0bd64a6e37190540e84ac8e6b81ad2bcc97d44a8cb0b846c9f"
-  },
-  "arb/setupStepsKeyPlaceholder": {
-    "source": "bcb3234180deb3962e478eaed5fc431216f78b6da70c27c82473def73d2394dc",
-    "translation": "5ace80b4ea841907b657f61aa410a3f9bc6c9c91919fe324d88eaec72e0b710f"
-  },
-  "arb/setupStepsPrivateOnly": {
-    "source": "615ba7cbe90067fe785e803ab9801b169b23fc3d6d76c863d7eb001d06a43f49",
-    "translation": "cf79ec116de5b7219f9e28de8a7cd5cc1fa71aee64bf249a2c4830b8d7aa0732"
-  },
   "arb/sftpDeleteBody": {
     "source": "137604199e780877ce1066bdb14112b3d59f9af06abf6a8d752abfd1a35d3c09",
     "translation": "144e0812252b434368e94f737cbc46282264cabe7118ffa5722289e9fd06e34c"
@@ -15439,6 +15403,10 @@
     "source": "df1b4443858214e0acf25c74f123b8840ef5dbaa5c03deed7a3704b5a533f1ca",
     "translation": "5dc18acaa1e64482e9181c6228babf33f8be5996c1987f2be62db18e3f5e1256"
   },
+  "arb/slListNotLoaded": {
+    "source": "712e55cb92091a3381124e77985ce2284ed32208331639051b066c3263a13c25",
+    "translation": "b706bb1c00f02dc5777ed661e27f0286af45900266208b09069c446fe298e056"
+  },
   "arb/slMenuArchive": {
     "source": "7aa8fc5038563d50e5dbfd29cf31a4733e1a29d7a65b33ed1fb5b98827c542ad",
     "translation": "20170e685a79171300c80d79e734f47722d4f9e03e2db2b33cea949b93e80ad0"
@@ -15508,8 +15476,8 @@
     "translation": "69fc330efa264e37f3e79b3f61e0865a35c4060edc455d9370161d195aeba886"
   },
   "arb/slNoGateway": {
-    "source": "e2995d058a60be13dbd9502d702bb9dd9a80f60e137f3a1bbd9c0317385984e3",
-    "translation": "1e1c539a5393e3860021ae0f384a718668dd5cc395c072989932b1aed688715f"
+    "source": "f94e49374b348d0eb89489891c16807a088817252eeb2ce1329e9664d9a9b1bd",
+    "translation": "253aa5ef3a95b49b04aa720f16665f4c0993d12c9f2d4c63ba23738555367cff"
   },
   "arb/slNoTitle": {
     "source": "d41137e6c24b4b4d88d6e6a2c4f7cdbe3aaef699b3669240cd673b91526047c5",
@@ -15700,8 +15668,8 @@
     "translation": "abbcf676ed6ed0aecb5634cb8fae7484e715606cc4aeb2f5919235e723a1d56b"
   },
   "arb/soulLocalDocNote": {
-    "source": "92bdf80205fd064e21c4476973485ab5bfbdc4c21589a85f7f668011c71bb50f",
-    "translation": "8793ddfb3043a8121c11521d363f707eece41940c0fbce39a8418874071b3901"
+    "source": "c05dcd5853c25835f7e039b18c3096e900ed5cfb7bef54c24202b0f3dc7938d3",
+    "translation": "c52224ec998f1d36468f91e5591929aff91f79e7efcded94920ca51756385401"
   },
   "arb/soulPickTemplateReplaces": {
     "source": "e45db1cd802c6dcb788f6c847ca6fac887f0ed966f07127fc0c97b7fb6c76b12",
@@ -16146,10 +16114,6 @@
   "arb/statusEnabled": {
     "source": "951d8ac9d6703729ca6db625ee50df8825bbdfa430e03fb21788acaaf744265d",
     "translation": "aad7d1ded0d4da48637bebb9d0dab6a258e762b29bcd9542716ee6ee58c0e813"
-  },
-  "arb/statusKeyRejected": {
-    "source": "3836724ce4046b314b6bdbc23071148747410e50e59f31048a22a919f27cebce",
-    "translation": "fe5fdee21cd9fc44c30fc85128187a1cb74888b09a9e4e47b66b09773dceb7cf"
   },
   "arb/statusLocalAgent": {
     "source": "0cf735685993070f3df5a8a552c49084ee520f03f928d043c8b04532e03ef248",
@@ -18298,5 +18262,21 @@
   "arb/vw1215ViewSource": {
     "source": "4a934842ae745c97725ab1c8b89377e42b42066f13409941aba48d720ca0d777",
     "translation": "8bb95e3918c9f2e164a9666f606d73c344611244e42fa4b6b670021bd9500f83"
+  },
+  "arb/walkIslandNoServerLine": {
+    "source": "8d7a1e7b457572871bb335ca69053dffa482a1045f3201d9194f53ae48f7f9d3",
+    "translation": "87cdeb7c83df9dfe5221b919bfe409860ee294a799516a4bf349b4fd37816045"
+  },
+  "arb/walkIslandWhatToDo": {
+    "source": "36b27030776c825b6e3690b7d3d9d1c68c4f83909c17bdd6ac7a4c60ec92fb76",
+    "translation": "6052b5d9190f6de9b4ba5243a01cbdae73ea3bc7c69c406eae2e87f1117f3fff"
+  },
+  "arb/walkProbeFailed": {
+    "source": "dab30dcf6124906665261ccbfdf3f3fb101df1038838ab9f3da48300bad2f46a",
+    "translation": "66a11ba4f788aad80e313a96f0b2da03dbda95c28af9d5286868aca1c204890f"
+  },
+  "arb/walkStartHint": {
+    "source": "8743c8806f0b53c82f1fbeb36a346e5962d6e9a5fa19fdc93a291fec7e89879a",
+    "translation": "8a965e7b01233e1833d736e578277d796a7fa10ca5bcfe423042ecd23674ce2d"
   }
 }

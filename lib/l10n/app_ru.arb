@@ -59,7 +59,7 @@
   "sRemove": "Удалить",
   "sChecking": "Проверяем подключение к чату и доступ к панели управления.",
   "sUnchecked": "Проверьте подключение, чтобы проверить чат и доступ к панели управления.",
-  "sDashboardUnreachable": "Чат работает, но панель управления недоступна; проверьте её адрес в дополнительных настройках.",
+  "sDashboardUnreachable": "Console не может подключиться к панели управления компьютера; проверьте её адрес в дополнительных настройках.",
   "sCertificate": "Не удалось проверить зашифрованное подключение; проверьте сертификат на компьютере.",
   "sReady": "Подключение и вход в панель управления работают; ваш Hermes готов.",
   "sSignInFailed": "Не удалось открыть вход в панель управления; проверьте её адрес и повторите попытку.",
@@ -80,7 +80,7 @@
     }
   },
   "o2ConfirmFull": "Этот код сохраняет адрес и данные для входа в чат Hermes и его панель управления.",
-  "o2ConfirmChat": "Этот код сохраняет адрес и ключ чата; затем потребуется войти в панель управления.",
+  "o2ConfirmChat": "Этот код сохраняет указанные в нём адрес и ключ доступа; затем потребуется войти в панель управления.",
   "o2OtherCode": "Сканировать другой код",
   "o2Connecting": "Подключение к вашему Hermes",
   "o2InvalidCode": "Это не код Console; сканируйте код подключения.",
@@ -90,13 +90,16 @@
   "o2Duplicate": "Этот Hermes уже сохранён; откройте его подключение для проверки.",
   "o2OpenConnection": "Открыть подключение",
   "o2MissingStep": "Ещё один шаг",
-  "o2MissingDashboard": "Чат подключён; войдите в панель управления, чтобы использовать задачи, профили и память.",
+  "o2MissingDashboard": "Войдите в панель управления, чтобы использовать чат, задачи, профили и память.",
   "o2SignIn": "Войти в панель управления",
   "o2SaveFailed": "Не удалось сохранить данные для входа; войдите в панель управления ещё раз.",
   "o2SuccessTitle": "Подключено",
   "o2SuccessBody": "Ваш Hermes готов к общению.",
   "o2ReadOnly": "Вы можете просматривать свой Hermes, но это подключение не разрешает изменения.",
   "o2GoHome": "На главную",
+  "o2OpenChat": "Открыть чат",
+  "o2NeedsModelBody": "Выберите модель, чтобы Hermes мог отвечать",
+  "o2ChooseModel": "Выбрать модель",
   "o2MacLinux": "Mac или Linux",
   "o2Windows": "Windows",
   "o2IssueTitle": "Не получилось",
@@ -108,6 +111,7 @@
   "o2StepTerminal": "Откройте терминал",
   "o2StepPowerShell": "Откройте PowerShell",
   "o2StepPaste": "Вставьте эту строку и нажмите Enter",
+  "dashPasswordHelpEnvNote": "Если в файле .env Hermes заданы HERMES_DASHBOARD_BASIC_AUTH_PASSWORD или HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH либо в config.yaml задан dashboard.basic_auth.password, сначала удалите их: любая из этих настроек сохраняет действие старого пароля.",
   "o2CheckFind": "Найти ваш Hermes",
   "o2CheckChat": "Войти в чат",
   "o2CheckDashboard": "Войти в панель управления",
@@ -123,6 +127,7 @@
   "o2ChatOnly": "Продолжить только с чатом",
   "o2OpenSettings": "Открыть настройки",
   "o2SetupByHand": "Настроить компьютер вручную",
+  "homeOfflineDashboardSetup": "Включить панель управления",
   "voiceGuardProbeTransient": "Не удалось проверить доступность. Повторите попытку.",
   "voiceGuardProbeAccess": "Требуется доступ к панели управления.",
   "i18n1215PlatformConnected": "подключено",
@@ -1120,7 +1125,7 @@
   "soulEditorHint": "# Идентичность\n\nОпишите личность, стиль и ценности агента…",
   "soulApplying": "применение…",
   "soulReload": "перезагрузить",
-  "soulLocalDocNote": "Локальный документ. Hermes не предоставляет SOUL по HTTP (проверено: /api/soul отсутствует на шлюзе и в панели управления) — отредактируйте его здесь и примените на сервере через CLI.",
+  "soulLocalDocNote": "Локальный документ. Hermes не предоставляет SOUL по HTTP — отредактируйте его здесь и примените на сервере через CLI.",
   "soulPickTemplateReplaces": "Выбор шаблона заменит текущий черновик.",
   "actCopyVisibleLines": "Копировать видимые строки",
   "actLogsReadError": "Не удалось прочитать журналы",
@@ -1169,7 +1174,7 @@
   "memReadOnlyNote": "MEMORY.md и USER.md редактируются на сервере по одной записи. В резервную копию JSON сохраняется эта сводка.",
   "aboutScreenTitle": "О приложении",
   "aboutReleaseStatus": "неофициальный клиент · XPeta Lab",
-  "aboutTagline": "Частный удалённый Android-клиент для самостоятельно размещённого Hermes Agent. Предназначен для подключения к вашему шлюзу через Tailscale или LAN без телеметрии XPeta Lab; внешние службы всегда необязательны.",
+  "aboutTagline": "Приватный удалённый Android-клиент для самостоятельно размещённого Hermes Agent. Подключайтесь к вашему Hermes через Tailscale или LAN без телеметрии XPeta Lab; внешние службы всегда необязательны.",
   "aboutLicensesTitle": "Лицензии открытого исходного кода",
   "aboutThirdParty": "Сторонние библиотеки, включённые в приложение",
   "aboutBaseProject": "Сторонний код",
@@ -1515,6 +1520,7 @@
   },
   "setGatewayNotRunning": "Шлюз не запущен.",
   "setCheckingStatus": "Проверка состояния…",
+  "setCheckingUpdate": "Проверяем обновление…",
   "setStatusUnavailable": "Состояние недоступно",
   "setAllGood": "Всё в порядке",
   "setReloadStatus": "Обновить состояние",
@@ -1700,6 +1706,8 @@
   },
   "runsCleared": "Список очищен",
   "runsAllowAlways": "Разрешить всегда",
+  "runsHistoryHeader": "История",
+  "runsHistoryReadOnly": "История только для чтения: за этим запуском больше нельзя следить, одобрять его действия или останавливать.",
   "runsReplyCopied": "Ответ скопирован",
   "runsError": "Ошибка: {error}",
   "@runsError": {
@@ -2291,13 +2299,13 @@
     }
   },
   "secCredentialStorageTitle": "Хранение учётных данных",
-  "secCredentialStorageSub": "API-ключи и пароли хранятся в Android Keystore, отдельно от обычных настроек.",
+  "secCredentialStorageSub": "Пароли, сеансы и ключи хранятся в Android Keystore, отдельно от обычных настроек.",
   "secStatusProtected": "защищено",
   "secStatusReview": "проверка",
   "secLockStatusOn": "PIN-защита включена для открытия приложения и конфиденциальных действий.",
   "secLockStatusOff": "Включите блокировку приложения, если другие люди могут получить доступ к устройству.",
-  "secWipeKeysTitle": "Удалить все ключи API",
-  "secWipeKeysSubtitle": "Удаляет ключи из Keystore. Экземпляры сохраняются.",
+  "secWipeKeysTitle": "Удалить сохранённые пароли и ключи",
+  "secWipeKeysSubtitle": "Удаляет пароли, сеансы и ключи из Keystore. Экземпляры сохраняются.",
   "secOrphanTitle": "Удалить остаточные данные",
   "secOrphanSubtitle": "Удаляет остатки данных удалённых экземпляров: возможности, профили, подтверждения, сессии… Действующие экземпляры и настройки не затрагиваются.",
   "secVerifyDisableLock": "Подтвердите отключение блокировки",
@@ -2306,7 +2314,7 @@
   "secVerifyBiometrics": "Подтвердите биометрию для активации",
   "secPinUpdated": "PIN обновлён",
   "secWipeTitle": "Удалить учётные данные",
-  "secWipeContent": "Ключи API экземпляров ({count}) будут удалены из зашифрованного хранилища. Экземпляры останутся настроенными, но снова запросят ключ. Это действие нельзя отменить.",
+  "secWipeContent": "Пароли, сеансы и ключи экземпляров ({count}) будут удалены из зашифрованного хранилища. Экземпляры останутся настроенными, но потребуется войти снова. Это действие нельзя отменить.",
   "@secWipeContent": {
     "placeholders": {
       "count": {
@@ -2590,7 +2598,8 @@
   "slEmptyAutomationTitle": "Нет сессий автоматизации",
   "slEmptyAutomationSubtitle": "Здесь появятся сессии Cron, инструментов, API, ACP, сценариев, делегированных задач и вебхуков.",
   "slConnectionError": "подключение ошибка",
-  "slNoGateway": "Нет подключения к шлюзу",
+  "slListNotLoaded": "Не удалось загрузить список. Проверьте подключение и попробуйте снова.",
+  "slNoGateway": "Не удаётся подключиться к вашему Hermes",
   "slGatewayHelp": "Проверьте, запущен ли ваш сервер Hermes.",
   "slNoTitle": "Без названия",
   "slashDescHelp": "Показать доступные команды",
@@ -2863,8 +2872,8 @@
     }
   },
   "ieConnectionCheckTitle": "Состояние подключения",
-  "ieConnectionCheckSubtitle": "Проверяет, отвечают ли шлюз и панель управления.",
-  "ieConnectionCheckRunning": "Проверка шлюза и панели управления…",
+  "ieConnectionCheckSubtitle": "Проверяет, отвечает ли панель управления и удаётся ли войти.",
+  "ieConnectionCheckRunning": "Проверка панели управления…",
   "ieConnectionCheckReadySummary": "Обе службы отвечают корректно.",
   "ieConnectionCheckOfflineSummary": "Одна или несколько служб не отвечают из этой сети.",
   "ieConnectionCheckIssuesSummary": "Экземпляр отвечает, но доступ или некоторые функции требуют проверки.",
@@ -2911,6 +2920,10 @@
   "ieLocalModeSimple": "Простой чат",
   "ieLocalModeAgent": "Полноценный агент",
   "ieSaving": "сохранение…",
+  "ieChecking": "Проверяем…",
+  "ieSignInExpired": "Не удалось подтвердить доступ к панели управления. Войдите снова, чтобы сохранить.",
+  "ieSignInAgain": "Войти снова",
+  "sDashboardSignInMissing": "Войдите в панель управления. Без этого Console не сможет открыть чат и ваши беседы.",
   "ieProbeOnline": "в сети",
   "ieProbeAuth": "аутентификация",
   "ieProbeSessions": "сеансы",
@@ -2945,7 +2958,7 @@
   "ieExternalPairingTitle": "Проверьте эту ссылку",
   "ieExternalPairingReview": "Только проверить",
   "ieExternalPairingContinue": "Проверить подключение",
-  "pairLinkSetsGateway": "Эта ссылка сохраняет адрес и ключ чата для {host}.",
+  "pairLinkSetsGateway": "Эта ссылка сохраняет адрес и ключ доступа для {host}.",
   "@pairLinkSetsGateway": {
     "placeholders": {
       "host": {
@@ -2953,7 +2966,7 @@
       }
     }
   },
-  "pairLinkSetsGatewayAndDashboard": "Эта ссылка сохраняет адрес и ключ чата для {host}, а также имя пользователя и пароль панели управления.",
+  "pairLinkSetsGatewayAndDashboard": "Эта ссылка сохраняет адрес и ключ доступа для {host}, а также имя пользователя и пароль панели управления.",
   "@pairLinkSetsGatewayAndDashboard": {
     "placeholders": {
       "host": {
@@ -2972,6 +2985,12 @@
     }
   },
   "legacyBridgeStepAction": "Войти",
+  "gatewayEraTitle": "Console изменилась",
+  "gatewayEraAction": "Узнать как",
+  "leg3SetupTitle": "Подключите ваш Hermes",
+  "leg3SetupBody": "Теперь Console использует панель управления Hermes. Вставьте эту строку на компьютере, где работает Hermes; по завершении появится код — отсканируйте его. Ваши чаты сохранятся.",
+  "leg3EraBody": "Теперь Console использует панель управления Hermes. Подключиться просто: вставьте строку на компьютере и отсканируйте код. Ваши чаты сохранятся.",
+  "leg3UpdatesExisting": "Обновляет подключение «{name}»: ваши чаты сохранятся.",
   "@leg3UpdatesExisting": {
     "placeholders": {
       "name": {
@@ -2982,8 +3001,8 @@
   "dashboardSetupForgotPassword": "Я не знаю пароль",
   "dashPasswordHelpTitle": "Задать новый пароль",
   "dashPasswordHelpIntro": "Пароль панели управления нельзя прочитать или восстановить: его заменяют новым на компьютере, где установлен Hermes.",
-  "dashPasswordHelpCommand": "Вставьте эту строку на том компьютере. Она создаст новые данные входа и покажет имя пользователя и пароль: введите их здесь.",
-  "dashPasswordHelpOthers": "На других телефонах и в браузерах придётся войти снова.",
+  "dashPasswordHelpCommand": "Вставьте эти три строки в терминал на том компьютере. Введите новое имя пользователя и пароль по запросу, затем используйте их здесь, в Console.",
+  "dashPasswordHelpOthers": "На других телефонах и в браузерах вход сохранится: смена пароля не завершает их сеансы.",
   "dashPasswordHelpStep1": "1. Добавьте эти две строки в файл .env Hermes (в Linux и macOS — ~/.hermes/.env).",
   "dashPasswordHelpPlaceholder": "ваш-новый-пароль",
   "dashPasswordHelpStep2": "2. Перезапустите панель управления Hermes и войдите здесь с этим именем пользователя и паролем.",
@@ -3244,7 +3263,7 @@
   "chatActivityRunningSkill": "Выполнение навыка…",
   "chatActivityReasoning": "Рассуждение",
   "connectInstallHelp": "Официальная документация Hermes",
-  "diagDashDownBoth": "Панель управления тоже не отвечает. Проверьте сеть и порты (9119).",
+  "diagDashDownBoth": "Панель управления не отвечает. Проверьте адрес, сеть и межсетевой экран.",
   "diagDashNotFound": "Адрес отвечает, но это не похоже на панель управления Hermes (/api/status не существует). Проверьте URL панели управления.",
   "diagDashAuthRequired": "Панель управления требует входа (базовая аутентификация). Укажите имя пользователя и пароль в настройках экземпляра.",
   "diagDashAuthInvalid": "Панель управления отвечает, но имя пользователя или пароль неверны. Проверьте её данные входа в настройках подключения.",
@@ -6826,7 +6845,7 @@
     }
   },
   "hr1215CompactionAuthTitleGeneric": "Сжатие контекста не может использовать провайдера; чат продолжает работать",
-  "hr1215CompactionOnlyAuthBody": "Не удалось только автоматически составить сводку беседы: ничего не потеряно, можно продолжать писать. Войдите снова, чтобы восстановить сжатие контекста.",
+  "hr1215CompactionOnlyAuthBody": "Не удалось только автоматически составить сводку беседы: ничего не потеряно, можно продолжать писать. Войдите снова, чтобы восстановить сжатие контекста. Если после повторного входа ошибка сохраняется, перезапустите сервер Hermes.",
   "hr1215CheckingSignIn": "Проверка входа в {provider}…",
   "@hr1215CheckingSignIn": {
     "placeholders": {
@@ -9083,6 +9102,12 @@
   "dashboardSetupSessionToken": "Токен сеанса панели управления",
   "dashboardSetupCredentialConsent": "Я согласен на передачу данных для входа без шифрования по моей частной сети.",
   "dashboardSetupSignIn": "Войти",
+  "dashboardSetupBrowserSignIn": "Войти через браузер",
+  "dashboardSetupUsePasswordHere": "Ввести имя пользователя и пароль здесь",
+  "dashboardSetupBrowserHandlesPassword": "Пароль обрабатывает браузер; Console его не сохраняет.",
+  "dashboardSetupBrowserOpening": "Открываем браузер…",
+  "dashboardSetupBrowserComeBack": "Вернитесь сюда после входа.",
+  "dashboardSetupBrowserIncomplete": "Вход не завершён. Попробуйте ещё раз.",
   "voiceBlockConversation": "Голосовая беседа",
   "voiceBlockTranscription": "Речь в текст",
   "voiceBlockAdvanced": "Дополнительно",
@@ -9318,49 +9343,101 @@
   "@mascotSuggestOpenSettings": {
     "description": "Floating mascot suggestion: the action that opens the notification settings."
   },
+  "connStatusNoNetwork": "Нет сети",
   "@connStatusNoNetwork": {
     "description": "Connection status: the phone has no network."
   },
+  "connStatusAuthRequired": "Требуется вход",
   "@connStatusAuthRequired": {
     "description": "Connection status: the Dashboard refused the saved login."
   },
+  "connStatusNoServer": "Нет сервера",
   "@connStatusNoServer": {
     "description": "Connection status: the network works but the server does not answer."
   },
+  "serverStartingTitle": "Ваш Hermes запускается…",
   "@serverStartingTitle": {
     "description": "Server warm-up: the Dashboard answered 502/503/504 and is expected back shortly (Desktop backend-health.ts)."
   },
+  "serverStartingWait": "Ожидаем до 3 минут. Вы можете продолжать пользоваться Console.",
   "@serverStartingWait": {
     "description": "Server warm-up: how long Console waits and that the app stays usable."
   },
+  "serverStartingGaveUp": "Сервер не может завершить запуск.",
   "@serverStartingGaveUp": {
     "description": "Server warm-up: the 3 minute wait ended without a healthy answer."
   },
+  "serverStartingCloudHint": "Если это продолжается, проверьте состояние в портале Nous.",
   "@serverStartingCloudHint": {
     "description": "Server warm-up on a Nous Cloud host: where to look next."
   },
+  "connStatusPersistent": "Нет подключения · повторяем попытку",
   "@connStatusPersistent": {
     "description": "Notice shown once the connection has been failing for 5 minutes."
   },
+  "onb4AddressLabel": "Адрес",
+  "s2SessionExpiredLine": "Сеанс истёк · Войти",
+  "s2SessionExpiredBody": "Срок действия вашего сеанса на этом Hermes истёк. Войдите снова через браузер.",
+  "s2SessionExpiredSignIn": "Войти",
+  "walkIslandNoServerLine": "Ваш Hermes не отвечает",
   "@walkIslandNoServerLine": {
     "description": "Chat notice when the server cannot be reached (simple-connect flag on)."
   },
+  "walkIslandWhatToDo": "Что делать",
   "@walkIslandWhatToDo": {
     "description": "Action of the no-server notice: opens the official Dashboard command page."
   },
+  "walkStartHint": "Если он не запускается, закройте его на компьютере и запустите снова с помощью этой строки.",
   "@walkStartHint": {
     "description": "Sign-in screen after the start-up wait gave up: what to do, above the command button."
   },
+  "walkProbeFailed": "Не удаётся связаться с вашим Hermes. Убедитесь, что он включён.",
   "@walkProbeFailed": {
     "description": "Sign-in screen when the Dashboard check failed without a typed reason (simple-connect flag on)."
   },
+  "chatRowFailedTitle": "Не удалось показать это сообщение",
   "@chatRowFailedTitle": {
     "description": "Chat row that failed to render: title of the replacement card."
   },
+  "chatRowCopyPlain": "Копировать без форматирования",
   "@chatRowCopyPlain": {
     "description": "Action on the failed-row card: copies the message text unformatted."
   },
+  "chatRowCopied": "Текст скопирован",
   "@chatRowCopied": {
     "description": "Inline confirmation after copying the plain text of a failed row."
-  }
+  },
+  "onb2CredentialsIntro": "Введите имя пользователя и пароль, которые установщик показал на компьютере.",
+  "onb2ShowPassword": "Показать пароль",
+  "onb2HidePassword": "Скрыть пароль",
+  "onb2WrongPassword": "Неверное имя пользователя или пароль. Проверьте данные, которые показал установщик.",
+  "onb2TooManyTries": "Слишком много попыток. Подождите минуту и попробуйте снова.",
+  "onb2PasswordUnsupported": "Этот сервер не поддерживает вход по паролю отсюда. Используйте браузер.",
+  "onb2RecoverTitle": "Восстановить доступ",
+  "leg3RecoverBody": "Имя пользователя и пароль есть только на компьютере, где работает Hermes. Вставьте там эту строку: она создаст новые данные для входа, покажет имя пользователя и пароль, а также код для сканирования.",
+  "onb2RecoverAfter": "Затем вернитесь в Console и войдите с новым паролем. Сеансы, открытые со старым паролем, завершатся.",
+  "onb2RecoverOther": "Другой способ — встроенная команда Hermes",
+  "onb3ConfirmDashboard": "Этот код сохраняет адрес и данные для входа в панель управления вашего Hermes.",
+  "onb3AddressHint": "https://мой-сервер.рф",
+  "onb3Checking": "Проверяем адрес…",
+  "onb3Found": "Hermes найден",
+  "onb3Unreachable": "Не удаётся подключиться по этому адресу",
+  "onb3DontKnow": "Я не знаю эти данные",
+  "onb3HelpStepScan": "На экране появится код — отсканируйте его.",
+  "onb4WelcomeBody": "Console — пульт управления вашим Hermes, который работает на компьютере или сервере.",
+  "onb4HaveHermes": "У меня уже есть Hermes",
+  "onb4NoHermes": "У меня ещё нет Hermes",
+  "onb4ScanHint": "Наведите камеру на код на экране компьютера",
+  "onb4NoCodeTitle": "На экране нет кода?",
+  "onb4NoCodeBody": "Вставьте эту строку на компьютере, где находится Hermes: в терминал, в PowerShell на Windows или в окно SSH для сервера. По завершении появится код.",
+  "onb4HelpTitle": "Установите Hermes",
+  "onb4HelpIntro": "Hermes работает на вашем компьютере или сервере. Console подключается к его панели управления, защищённой паролем.",
+  "onb4StepOpenTerminal": "Откройте терминал на том компьютере",
+  "onb4StepOpenPowerShell": "Откройте PowerShell на том компьютере",
+  "onb4StepWhere": "На сервере — окно SSH.",
+  "onb4HelpSafeTitle": "Это безопасно?",
+  "onb4HelpSafe": "Используется официальный установщик Hermes. Если Hermes уже установлен, установщик не затрагивает его, Telegram и шлюз. Это займёт несколько минут.",
+  "onb4HelpVps": "Hermes работает на сервере в интернете? Установите Tailscale на сервер и на этот телефон, затем вставьте строку.",
+  "onb4HadPassword": "У этого Hermes уже был пароль. Введите его один раз; Console его не сохранит.",
+  "onb4ManualBody": "Введите адрес, имя пользователя и пароль, которые были показаны по завершении установки."
 }

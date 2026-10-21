@@ -1,7 +1,7 @@
 # Stable upstream updates for Hermes Console RU
 
-The baseline is **Hermes Console 1.2.15+9540**, tag `v1.2.15`, commit
-`aa6e5119d8397220eea4399a352ce746b21f1834`. The tag was resolved through its
+The baseline is **Hermes Console 1.3.0+9630**, tag `v1.3.0`, commit
+`7c51c99b3d665affda79742ca501aa04dad9d42f`, published 2026-10-21. The tag was resolved through its
 annotated tag object, not through the release's mutable `target_commitish: main`.
 `tool/fork/upstream.json` records the immutable baseline. Upstream
 `xP3ta/hermes-console` is read-only; all branches and PRs belong to
@@ -45,7 +45,7 @@ python3 tool/fork/localization.py check
 python3 -m unittest discover -s test -p 'fork_sync_test.py'
 
 # Use the published stable tag reported by detect; example future version:
-python3 tool/fork/sync.py stage --tag v1.2.16 --output /tmp/hermes-ru-stable
+python3 tool/fork/sync.py stage --tag v1.3.1 --output /tmp/hermes-ru-stable
 ```
 
 Staging requires a clean tree, a fully reviewed current RU catalog, an exact
@@ -139,8 +139,8 @@ The established Android ID is `io.github.dedtsss.hermesconsole`, visible name
 `com.hermesagent.hermes_android`. The established signing alias is
 `hermes-console-ru-release`. Existing `key.properties` loading and fail-closed
 release signing are retained. Do not generate a replacement key, change the
-alias or rewrite repository signing secrets. Version `1.2.15+9540` advances the
-previous RU `1.2.9+4964`. Notification metadata/actions use the RU identity;
+alias or rewrite repository signing secrets. Version `1.3.0+9630` advances both
+the previous PR baseline `1.2.15+9540` and RU `1.2.9+4964`. Notification metadata/actions use the RU identity;
 `hermes://pair` continues to work. Updates link to this fork's releases, not the
 upstream package or Play listing.
 
@@ -149,10 +149,49 @@ That boundary is retained. `tool/release/release_contract.json` and the release
 helpers are upstream reference policy, including **upstream** signer certificate,
 source actors, provenance and Play package expectations. They are not RU signing
 authority and must never be used to replace this fork's signer. Their strict
-checks reject RU artifacts. Before any separately approved RU publication,
-reconcile the release contract against the already established RU certificate
-and artifact evidence; do not copy the upstream certificate. This sync neither
-reads signing material nor requests or performs a release.
+checks reject RU artifacts. Reconcile the release contract against the already
+established RU certificate and artifact evidence; do not copy the upstream
+certificate. This sync neither reads signing material nor performs a release.
+
+## v1.3.0 recovery and controller handoff
+
+Issue #4 / PR #5 was recovered from remote PR head
+`351238564bd69a698d871b5694a963bfbc2b4376`, without lost local files. The normal
+`sync.py stage --tag v1.3.0` procedure applied the overlay without conflicts and
+created a commit with that PR head and the exact stable commit as its parents.
+The reviewed delta contains 77 new and 18 changed ARB messages; 82 obsolete
+messages were removed. All 4,422 remaining RU messages retain EN/ES argument
+contracts and Spanish template metadata. The 148 native RU resources did not
+change. Review is recorded per key in `translation_review.json`; no complete
+catalog approval or fallback allowlist expansion was used.
+
+The implementation worker pushes the checked source to the same PR #5. The
+host/controller verifies successful quality, Android and real-gateway runs for
+the final SHA and continues the established test delivery route automatically
+under the owner's standing Android authorization, without a new authorization
+prompt. Signing/publication stay outside the Codex sandbox. This standing
+authorization does not waive missing signer evidence or other build gates.
+
+Read-only GitHub inspection on 2026-10-21 found repository secret names
+`KEYSTORE_BASE64`, `STORE_PASSWORD`, `KEY_PASSWORD`, but no fork Releases or
+Actions artifacts. Secret presence and the recorded alias do **not** prove the
+certificate of a previously installed RU APK, host signer availability or its
+backup. No public RU certificate fingerprint is recorded in this checkout.
+The `86edaa...` certificate in the upstream release contract belongs to upstream
+and is not RU evidence. The controller must obtain the established public RU
+certificate from trusted prior APK/installation or existing host signing evidence,
+verify availability of the same persistent signer and backup, and record the
+public fingerprint before delivery. Do not generate a replacement key.
+
+Current CI produces no downloadable unsigned release APK: the Android lane only
+compiles a temporary debug build, and release CI only verifies policy. Thus there
+is no artifact ID to pass to the host's tested-artifact delivery helper. The
+controller must use the project's approved private build route from the exact
+green SHA (or separately establish an appropriate unsigned release-artifact
+route), retain the RU package and increasing version, reconcile the upstream-only
+release anchors, and verify signer/package/version/hash before delivery. Never
+deliver the debug CI output or dispatch the old `main` signing workflow as a
+substitute. A source-build pass alone is not signed-update continuity evidence.
 
 Stable 1.2.15 itself retires Mobile Bridge/local-agent code. Its Dashboard
 migration and `hermes://pair` support are retained unchanged; no private BruceVPS
