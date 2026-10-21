@@ -851,7 +851,7 @@ index d37e615..e2b2265 100644
          self.assertIn("observed two-build byte identity", policy)
          self.assertIn("not a general reproducible-build claim", policy)
 diff --git a/test/security_hardening_test.py b/test/security_hardening_test.py
-index 562af8d..b074875 100644
+index 562af8d..b4ca508 100644
 --- a/test/security_hardening_test.py
 +++ b/test/security_hardening_test.py
 @@ -206,6 +206,28 @@ class ReleaseWorkflowBoundaryTest(unittest.TestCase):
@@ -863,7 +863,7 @@ index 562af8d..b074875 100644
 +        workflow = workflow_path.read_text(encoding="utf-8")
 +        self.assertEqual(workflow.count("actions/upload-artifact@"), 1)
 +        self.assertIn(
-+            "path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk",
++            "path: build/app/outputs/flutter-apk/app-arm64-v8a-full-release.apk",
 +            workflow,
 +        )
 +        self.assertIn(

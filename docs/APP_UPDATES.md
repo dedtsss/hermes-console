@@ -60,7 +60,7 @@ equal versions/downgrades. Manifest version name must equal the tag without
 
 The `RU Android source build` workflow may expose one short-lived Actions
 artifact named `ru-fullrelease-arm64-<sha>-<run-id>-<attempt>` containing only
-`build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`. This is an unsigned,
+`build/app/outputs/flutter-apk/app-arm64-v8a-full-release.apk`. This is an unsigned,
 non-debuggable `fullRelease` ARM64 build candidate for the owner-controlled
 signing route; it is not a release asset and cannot pass the app updater's
 signature checks. The workflow verifies package, version, ABI libraries and

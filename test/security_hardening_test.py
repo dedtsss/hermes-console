@@ -211,7 +211,7 @@ class ReleaseWorkflowBoundaryTest(unittest.TestCase):
         workflow = workflow_path.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("actions/upload-artifact@"), 1)
         self.assertIn(
-            "path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk",
+            "path: build/app/outputs/flutter-apk/app-arm64-v8a-full-release.apk",
             workflow,
         )
         self.assertIn(

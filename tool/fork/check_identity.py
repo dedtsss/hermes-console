@@ -8,7 +8,7 @@ PACKAGE = 'io.github.dedtsss.hermesconsole'
 CI_ARTIFACT_WORKFLOW = '.github/workflows/fork-android-check.yml'
 CI_ARTIFACT_ACTION = 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
 CI_ARTIFACT_NAME = 'ru-fullrelease-arm64-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}'
-CI_ARTIFACT_PATH = 'build/app/outputs/flutter-apk/app-arm64-v8a-release.apk'
+CI_ARTIFACT_PATH = 'build/app/outputs/flutter-apk/app-arm64-v8a-full-release.apk'
 
 
 def check(root=ROOT):
