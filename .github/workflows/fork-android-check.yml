@@ -36,6 +36,104 @@ jobs:
           flutter-version: '3.47.1'
           channel: stable
       - run: flutter pub get --enforce-lockfile
-      # Build evidence only; no signing secrets, uploads or distributable APKs.
-      - name: Compile Android full flavor without release signing
-        run: flutter build apk --debug --flavor full --dart-define=HERMES_FLAVOR=full
+      - name: Build fullRelease ARM64 candidate without a signer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gradle_file=android/app/build.gradle.kts
+          backup="$RUNNER_TEMP/build.gradle.kts"
+          cp "$gradle_file" "$backup"
+          restore_gradle() { cp "$backup" "$gradle_file"; }
+          trap restore_gradle EXIT
+
+          python3 - "$gradle_file" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          signing_line = '           signingConfig = signingConfigs.getByName("release")'
+          if source.count(signing_line) != 1:
+              raise SystemExit("Expected exactly one permanent release signing assignment")
+          path.write_text(source.replace(signing_line, "           signingConfig = null // CI-only unsigned artifact"))
+          changed = path.read_text()
+          if changed.count("signingConfig = null // CI-only unsigned artifact") != 1:
+              raise SystemExit("Temporary unsigned signing config was not applied exactly once")
+          if "validateReleaseSigning" not in changed or "Release signing is not configured" not in changed:
+              raise SystemExit("Permanent release signing guard is missing")
+          PY
+
+          # Keep the checked-in fail-closed guard intact while skipping only its
+          # task in this isolated unsigned-artifact invocation.
+          mkdir -p "$RUNNER_TEMP/gradle-init"
+          cat > "$RUNNER_TEMP/gradle-init/unsigned-release.gradle" <<'GRADLE'
+          gradle.taskGraph.whenReady { graph ->
+              graph.allTasks.findAll { it.name == 'validateReleaseSigning' }.each { it.enabled = false }
+          }
+          GRADLE
+          export GRADLE_USER_HOME="$RUNNER_TEMP/gradle-home"
+          mkdir -p "$GRADLE_USER_HOME/init.d"
+          cp "$RUNNER_TEMP/gradle-init/unsigned-release.gradle" "$GRADLE_USER_HOME/init.d/unsigned-release.gradle"
+
+          flutter build apk --release --flavor full --split-per-abi \
+            --dart-define=HERMES_FLAVOR=full
+          restore_gradle
+          trap - EXIT
+          cmp --silent "$gradle_file" <(git show HEAD:"$gradle_file")
+
+      - name: Verify ARM64 candidate identity, libraries and unsigned release state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          apk=build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          test -s "$apk"
+          analyzer="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print -quit)"
+          test -x "$analyzer"
+          test -x "$apksigner"
+          test "$("$analyzer" manifest application-id "$apk")" = "io.github.dedtsss.hermesconsole"
+          test "$("$analyzer" manifest version-name "$apk")" = "1.3.0-ru.1"
+          test "$("$analyzer" manifest version-code "$apk")" = "11631"
+          python3 - "$apk" <<'PY'
+          from pathlib import Path
+          import sys
+          import zipfile
+
+          apk = Path(sys.argv[1])
+          with zipfile.ZipFile(apk) as archive:
+              names = set(archive.namelist())
+          native = {name for name in names if name.startswith("lib/")}
+          expected = {
+              "lib/arm64-v8a/libflutter.so",
+              "lib/arm64-v8a/libapp.so",
+          }
+          if not expected.issubset(native):
+              raise SystemExit(f"Missing required ARM64 libraries: {sorted(expected - native)}")
+          if any(name.startswith("lib/") and not name.startswith("lib/arm64-v8a/") for name in native):
+              raise SystemExit("Split APK contains native libraries for a non-ARM64 ABI")
+          if any(name.upper().endswith((".RSA", ".DSA", ".EC", "SIG-BLOCK")) for name in names):
+              raise SystemExit("APK contains a JAR signing block in META-INF")
+          PY
+          if "$analyzer" manifest print "$apk" | rg -q 'android:debuggable="true"'; then
+            echo "Release candidate is marked debuggable" >&2
+            exit 1
+          fi
+          if "$apksigner" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/apksigner.txt" 2>&1; then
+            echo "Release candidate unexpectedly has a valid APK signature" >&2
+            cat "$RUNNER_TEMP/apksigner.txt" >&2
+            exit 1
+          fi
+          if rg -qi 'Signer #1 certificate|Verified using v[123] scheme' "$RUNNER_TEMP/apksigner.txt"; then
+            echo "Unsigned verification reported a signer or verified scheme" >&2
+            cat "$RUNNER_TEMP/apksigner.txt" >&2
+            exit 1
+          fi
+          echo "Verified unsigned, non-debuggable fullRelease ARM64 APK: $apk" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Archive unsigned ARM64 CI candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ru-fullrelease-arm64-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          if-no-files-found: error
+          retention-days: 7
